@@ -5,7 +5,7 @@
     "content_scripts": [
         {
             "matches": ["https://www.chess.com/play/*"],
-            "js": ["chess.js", "content.js"],
+            "js": ["chess.min.js", "chess_utils.js", "content.js"],
             "css": ["overlay.css"]
         }
     ]

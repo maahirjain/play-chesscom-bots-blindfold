@@ -16,7 +16,7 @@ function getMoveList() {
 }
 
 function observeMoves(onMoveListChange) {
-    number_of_half_moves = -1;
+    let number_of_half_moves = -1;
 
     const checkMoves = () => {
         const half_moves = getMoveList();
@@ -31,4 +31,3 @@ function observeMoves(onMoveListChange) {
 
     checkMoves();
 }
-
