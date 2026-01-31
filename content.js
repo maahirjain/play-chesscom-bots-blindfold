@@ -18,10 +18,20 @@ if (!document.getElementById("blindfold-chess-move-input")) {
 
     move_input.addEventListener("keydown", (e) => {
         if (e.key == "Enter") {
-            const move = move_input.value.trim();
+            const move = normalizeMove(move_input.value);
             move_input.value = "";
             if (!move) return;
+
+            if (isMoveLegal(game, move)) {
+                move_input.style.borderColor = "green";
+            } else {
+                move_input.style.borderColor = "red";
+            }
         }
+    })
+
+    move_input.addEventListener("input", () => {
+        move_input.style.borderColor = "";
     })
 }
 
@@ -30,6 +40,9 @@ document.addEventListener("keydown", (e) => {
         e.preventDefault();
 
         const move_input = document.getElementById("blindfold-chess-move-input");
-        move_input?.focus();
+        if (!move_input) return;
+        
+        move_input.focus();
+        move_input.style.borderColor = "";
     }
 })

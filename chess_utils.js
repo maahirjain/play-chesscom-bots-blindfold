@@ -46,7 +46,41 @@ function updateGame(game, game_half_move_count, half_moves) {
     return game_half_move_count;
 }
 
+function normalizeMove(move) {
+  if (move == null) return "";
+
+  let normalized = String(move).trim().replace(/\s+/g, "");
+  if (!normalized) return normalized;
+
+  const lower = normalized.toLowerCase();
+
+  if (lower === "oo" || lower === "o-o" || lower === "c" || normalized === "00" || normalized === "0-0") return "O-O";
+  if (lower === "ooo" || lower === "o-o-o" || lower === "cl" || normalized === "000" || normalized === "0-0-0") return "O-O-O";
+
+  const first = normalized[0];
+  if ("rnbqk".includes(first)) {
+    normalized = first.toUpperCase() + normalized.slice(1);
+  }
+
+  if (normalized[0] === "p") {
+    normalized = normalized.slice(1);
+  }
+
+  normalized = normalized.replace(/=([nbrq])/g, (_, promo) => "=" + promo.toUpperCase());
+
+  normalized = normalized.replace(/([a-h][18])([nbrq])$/i, (_, square, promo) => {
+    return square + "=" + promo.toUpperCase();
+  });
+
+  normalized = normalized.replace(/([+#])[+#]+$/g, "$1");
+
+  return normalized;
+}
+
+
 function isMoveLegal(game, move) {
     const game_copy = new Chess(game.fen());
     return game_copy.move(move, { sloppy: true }) != null;
 }
+
+
