@@ -11,3 +11,12 @@ if (!document.getElementById("blindfold-chess-move-input")) {
     const player_bottom_row_component = player_bottom.querySelector(".player-row-component");
     player_bottom_row_component.appendChild(move_input);
 }
+
+document.addEventListener("keydown", (e) => {
+    if (e.key == "s" || e.key == "S") {
+        e.preventDefault();
+        
+        const move_input = document.getElementById("blindfold-chess-move-input");
+        move_input.focus();
+    }
+})
