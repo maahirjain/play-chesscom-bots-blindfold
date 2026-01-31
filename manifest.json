@@ -4,8 +4,9 @@
     "version": "1.0.0",
     "content_scripts": [
         {
-            "matches": ["https://www.chess.com/*"],
-            "js": ["content.js"]
+            "matches": ["https://www.chess.com/play/*"],
+            "js": ["content.js"],
+            "css": ["overlay.css"]
         }
     ]
 }
