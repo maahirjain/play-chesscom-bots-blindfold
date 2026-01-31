@@ -1,0 +1,11 @@
+{
+    "manifest_version": 3,
+    "name": "Blindfold Chess",
+    "version": "1.0.0",
+    "content_scripts": [
+        {
+            "matches": ["https://www.chess.com/*"],
+            "js": ["content.js"]
+        }
+    ]
+}
