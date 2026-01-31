@@ -24,6 +24,7 @@ if (!document.getElementById("blindfold-chess-move-input")) {
 
             if (isMoveLegal(game, move)) {
                 move_input.style.borderColor = "green";
+                makeMoveOnBoard(game, move);
             } else {
                 move_input.style.borderColor = "red";
             }
