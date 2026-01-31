@@ -1,8 +1,18 @@
 const game = new Chess();
 let game_half_move_count = 0;
 
+const PIECESET_KEY = "blindfold_chess_piece_set";
+let piece_set = localStorage.getItem(PIECESET_KEY) || "neo";
+
+applyCurrentPieceSet();
+
 observeMoves((half_moves) => {
   game_half_move_count = updateGame(game, game_half_move_count, half_moves);
+  applyCurrentPieceSet();
+});
+
+observePieceRenders(() => {
+  applyCurrentPieceSet();
 });
 
 if (!document.getElementById("blindfold-chess-move-input")) {
@@ -47,3 +57,21 @@ document.addEventListener("keydown", (e) => {
         move_input.style.borderColor = "";
     }
 })
+
+document.addEventListener("keydown", (e) => {
+    if (e.key == "v" || e.key == "V") {
+        e.preventDefault();
+          setPieceSet(piece_set === "blindfold" ? "neo" : "blindfold");
+    }
+})
+
+function applyCurrentPieceSet() {
+    const base_url = piece_set === "blindfold" ? BLINDFOLD_PIECESET_BASE : NEO_PIECESET_BASE;
+    applyPieceSet(base_url);
+}
+
+function setPieceSet(mode) {
+    piece_set = mode;
+    localStorage.setItem(PIECESET_KEY, piece_set);
+    applyCurrentPieceSet();
+}

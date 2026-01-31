@@ -1,3 +1,6 @@
+const BLINDFOLD_PIECESET_BASE = "https://images.chesscomfiles.com/chess-themes/pieces/blindfold/150/";
+const NEO_PIECESET_BASE = "https://assets-themes.chess.com/image/ejgfv/150/";
+
 function observeMoves(onMoveListChange) {
     let number_of_half_moves = -1;
 
@@ -13,6 +16,8 @@ function observeMoves(onMoveListChange) {
     observer.observe(document.body, { childList: true, subtree: true });
 
     checkMoves();
+
+    return observer;
 }
 
 function getMoveList() {
@@ -54,8 +59,8 @@ function normalizeMove(move) {
 
   const lower = normalized.toLowerCase();
 
-  if (lower === "oo" || lower === "o-o" || lower === "c" || normalized === "00" || normalized === "0-0") return "O-O";
-  if (lower === "ooo" || lower === "o-o-o" || lower === "cl" || normalized === "000" || normalized === "0-0-0") return "O-O-O";
+  if (lower === "oo" || lower === "o-o" || lower == "c" || normalized === "00" || normalized === "0-0") return "O-O";
+  if (lower === "ooo" || lower === "o-o-o" || lower == "cl" || normalized === "000" || normalized === "0-0-0") return "O-O-O";
 
   const first = normalized[0];
   if ("rnbqk".includes(first)) {
@@ -90,7 +95,7 @@ async function makeMoveOnBoard(game, move) {
     const move_squares = parseMoveSquares(game, move);
     if (!move_squares) return false;
 
-    const board = document.querySelector("wc-chess-board");
+    const board = getBoardElement();
     if (!board) return false;
 
     const fromXY = squareToXY(board, move_squares.from);
@@ -210,4 +215,37 @@ async function waitForVisiblePromotionWindow(timeout_ms = 500) {
   }
 
   return null;
+}
+
+function getPieceClassFromPieceElement(piece_element) {
+    for (const cls of piece_element.classList) {
+        if (cls.length === 2 && (cls[0] === "w" || cls[0] === "b")) return cls;
+    }
+
+    return null;
+}
+
+function applyPieceSet(base_url) {
+  const board = getBoardElement();
+  if (!board) return;
+
+  for (const piece_element of board.querySelectorAll(".piece")) {
+    const piece_class = getPieceClassFromPieceElement(piece_element);
+    if (!piece_class) continue;
+    piece_element.style.backgroundImage = `url("${base_url}${piece_class}.png")`;
+  }
+}
+
+function observePieceRenders(onChange) {
+  const board = getBoardElement();
+  if (!board) return null;
+
+  const observer = new MutationObserver(() => onChange(board));
+  observer.observe(board, { childList: true, subtree: true })
+
+  return observer;
+}
+
+function getBoardElement() {
+    return document.querySelector("wc-chess-board");
 }
