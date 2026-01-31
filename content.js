@@ -2,7 +2,7 @@ const game = new Chess();
 let game_half_move_count = 0;
 
 observeMoves((half_moves) => {
-  updateGame(half_moves);
+  game_half_move_count = updateGame(game, game_half_move_count, half_moves);
 });
 
 if (!document.getElementById("blindfold-chess-move-input")) {
@@ -33,15 +33,3 @@ document.addEventListener("keydown", (e) => {
         move_input?.focus();
     }
 })
-
-function updateGame(half_moves) {
-    if (half_moves.length < game_half_move_count) {
-        game.reset();
-        game_half_move_count = 0;
-    }
-
-    for (let half_move_index = game_half_move_count; half_move_index < half_moves.length; half_move_index++) {
-        game.move(half_moves[half_move_index], { sloppy: true });
-        game_half_move_count++;
-    }
-}
