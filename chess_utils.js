@@ -71,7 +71,7 @@ function normalizeMove(game, move) {
     normalized = first.toUpperCase() + normalized.slice(1);
   }
 
-  if (normalized[0] === "p") {
+  if (normalized.length > 1 && normalized[0].toLowerCase() === "p" && normalized[1] >= "a" && normalized[1] <= "h") {
     normalized = normalized.slice(1);
   }
 
