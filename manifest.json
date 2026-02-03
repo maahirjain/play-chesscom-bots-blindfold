@@ -5,8 +5,14 @@
     "content_scripts": [
         {
             "matches": ["https://www.chess.com/play/computer*"],
-            "js": ["chess.min.js", "chess_utils.js", "content.js"],
+            "js": ["sounds.js", "chess.min.js", "chess_utils.js", "content.js"],
             "css": ["overlay.css"]
+        }
+    ],
+    "web_accessible_resources": [
+        {
+            "resources": ["illegal_move.wav"],
+            "matches": ["https://www.chess.com/*"]
         }
     ]
 }

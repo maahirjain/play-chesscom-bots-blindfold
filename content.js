@@ -30,13 +30,13 @@ if (!document.getElementById("blindfold-chess-move-input")) {
         if (e.key == "Enter") {
             const move = normalizeMove(move_input.value);
             move_input.value = "";
-            if (!move) return;
 
             if (isMoveLegal(game, move)) {
                 move_input.style.borderColor = "green";
                 makeMoveOnBoard(game, move);
             } else {
                 move_input.style.borderColor = "red";
+                playIllegalMoveSound();
             }
         }
     })

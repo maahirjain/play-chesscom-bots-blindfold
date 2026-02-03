@@ -87,6 +87,7 @@ function normalizeMove(move) {
 }
 
 function isMoveLegal(game, move) {
+    if (!move) return false;
     const game_copy = new Chess(game.fen());
     return game_copy.move(move, { sloppy: true }) != null;
 }
