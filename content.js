@@ -28,7 +28,7 @@ if (!document.getElementById("blindfold-chess-move-input")) {
 
     move_input.addEventListener("keydown", (e) => {
         if (e.key == "Enter") {
-            const move = normalizeMove(move_input.value);
+            const move = normalizeMove(game, move_input.value);
             move_input.value = "";
 
             if (isMoveLegal(game, move)) {

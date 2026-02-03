@@ -44,14 +44,14 @@ function updateGame(game, game_half_move_count, half_moves) {
     }
 
     for (let half_move_index = game_half_move_count; half_move_index < half_moves.length; half_move_index++) {
-        game.move(half_moves[half_move_index], { sloppy: true });
+        game.move(half_moves[half_move_index]);
         game_half_move_count++;
     }
 
     return game_half_move_count;
 }
 
-function normalizeMove(move) {
+function normalizeMove(game, move) {
   if (move == null) return "";
 
   let normalized = String(move).trim().replace(/\s+/g, "");
@@ -63,7 +63,11 @@ function normalizeMove(move) {
   if (lower === "ooo" || lower === "o-o-o" || lower == "cl" || normalized === "000" || normalized === "0-0-0") return "O-O-O";
 
   const first = normalized[0];
-  if ("rnbqk".includes(first)) {
+  if (first == "b" && !isMoveLegal(game, normalized)) {
+    normalized = first.toUpperCase() + normalized.slice(1);
+  }
+
+  if ("rnqk".includes(first)) {
     normalized = first.toUpperCase() + normalized.slice(1);
   }
 
@@ -89,7 +93,7 @@ function normalizeMove(move) {
 function isMoveLegal(game, move) {
     if (!move) return false;
     const game_copy = new Chess(game.fen());
-    return game_copy.move(move, { sloppy: true }) != null;
+    return game_copy.move(move) != null;
 }
 
 async function makeMoveOnBoard(game, move) {
@@ -119,7 +123,7 @@ async function makeMoveOnBoard(game, move) {
 
 function parseMoveSquares(game, move) {
     const game_copy = new Chess(game.fen());
-    const move_obj = game_copy.move(move, { sloppy: true });
+    const move_obj = game_copy.move(move);
     if (!move_obj) return null;
 
     return {
