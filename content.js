@@ -85,6 +85,16 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
+document.addEventListener("keydown", (e) => {
+  if (e.key === "z" || e.key === "Z") {
+    e.preventDefault();
+
+    if (last_spoken_move_text) {
+      speakText(`Last move: ${last_spoken_move_text}`, { interrupt: true });
+    }
+  }
+});
+
 function applyCurrentPieceSet() {
     const base_url = piece_set === "blindfold" ? BLINDFOLD_PIECESET_BASE : NEO_PIECESET_BASE;
     applyPieceSet(base_url);

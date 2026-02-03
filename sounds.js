@@ -1,3 +1,5 @@
+let last_spoken_move_text = null;
+
 const illegal_move_audio = new Audio(chrome.runtime.getURL("illegal_move.wav"));
 illegal_move_audio.preload = "auto";
 
@@ -44,6 +46,8 @@ function getResultAnnouncement(game) {
 function sayMove(game_before_move, san_move) {
     if (!san_move) return;
     const spoken_move_text = sanToSpeech(game_before_move, san_move);
+    if (!spoken_move_text) return;
+    last_spoken_move_text = spoken_move_text;
     speakText(spoken_move_text, { interrupt: true });
 }
 
@@ -53,7 +57,7 @@ function sanToSpeech(game_before_move, san_move) {
   const game_copy = new Chess(game_before_move.fen());
   const move = game_copy.move(san_move);
 
-  if (!move) return String(san_move).split("").join(" ");
+  if (!move) return String(san_move).split("").join(". ");
 
   if (move.san === "O-O") return "castle king side";
   if (move.san === "O-O-O") return "castle queen side";
@@ -66,7 +70,7 @@ function sanToSpeech(game_before_move, san_move) {
   if (move.piece === "p") {
     if (is_capture) {
       const from_file = move.from[0];
-      parts.push(`${from_file} takes ${to_sq}`);
+      parts.push(`${from_file}. takes ${to_sq}`);
 
       if (move.flags && move.flags.includes("e")) {
         parts.push("en passant");
@@ -107,7 +111,7 @@ function pieceLetterToName(letter) {
 
 function squareToSpeech(square) {
   if (!square || square.length !== 2) return String(square || "");
-  return `${square[0]} ${square[1]}`;
+  return `${square[0]}. ${square[1]}`;
 }
 
 function getDisambiguation(move) {
