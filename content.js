@@ -1,5 +1,6 @@
 const game = new Chess();
 let game_half_move_count = 0;
+let latest_half_moves = [];
 
 const PIECESET_KEY = "blindfold_chess_piece_set";
 let piece_set = localStorage.getItem(PIECESET_KEY) || "neo";
@@ -7,6 +8,7 @@ let piece_set = localStorage.getItem(PIECESET_KEY) || "neo";
 applyCurrentPieceSet();
 
 observeMoves((half_moves) => {
+  latest_half_moves = half_moves;
   sayMove(game, half_moves[game_half_move_count]);
   game_half_move_count = updateGame(game, game_half_move_count, half_moves);
   applyCurrentPieceSet();
@@ -72,7 +74,7 @@ document.addEventListener("keydown", (e) => {
     e.preventDefault();
 
     const turn = game.turn();
-    speakText(turn === "w" ? "White's turn" : "Black's turn");
+    speakText(turn === "w" ? "White's turn" : "Black's turn", { interrupt: true });
   }
 });
 
@@ -81,7 +83,7 @@ document.addEventListener("keydown", (e) => {
     e.preventDefault();
 
     const text = getResultAnnouncement(game);
-    speakText(text || "Game not over.");
+    speakText(text || "Game not over.", { interrupt: false });
   }
 });
 
@@ -92,6 +94,13 @@ document.addEventListener("keydown", (e) => {
     if (last_spoken_move_text) {
       speakText(`Last move: ${last_spoken_move_text}`, { interrupt: true });
     }
+  }
+});
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "i" || e.key === "I") {
+    e.preventDefault();
+    speakFullMoveList(latest_half_moves);
   }
 });
 

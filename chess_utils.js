@@ -62,11 +62,7 @@ function normalizeMove(game, move) {
   if (lower === "oo" || lower === "o-o" || lower == "c" || normalized === "00" || normalized === "0-0") return "O-O";
   if (lower === "ooo" || lower === "o-o-o" || lower == "cl" || normalized === "000" || normalized === "0-0-0") return "O-O-O";
 
-  const first = normalized[0];
-  if (first == "b" && !isMoveLegal(game, normalized)) {
-    normalized = first.toUpperCase() + normalized.slice(1);
-  }
-
+  let first = normalized[0];
   if ("rnqk".includes(first)) {
     normalized = first.toUpperCase() + normalized.slice(1);
   }
@@ -86,6 +82,11 @@ function normalizeMove(game, move) {
   });
 
   normalized = normalized.replace(/([+#])[+#]+$/g, "$1");
+
+  first = normalized[0];
+  if (first == "b" && !isMoveLegal(game, normalized)) {
+    normalized = first.toUpperCase() + normalized.slice(1);
+  }
 
   return normalized;
 }

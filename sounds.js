@@ -1,4 +1,6 @@
 let last_spoken_move_text = null;
+let speech_timestamp = 0;
+let current_utterance = null;
 
 const illegal_move_audio = new Audio(chrome.runtime.getURL("illegal_move.wav"));
 illegal_move_audio.preload = "auto";
@@ -8,12 +10,14 @@ function playIllegalMoveSound() {
     illegal_move_audio.play().catch(() => {});
 }
 
-function speakText(text, { interrupt = false } = {}) {
+function speakText(text, { interrupt = true } = {}) {
   if (!("speechSynthesis" in window)) return;
 
   if (interrupt) speechSynthesis.cancel();
 
   const utterance = new SpeechSynthesisUtterance(text);
+  current_utterance = utterance;
+
   utterance.rate = 1;
   utterance.pitch = 1;
   utterance.volume = 1;
@@ -21,10 +25,26 @@ function speakText(text, { interrupt = false } = {}) {
   speechSynthesis.speak(utterance);
 }
 
+function speakTextAsync(text, { interrupt = false, rate = 1 } = {}) {
+    return new Promise((resolve) => {
+        if (!text) return resolve();
+        if (interrupt) speechSynthesis.cancel();
+
+        const utterance = new SpeechSynthesisUtterance(String(text));
+        current_utterance = utterance;
+        utterance.rate = rate;
+
+        utterance.onend = () => resolve();
+        utterance.onerror = () => resolve();
+
+        speechSynthesis.speak(utterance);
+  });
+}
+
 function announceResultIfOver() {
     const text = getResultAnnouncement(game);
     if (!text) return;
-    speakText(text);
+    speakText(text, { interrupt: false });
 }
 
 function getResultAnnouncement(game) {
@@ -134,8 +154,44 @@ function getDisambiguation(move) {
     return "";
 }
 
+async function speakFullMoveList(half_moves) {
+  if (!half_moves || half_moves.length === 0) {
+    speakText("No moves yet.", { interrupt: true });
+    return;
+  }
+
+  speech_timestamp = speech_timestamp + 1;
+  const timestamp = speech_timestamp;
+
+  const temp_game = new Chess();
+  const lines = ["Move list:"];
+
+  for (let i = 0; i < half_moves.length; i += 2) {
+    const move_num = Math.floor(i / 2) + 1;
+
+    const white_move = half_moves[i];
+    const white_move_text = white_move ? sanToSpeech(temp_game, white_move) : "";
+    if (white_move) temp_game.move(white_move);
+
+    const black_move = half_moves[i + 1];
+    const black_move_text = black_move ? sanToSpeech(temp_game, black_move) : "";
+    if (black_move) temp_game.move(black_move);
+
+    let line = `${move_num}. ${white_move_text}.`;
+    if (black_move) { line += `. ${black_move_text}.`; }
+    lines.push(line);
+  }
+
+  await speakTextAsync(lines[0], { interrupt: true, rate: 0.9 });
+  if (timestamp !== speech_timestamp) return;
+
+  for (let i = 1; i < lines.length; i++) {
+    await speakTextAsync(lines[i], { interrupt: false, rate: 0.9 });
+    if (timestamp !== speech_timestamp) return;
+  }
+}
+
 function stopAllSpeech() {
-    try {
-        speechSynthesis.cancel();
-    } catch (e) {} ;
+    speech_timestamp = speech_timestamp + 1;
+    speechSynthesis.cancel();
 }
