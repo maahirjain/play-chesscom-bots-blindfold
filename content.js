@@ -61,9 +61,18 @@ document.addEventListener("keydown", (e) => {
 document.addEventListener("keydown", (e) => {
     if (e.key == "v" || e.key == "V") {
         e.preventDefault();
-          setPieceSet(piece_set === "blindfold" ? "neo" : "blindfold");
+        setPieceSet(piece_set === "blindfold" ? "neo" : "blindfold");
     }
 })
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "w" || e.key === "W") {
+    e.preventDefault();
+
+    const turn = game.turn();
+    speakText(turn === "w" ? "White's turn" : "Black's turn");
+  }
+});
 
 function applyCurrentPieceSet() {
     const base_url = piece_set === "blindfold" ? BLINDFOLD_PIECESET_BASE : NEO_PIECESET_BASE;
