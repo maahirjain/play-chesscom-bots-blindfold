@@ -7,6 +7,7 @@ let piece_set = localStorage.getItem(PIECESET_KEY) || "neo";
 applyCurrentPieceSet();
 
 observeMoves((half_moves) => {
+  sayMove(game, half_moves[game_half_move_count]);
   game_half_move_count = updateGame(game, game_half_move_count, half_moves);
   applyCurrentPieceSet();
   announceResultIfOver();
