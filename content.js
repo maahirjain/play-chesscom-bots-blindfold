@@ -9,6 +9,7 @@ applyCurrentPieceSet();
 observeMoves((half_moves) => {
   game_half_move_count = updateGame(game, game_half_move_count, half_moves);
   applyCurrentPieceSet();
+  announceResultIfOver();
 });
 
 observePieceRenders(() => {
@@ -47,7 +48,7 @@ if (!document.getElementById("blindfold-chess-move-input")) {
 }
 
 document.addEventListener("keydown", (e) => {
-    if (e.key == "s" || e.key == "S") {
+    if (e.key == "j" || e.key == "J") {
         e.preventDefault();
 
         const move_input = document.getElementById("blindfold-chess-move-input");
@@ -71,6 +72,15 @@ document.addEventListener("keydown", (e) => {
 
     const turn = game.turn();
     speakText(turn === "w" ? "White's turn" : "Black's turn");
+  }
+});
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "m" || e.key === "M") {
+    e.preventDefault();
+
+    const text = getResultAnnouncement(game);
+    speakText(text || "Game not over.");
   }
 });
 

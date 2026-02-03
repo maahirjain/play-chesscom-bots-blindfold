@@ -18,3 +18,25 @@ function speakText(text) {
 
   window.speechSynthesis.speak(utterance);
 }
+
+function getResultAnnouncement(game) {
+  if (!game.game_over()) return null;
+
+  if (game.in_checkmate()) {
+    const winner = game.turn() === "w" ? "Black" : "White";
+    return `Checkmate. ${winner} wins.`;
+  }
+
+  if (game.in_stalemate()) return "Draw by stalemate.";
+  if (game.in_threefold_repetition()) return "Draw by threefold repetition.";
+  if (game.insufficient_material()) return "Draw by insufficient material.";
+
+  if (game.in_draw()) return "Draw.";
+  return "Game over.";
+}
+
+function announceResultIfOver() {
+    const text = getResultAnnouncement(game);
+    if (!text) return;
+    speakText(text);
+}
