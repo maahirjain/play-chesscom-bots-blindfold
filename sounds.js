@@ -133,3 +133,9 @@ function getDisambiguation(move) {
     if (raw === from_file + from_rank) return `${from_file} ${from_rank} `;
     return "";
 }
+
+function stopAllSpeech() {
+    try {
+        speechSynthesis.cancel();
+    } catch (e) {} ;
+}
