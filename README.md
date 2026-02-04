@@ -2,6 +2,8 @@
 
 A Chrome extension to play bots on Chess.com completely blindfolded.
 
+<img width="1511" height="870" alt="play_chesscom_bots_blindfold_img" src="https://github.com/user-attachments/assets/3cffae85-4a99-4c84-8eb8-89761d25e3b5" />
+
 ## Features
 - Spoken move announcements
 - Keyboard-based move input using algebraic notation
