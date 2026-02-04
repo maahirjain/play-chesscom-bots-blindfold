@@ -151,7 +151,7 @@ function getDisambiguation(move) {
 
   raw = raw.replace(/[+#]$/, "");
   raw = raw.replace(/=[NBRQ]/, "");
-  raw = raw.replace("/x/g", "");
+  raw = raw.replace(/x/g, "");
   raw = raw.replace(/^[NBRQK]/, "");
   raw = raw.replace(move.to, "");
 
