@@ -111,6 +111,13 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
+document.addEventListener("keydown", (e) => {
+  if (e.key === "s" || e.key === "S") {
+    e.preventDefault();
+    speakPosition();
+  }
+});
+
 function applyCurrentPieceSet() {
     const base_url = piece_set === "blindfold" ? BLINDFOLD_PIECESET_BASE : NEO_PIECESET_BASE;
     applyPieceSet(base_url);
