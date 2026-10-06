@@ -176,7 +176,7 @@
     },
     "1.3": {
       "status": "DONE",
-      "commit": null,
+      "commit": "d72aa68",
       "verification": "V1 PASS (47/47 node --test, adversarial review); V2 PASS (headless-Chrome renderer smoke)",
       "deferred": [
         "AC18 append assignment -> 2.4",
