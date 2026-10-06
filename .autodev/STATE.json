@@ -209,8 +209,14 @@
       ]
     },
     "2.2": {
-      "commit": null,
-      "status": "PENDING"
+      "status": "DONE",
+      "commit": "293f5ba",
+      "verification": "V1 PASS (20/20 node --test); V2 PASS (SW-DB 19/19 in real headless Chrome: schema, round-trips, index ordering, origin isolation); adversarial review APPROVE_WITH_DEFECTS -> doc fix applied; behavioral BEHAVIOR_VERIFIED (40/40); 256/256 accumulated",
+      "deferred": [
+        "persistence across real browser restart -> owner device",
+        "writer/dedup/acks/appendSeq assignment -> 2.4",
+        "sender/retry/restore/lifecycle/status/retention -> 2.3, 2.5-2.9"
+      ]
     },
     "2.3": {
       "commit": null,
