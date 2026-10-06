@@ -3,9 +3,9 @@
   "checkpoints": {
     "checkpoint-01-data-contract": {
       "branch": "autodev/checkpoint-01-data-contract",
-      "local_sha": null,
+      "local_sha": "6bf8248",
       "remote_sha": null,
-      "remote_sync": "PENDING"
+      "remote_sync": "PENDING_REMOTE_SYNC"
     },
     "checkpoint-02-instrumentation": {
       "branch": "autodev/checkpoint-02-instrumentation",
