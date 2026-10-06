@@ -420,6 +420,12 @@ describe('AC7 — diff discipline (static)', () => {
       // list per its contract; load order keeps lifecycle.js first and
       // content.js (which installs the control) last-but-one.
       'session_identity.js', 'status_indicator.js', 'session_controls.js',
+      // Honest cumulative evolution: 5.2 adds session_fields.js (the
+      // baseline/training/evaluation selection + training approach and
+      // verbal scaffolding fields) to the content_scripts list per its
+      // contract, right after session_controls.js (the Start sequence
+      // consumes the fields handle).
+      'session_fields.js',
       // Honest cumulative evolution: 4.11 appends sync_flash.js
       // (the visible sync-marker content script) per its contract;
       // content.js itself stays byte-identical apart from 5.1's install.
@@ -1180,6 +1186,33 @@ describe('2.5 retry policy', () => {
       // after the pins were evolved (2.x/3.x/4.x precedent).
       '.autodev/evidence/5.1.review.md',
       '.autodev/evidence/5.1.behavior.md',
+      // Honest cumulative evolution: 5.2 (baseline/training/evaluation
+      // selection + training approach and verbal scaffolding fields)
+      // legitimately adds session_fields.js (pure buildInitialConditions +
+      // UNDETECTED_CONDITION_FIELDS placeholders + installSessionFields
+      // with the 5.3/5.4 seams), amends session_controls.js's Start
+      // sequence (metadata-first minting, session-save, category echo,
+      // category-required abort), adds the SW-side session-save handler
+      // to recording_host.js, accepts/stores/echoes sessionCategory in
+      // recorder.js, wires the fields install into content.js (+
+      // extensionVersion pass-through), adds session_fields.js to the
+      // manifest content_scripts list, adds additive classes to
+      // overlay.css, records the ## 5.2 decisions, and adds its test +
+      // evidence; its files join the allowlists.
+      'session_fields.js',
+      'tests/session_fields.test.js',
+      'session_controls.js',
+      'recorder.js',
+      'recording_host.js',
+      'content.js',
+      'manifest.json',
+      'overlay.css',
+      '.autodev/evidence/5.2.contract.md',
+      '.autodev/evidence/5.2.build.md',
+      // Honest cumulative evolution: 5.2's review/behavior evidence
+      // lands after the pins were evolved (2.x/3.x/4.x/5.1 precedent).
+      '.autodev/evidence/5.2.review.md',
+      '.autodev/evidence/5.2.behavior.md',
     ]);
     for (const f of changed) {
       assert.ok(allowed.has(f), `unexpected modified file: ${f}`);

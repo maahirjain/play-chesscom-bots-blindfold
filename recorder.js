@@ -273,6 +273,14 @@ var BlindfoldSession = BlindfoldSession || {};
     // carried no tab. No behavior change otherwise.
     var ownerTabId = null;
 
+    // 5.2 additive: the session's category, accepted at set-session
+    // time and echoed on recorder-get-status for boot adoption
+    // (contract §3.4; the 5.1 gameId-echo precedent). Lenient: the
+    // SW-side session-save already validated the metadata record —
+    // the recorder only carries the value for the echo. Null when no
+    // session is active or no category was supplied.
+    var sessionCategory = null;
+
     // Per-document event emission state: one clock anchor (lazy), one
     // sourceSeq counter, and the set of sessionIds already anchored —
     // the sender.js (2.3) lazy-anchor pattern, minus the queue/retry
@@ -1368,6 +1376,12 @@ var BlindfoldSession = BlindfoldSession || {};
               // echo. Null when no game is set — honest unknown.
               gameId: (typeof gameId === 'string' && gameId !== '') ?
                 gameId : null,
+              // 5.2 additive (contract §3.4): the reloaded control
+              // shows the adopted session's category in the disabled
+              // form from this echo. Null when no category was
+              // supplied — the control shows the honest disabled
+              // "Unknown (adopted session)" label.
+              sessionCategory: sessionCategory,
               queriedAtUtc: nowUtcIso(),
               statuses: statuses
             };
@@ -1503,6 +1517,11 @@ var BlindfoldSession = BlindfoldSession || {};
       var tabId = (sender && sender.tab &&
         typeof sender.tab.id === 'number') ? sender.tab.id : null;
       ownerTabId = (sid === null) ? null : tabId;
+      // 5.2: accept the optional session category for the
+      // boot-adoption echo. Clearing the session clears it.
+      var cat = message.sessionCategory;
+      sessionCategory = (sid !== null && typeof cat === 'string' &&
+        cat !== '') ? cat : null;
       // A newly activated session announces the current selection once,
       // so the session's event stream carries the selection state (the
       // boot-time restore and any pre-session user selection were inert

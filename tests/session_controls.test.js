@@ -913,6 +913,46 @@ describe('AC5 — Stop sequence', () => {
       assert.equal(h2.button.textContent, 'Start');
     } finally { h2.stop(); }
   });
+
+  it('successful Stop releases the recorder-side session after finalization (5.2)', async () => {
+    const { BS, opts, h } = activeHarness(STOP_OK);
+    try {
+      await sleep(20);
+      h.button.click(); // Start
+      await sleep(60);
+      assert.equal(h.getPhase(), 'active');
+      h.button.click(); // Stop
+      await sleep(80);
+      assert.equal(h.getPhase(), 'idle');
+      const stopIdx = opts._transport.calls
+        .findIndex((c) => c.msg === 'recorder-stop-streams');
+      const clears = opts._transport.calls
+        .map((c, i) => ({ c, i }))
+        .filter(({ c }) => c.msg === 'recorder-set-session' &&
+          c.sessionId === null && c.gameId === null);
+      assert.equal(clears.length, 1, 'one recorder-side release');
+      assert.ok(clears[0].i > stopIdx,
+        'the release is sent after stop-streams succeeded');
+      assert.equal(BS.activeSessionId, null, 'local slot cleared as before');
+    } finally { h.stop(); }
+  });
+
+  it('failed Stop does NOT release the recorder session (kept for retry)', async () => {
+    const { opts, h } = activeHarness({ ok: false, error: 'boom' });
+    try {
+      await sleep(20);
+      h.button.click(); // Start
+      await sleep(60);
+      assert.equal(h.getPhase(), 'active');
+      h.button.click(); // Stop → fails
+      await sleep(80);
+      assert.equal(h.getPhase(), 'stopping', 'stays in stopping for retry');
+      const clears = opts._transport.calls.filter((c) =>
+        c.msg === 'recorder-set-session' && c.sessionId === null &&
+        c.gameId === null);
+      assert.equal(clears.length, 0, 'no release on failed stop');
+    } finally { h.stop(); }
+  });
 });
 
 // ------------------------------------------------------------------
@@ -1060,6 +1100,33 @@ describe('AC7 — diff discipline and scope', () => {
       'tests/track_monitor.test.js',
       'tests/visibility.test.js',
       'tests/writer.test.js',
+      // Honest cumulative evolution: 5.2 (baseline/training/evaluation
+      // selection + training approach and verbal scaffolding fields)
+      // legitimately adds session_fields.js (pure buildInitialConditions +
+      // UNDETECTED_CONDITION_FIELDS placeholders + installSessionFields
+      // with the 5.3/5.4 seams), amends session_controls.js's Start
+      // sequence (metadata-first minting, session-save, category echo,
+      // category-required abort), adds the SW-side session-save handler
+      // to recording_host.js, accepts/stores/echoes sessionCategory in
+      // recorder.js, wires the fields install into content.js (+
+      // extensionVersion pass-through), adds session_fields.js to the
+      // manifest content_scripts list, adds additive classes to
+      // overlay.css, records the ## 5.2 decisions, and adds its test +
+      // evidence; its files join the allowlists.
+      'session_fields.js',
+      'tests/session_fields.test.js',
+      'session_controls.js',
+      'recorder.js',
+      'recording_host.js',
+      'content.js',
+      'manifest.json',
+      'overlay.css',
+      '.autodev/evidence/5.2.contract.md',
+      '.autodev/evidence/5.2.build.md',
+      // Honest cumulative evolution: 5.2's review/behavior evidence
+      // lands after the pins were evolved (2.x/3.x/4.x/5.1 precedent).
+      '.autodev/evidence/5.2.review.md',
+      '.autodev/evidence/5.2.behavior.md',
     ]);
     const stray = changed.filter((f) => !allowed.has(f));
     assert.deepEqual(stray, [],
@@ -1071,43 +1138,76 @@ describe('AC7 — diff discipline and scope', () => {
     assert.equal(diff.trim(), '', 'PLAN.md must never be modified');
   });
 
-  it('content.js diff is only the 5.1 install block', () => {
+  it('content.js diff is the 5.2 install wiring (restructured 5.1 block + fields install)', () => {
+    // Honest cumulative evolution: 5.2 restructures 5.1's install block
+    // (the fields handle is installed after the controls so it can
+    // anchor before the cluster; the controls receive it via a thunk)
+    // and adds the installSessionFields block. Added lines match the
+    // 5.1 keyword set or 5.2's; removed lines are exactly the old 5.1
+    // block (same keyword set) — a restructuring, not a behavior
+    // change beyond the wiring.
     const diff = execSync('git diff HEAD -- content.js', { cwd: REPO }).toString();
     if (diff.trim() === '') return; // committed
-    const added = diff.split('\n')
-      .filter((l) => l.startsWith('+') && !l.startsWith('+++'))
-      .map((l) => l.slice(1));
-    assert.ok(added.length > 0, 'expected the install block as added lines');
-    assert.ok(added.every((l) =>
+    const kw51 = (l) =>
       l.includes('5.1') || l.includes('installSessionControls') ||
       l.includes('sendRecorderMessage') || l.includes('gameLifecycleRecorder') ||
       l.includes('onStopComplete') || l.includes('onSessionStopComplete') ||
       l.includes('chrome.runtime.sendMessage') || l.includes('installErr') ||
-      l.trim() === '' || l.trim().startsWith('//') || l.trim().startsWith('}') ||
-      l.trim().startsWith('try {') || l.trim().startsWith('} catch') ||
-      l.includes('sender: BlindfoldSession.sender')),
+      l.includes('sender: BlindfoldSession.sender');
+    const kw52 = (l) =>
+      l.includes('5.2') || l.includes('installSessionFields') ||
+      l.includes('sessionFields') || l.includes('sessionControlsHandle') ||
+      l.includes('extensionVersion') || l.includes('getManifest') ||
+      l.includes('beforeElement') || l.includes('fieldsErr');
+    const structural = (l) =>
+      l.trim() === '' || l.trim().startsWith('//') ||
+      l.trim().startsWith('}') || l.trim().startsWith('try {') ||
+      l.trim().startsWith('} catch') || l.trim().startsWith('{') ||
+      l.trim().startsWith('(') || l.trim() === '});';
+    const added = diff.split('\n')
+      .filter((l) => l.startsWith('+') && !l.startsWith('+++'))
+      .map((l) => l.slice(1));
+    assert.ok(added.length > 0, 'expected the install wiring as added lines');
+    assert.ok(added.every((l) => kw51(l) || kw52(l) || structural(l)),
       'unexpected added lines in content.js:\n' + added.join('\n'));
-    const removed = diff.split('\n').filter((l) => l.startsWith('-') && !l.startsWith('---'));
-    assert.deepEqual(removed, [], 'content.js: no removed lines');
+    const removed = diff.split('\n')
+      .filter((l) => l.startsWith('-') && !l.startsWith('---'))
+      .map((l) => l.slice(1));
+    assert.ok(removed.every((l) => kw51(l) || structural(l)),
+      'unexpected removed lines in content.js:\n' + removed.join('\n'));
   });
 
-  it('recorder.js diff is only the 5.1 additive seams (ownerTabId + gameId echo)', () => {
+  it('recorder.js diff is the 5.2 sessionCategory seam', () => {
+    // Honest cumulative evolution: 5.1's ownerTabId/gameId-echo seams
+    // are committed (in HEAD); while 5.2 is uncommitted the diff
+    // carries only 5.2's additive accept/store/echo of the optional
+    // sessionCategory (the 5.1 ownerTabId/gameId-echo precedent).
     const diff = execSync('git diff HEAD -- recorder.js', { cwd: REPO }).toString();
     if (diff.trim() === '') return;
-    assert.ok(diff.includes('ownerTabId'), 'ownerTabId capture present');
-    assert.ok(diff.includes('gameId: (typeof gameId'), 'gameId echo present');
-    assert.ok(diff.includes('getOwnerTabId'), 'getOwnerTabId exposed');
-    // No new offscreen MSG_* constant: recorder-ensure is SW-side.
+    assert.ok(diff.includes('sessionCategory'), 'sessionCategory seam present');
+    // No new offscreen MSG_* constant: session-save is SW-side (5.1's
+    // recorder-ensure precedent).
     const addedMsgConsts = diff.split('\n').filter((l) =>
       l.startsWith('+') && /var MSG_[A-Z_]+ =/.test(l));
     assert.deepEqual(addedMsgConsts, [], 'no new offscreen MSG_* constants');
+    // No new message branches: set-session/get-status already existed.
+    const branches = new Set();
+    const re = /^\+.*message\.msg === '([^']+)'/gm;
+    let m;
+    while ((m = re.exec(diff)) !== null) branches.add(m[1]);
+    assert.deepEqual([...branches], [], 'no new message branches');
   });
 
-  it('recording_host.js diff is only the recorder-ensure handler', () => {
+  it('recording_host.js diff is the session-save handler', () => {
+    // Honest cumulative evolution: 5.1's recorder-ensure handler is
+    // committed (in HEAD); while 5.2 is uncommitted the diff carries
+    // only the SW-side session-save intake (validates both records,
+    // then the 2.6 primitives).
     const diff = execSync('git diff HEAD -- recording_host.js', { cwd: REPO }).toString();
     if (diff.trim() === '') return;
-    assert.ok(diff.includes('recorder-ensure'), 'recorder-ensure handler present');
-    assert.ok(diff.includes('ensureRecordingContext'), 'delegates to ensureRecordingContext');
+    assert.ok(diff.includes("message.msg === 'session-save'"),
+      'session-save handler present');
+    assert.ok(diff.includes('handleSessionSave'), 'handler function present');
     const removed = diff.split('\n').filter((l) => l.startsWith('-') && !l.startsWith('---'));
     assert.deepEqual(removed, [], 'recording_host.js: no removed lines');
   });
@@ -1135,10 +1235,10 @@ describe('AC7 — diff discipline and scope', () => {
     assert.ok(found.includes('MSG_GET_STATUS=recorder-get-status'));
   });
 
-  it('SW-side recorder-envelope vocabulary is the 6-message shape (one deliberate 5.1 addition)', () => {
+  it('SW-side recorder-envelope vocabulary is the 7-message shape (5.1 + 5.2 additions)', () => {
     // recording_host.js handles: recorder-ready, recorder-ensure (5.1),
-    // capture-resolve-tab, capture-query-permission, capture-get-stream-id,
-    // recorder-sync-flash (4.11).
+    // session-save (5.2), capture-resolve-tab, capture-query-permission,
+    // capture-get-stream-id, recorder-sync-flash (4.11).
     const src = fs.readFileSync(path.join(REPO, 'recording_host.js'), 'utf8');
     const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
     const msgs = new Set();
@@ -1148,7 +1248,7 @@ describe('AC7 — diff discipline and scope', () => {
       msgs.add(m[1]);
     }
     const expected = [
-      'recorder-ready', 'recorder-ensure',
+      'recorder-ready', 'recorder-ensure', 'session-save',
       'capture-resolve-tab', 'capture-query-permission', 'capture-get-stream-id',
       'recorder-sync-flash',
     ];

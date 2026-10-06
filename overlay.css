@@ -94,3 +94,33 @@ wc-chess-board .piece {
   padding: 4px 8px;
   border-radius: 4px;
 }
+/* 5.2: baseline/training/evaluation selection + training approach and
+ * verbal scaffolding fields. Additive only (2.8/5.1 precedent): the
+ * cluster sits immediately before 5.1's control cluster — "select then
+ * Start". Minimal footprint: compact select + two short text inputs.
+ */
+.blindfold-session-fields {
+  display: inline-block;
+  vertical-align: middle;
+  margin-right: 6px;
+}
+.blindfold-session-category,
+.blindfold-session-approach,
+.blindfold-session-scaffolding {
+  font-size: 12px;
+  margin-right: 4px;
+  vertical-align: middle;
+}
+.blindfold-session-approach,
+.blindfold-session-scaffolding {
+  width: 110px;
+}
+.blindfold-session-fields-fallback {
+  position: fixed;
+  right: 12px;
+  bottom: 76px;
+  z-index: 2147483647;
+  background: rgba(255, 255, 255, 0.9);
+  padding: 4px 8px;
+  border-radius: 4px;
+}

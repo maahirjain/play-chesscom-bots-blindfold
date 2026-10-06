@@ -97,6 +97,10 @@ describe('AC1 — no auto-deletion exists', () => {
     // manifest content_scripts js list per its contract (the in-page
     // Start/Stop + per-stream lights) — it joins the load surface and
     // the scan. (session_identity.js was already listed.)
+    // Honest cumulative evolution: 5.2 adds session_fields.js to the
+    // manifest content_scripts js list per its contract (the
+    // baseline/training/evaluation selection fields) — it joins the
+    // load surface and the scan.
     assert.deepEqual(PRODUCT_FILES, [
       'capture_broker.js',
       'chess_utils.js',
@@ -109,6 +113,7 @@ describe('AC1 — no auto-deletion exists', () => {
       'sender.js',
       'session_conditions.js',
       'session_controls.js',
+      'session_fields.js',
       'session_identity.js',
       'session_store.js',
       'sounds.js',
@@ -615,6 +620,33 @@ describe('AC4 — diff discipline', () => {
       // after the pins were evolved (2.x/3.x/4.x precedent).
       '.autodev/evidence/5.1.review.md',
       '.autodev/evidence/5.1.behavior.md',
+      // Honest cumulative evolution: 5.2 (baseline/training/evaluation
+      // selection + training approach and verbal scaffolding fields)
+      // legitimately adds session_fields.js (pure buildInitialConditions +
+      // UNDETECTED_CONDITION_FIELDS placeholders + installSessionFields
+      // with the 5.3/5.4 seams), amends session_controls.js's Start
+      // sequence (metadata-first minting, session-save, category echo,
+      // category-required abort), adds the SW-side session-save handler
+      // to recording_host.js, accepts/stores/echoes sessionCategory in
+      // recorder.js, wires the fields install into content.js (+
+      // extensionVersion pass-through), adds session_fields.js to the
+      // manifest content_scripts list, adds additive classes to
+      // overlay.css, records the ## 5.2 decisions, and adds its test +
+      // evidence; its files join the allowlists.
+      'session_fields.js',
+      'tests/session_fields.test.js',
+      'session_controls.js',
+      'recorder.js',
+      'recording_host.js',
+      'content.js',
+      'manifest.json',
+      'overlay.css',
+      '.autodev/evidence/5.2.contract.md',
+      '.autodev/evidence/5.2.build.md',
+      // Honest cumulative evolution: 5.2's review/behavior evidence
+      // lands after the pins were evolved (2.x/3.x/4.x/5.1 precedent).
+      '.autodev/evidence/5.2.review.md',
+      '.autodev/evidence/5.2.behavior.md',
     ]);
     for (const f of changed) {
       assert.ok(allowed.has(f), `unexpected modified file: ${f}`);
@@ -656,6 +688,10 @@ describe('AC4 — diff discipline', () => {
     // (additive getLastObservedEnd), recording_host.js (recorder-ensure),
     // manifest.json (content_scripts list), and overlay.css (additive
     // classes) — all already in or joining the skip set below.
+    // Honest cumulative evolution (5.2): session_fields.js is a new
+    // file (same skip rule); 5.2's modifications to content.js,
+    // manifest.json, recording_host.js, recorder.js, overlay.css, and
+    // session_controls.js are already covered by the set.
     const changedByTasks = new Set(['chess_utils.js', 'content.js',
                                     'manifest.json', 'sounds.js', 'sw.js',
                                     'recording_host.js', 'recorder.js',
@@ -664,6 +700,7 @@ describe('AC4 — diff discipline', () => {
                                     'format_support.js', 'sync_marker.js',
                                     'sync_flash.js',
                                     'session_controls.js',
+                                    'session_fields.js',
                                     'overlay.css',
                                     'capture_broker.js']);
     for (const f of PRODUCT_FILES) {

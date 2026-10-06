@@ -6,6 +6,15 @@
 // on focus loss; the 2.8 contract §3.7 already rejected a popup for the
 // status surface).
 //
+// Task 5.2 (PLAN.md §5.2) amends the Start sequence: when the
+// session-fields handle is wired (options.sessionFields), the category
+// is required at Start, identity is metadata-first (the sessionId sent
+// to the recorder IS metadata.sessionId), the session records are
+// persisted via the SW-side session-save message BEFORE
+// recorder-set-session, and the fields are disabled while the session
+// is active (write-once). Without the handle the 5.1 path is
+// preserved byte-for-byte in behavior.
+//
 // Two exports, mirroring the 2.8 classifier/renderer split:
 //
 //   classifyStreamStatus(status, startResult) — pure. Input: one
@@ -100,6 +109,12 @@ var BlindfoldSession = BlindfoldSession || {};
   var MSG_START_STREAMS = 'recorder-start-streams';
   var MSG_STOP_STREAMS = 'recorder-stop-streams';
   var MSG_GET_STATUS = 'recorder-get-status';
+  // 5.2: SW-side session intake (recording_host). The content script
+  // cannot reach extension IDB (2.2); this persists the session
+  // metadata + initial conditions BEFORE the recorder ever sees the
+  // session. Not an offscreen-document message — offscreen MSG_*
+  // stays at 24.
+  var MSG_SESSION_SAVE = 'session-save';
 
   var CONTROL_PHASE_IDLE = 'idle';
   var CONTROL_PHASE_STARTING = 'starting';
@@ -225,6 +240,18 @@ var BlindfoldSession = BlindfoldSession || {};
 
   function defaultNoop() {}
 
+  // 5.2: the session-fields handle shape (installSessionFields's
+  // return). showAdoptedCategory is 5.2's adoption presentation;
+  // guarded at use (not required here) so 5.3-era handles stay
+  // compatible.
+  function isFieldsHandle(h) {
+    return isPlainObject(h) &&
+      typeof h.getSelection === 'function' &&
+      typeof h.setSelection === 'function' &&
+      typeof h.setEnabled === 'function' &&
+      typeof h.getDetectedConditions === 'function';
+  }
+
   function validateOptions(options) {
     if (!isPlainObject(options)) {
       throw new TypeError('options must be an object');
@@ -263,12 +290,45 @@ var BlindfoldSession = BlindfoldSession || {};
     if (typeof onStopComplete !== 'function') {
       throw new TypeError('options.onStopComplete must be a function');
     }
+    // 5.2: the session-fields handle (or a thunk returning it — the
+    // content script installs the fields after the controls, so the
+    // handle does not exist at controls-install time). Null/undefined
+    // → the 5.1 path (no category gating, newSessionId minting, no
+    // session-save); this is the seam 5.1-era callers and tests use.
+    // In production content.js always wires the real handle.
+    var sessionFieldsOpt = options.sessionFields;
+    var getSessionFields;
+    if (sessionFieldsOpt === undefined || sessionFieldsOpt === null) {
+      getSessionFields = function () { return null; };
+    } else if (typeof sessionFieldsOpt === 'function') {
+      getSessionFields = sessionFieldsOpt;
+    } else if (isFieldsHandle(sessionFieldsOpt)) {
+      getSessionFields = function () { return sessionFieldsOpt; };
+    } else {
+      throw new TypeError(
+        'options.sessionFields must be a fields handle, a thunk, or null');
+    }
+    // 5.2: the extension version for metadata-first minting (the 1.1
+    // header: call sites inject it). Required exactly when the fields
+    // path is active.
+    var extensionVersion = options.extensionVersion;
+    if (sessionFieldsOpt !== undefined && sessionFieldsOpt !== null) {
+      if (typeof extensionVersion !== 'string' ||
+          extensionVersion.trim() === '') {
+        throw new TypeError(
+          'options.extensionVersion must be a non-empty string when ' +
+          'sessionFields is provided');
+      }
+      extensionVersion = extensionVersion.trim();
+    }
     return {
       sender: sender,
       sendRecorderMessage: sendRecorderMessage,
       gameLifecycleRecorder: glr,
       intervalMs: intervalMs,
-      onStopComplete: onStopComplete
+      onStopComplete: onStopComplete,
+      getSessionFields: getSessionFields,
+      extensionVersion: extensionVersion
     };
   }
 
@@ -515,6 +575,22 @@ var BlindfoldSession = BlindfoldSession || {};
       setButton('Start', true, detailText, 'Start recording session');
     }
 
+    // 5.2: resolve the fields handle for this Start. null → the 5.1
+    // path. A malformed handle is a programming error — fail the
+    // Start honestly rather than silently dropping the category.
+    function resolveFieldsHandle() {
+      var h;
+      try {
+        h = opts.getSessionFields();
+      } catch (e) {
+        return null;
+      }
+      if (h === null || h === undefined) {
+        return null;
+      }
+      return isFieldsHandle(h) ? h : false;
+    }
+
     // ---- Start -------------------------------------------------------
     function onStartClick() {
       if (phase !== CONTROL_PHASE_IDLE) {
@@ -527,19 +603,98 @@ var BlindfoldSession = BlindfoldSession || {};
       phase = CONTROL_PHASE_STARTING;
       setButton('Starting…', false, null, 'Starting recording session');
 
-      var sessionId;
-      var gameId;
-      try {
-        sessionId = BS.newSessionId();
-        gameId = BS.newGameId();
-      } catch (e) {
-        abortStart('id-mint-failed');
+      var fieldsHandle = resolveFieldsHandle();
+      if (fieldsHandle === false) {
+        abortStart('fields-malformed');
         return;
       }
 
-      // Contract §3.3 order: ensure → set-session → start-streams →
-      // slots + emitPageStart + poll. Per-stream start failures do not
-      // abort Start (4.6 isolation); only channel-level failures do.
+      var sessionId;
+      var gameId;
+      // 5.2: metadata-first minting. When the fields handle is present
+      // the category is REQUIRED at Start (PLAN §(c) step 2 → step 3);
+      // identity is single-sourced in 1.1 — the sessionId sent to the
+      // recorder IS metadata.sessionId. protocolVersion is null
+      // (unknown): the user maintains protocol.md outside the
+      // extension (1.1 normalizeProtocolVersion).
+      var metadata = null;
+      var conditions = null;
+      var sessionCategory = null;
+      if (fieldsHandle !== null) {
+        var factoriesOk =
+          typeof BS.isSessionCategory === 'function' &&
+          typeof BS.createSessionMetadata === 'function' &&
+          typeof BS.addGameToSession === 'function' &&
+          typeof BS.buildInitialConditions === 'function';
+        var selection = null;
+        if (factoriesOk) {
+          try {
+            selection = fieldsHandle.getSelection();
+          } catch (e) {
+            selection = null;
+          }
+        }
+        sessionCategory = (selection !== null &&
+          typeof selection.sessionCategory === 'string') ?
+          selection.sessionCategory : null;
+        if (!factoriesOk || !BS.isSessionCategory(sessionCategory)) {
+          // Honest abort: nothing minted, nothing persisted, no
+          // recorder message sent (the 5.1 ensure-failure honesty
+          // pattern). createSessionMetadata admits no unknown
+          // category (1.1 RangeError); 1.2.3's "represent unavailable
+          // as unknown" applies to conditions, not to the 1.1 metadata
+          // category — so Start cannot proceed uncategorized.
+          phase = CONTROL_PHASE_IDLE;
+          setButton('Start', true,
+            factoriesOk ? 'no-category-selected' : 'record-build-failed',
+            'Start recording session');
+          return;
+        }
+        try {
+          metadata = BS.createSessionMetadata({
+            extensionVersion: opts.extensionVersion,
+            protocolVersion: null,
+            sessionCategory: sessionCategory
+          });
+          gameId = BS.newGameId();
+          metadata = BS.addGameToSession(metadata, gameId);
+          conditions = BS.buildInitialConditions(selection,
+            fieldsHandle.getDetectedConditions());
+        } catch (e) {
+          phase = CONTROL_PHASE_IDLE;
+          setButton('Start', true, 'record-build-failed',
+            'Start recording session');
+          return;
+        }
+        sessionId = metadata.sessionId;
+      } else {
+        try {
+          sessionId = BS.newSessionId();
+          gameId = BS.newGameId();
+        } catch (e) {
+          abortStart('id-mint-failed');
+          return;
+        }
+      }
+
+      // Contract §3.3 order (5.2): interlock → validate selection →
+      // metadata-first minting → recorder-ensure → session-save →
+      // recorder-set-session → recorder-start-streams → slots +
+      // emitPageStart + poll. session-save sits AFTER recorder-ensure
+      // and BEFORE recorder-set-session: an ensure-failure persists
+      // nothing, and a save-failure aborts before the recorder ever
+      // sees the session — persisted state and recorder state stay
+      // consistent. Per-stream start failures do not abort Start (4.6
+      // isolation); only channel-level failures do.
+      //
+      // session-save timeout (open question #2): no client-side timer
+      // beyond the platform's. The SW handler is total — every path
+      // answers {ok:true} or {ok:false, error} and the listener never
+      // throws — so a missing answer means the SW is dead, which
+      // surfaces as a rejected sendMessage → the honest
+      // 'session-save-failed:no-response' abort below (5.1's
+      // channel-failure honesty pattern). A second timer would add a
+      // new double-handling failure mode for no benefit.
       channelCall(MSG_ENSURE)
         .then(function (ensureResp) {
           if (!isPlainObject(ensureResp) || ensureResp.ok !== true) {
@@ -556,8 +711,35 @@ var BlindfoldSession = BlindfoldSession || {};
             // "already handled" so it does not double-report.
             throw { handledAbort: true };
           }
-          return channelCall(MSG_SET_SESSION,
-            { sessionId: sessionId, gameId: gameId });
+          if (metadata === null) {
+            return null; // 5.1 path: no session-save
+          }
+          return channelCall(MSG_SESSION_SAVE,
+            { metadata: metadata, conditions: conditions });
+        })
+        .then(function (saveResp) {
+          if (metadata !== null) {
+            if (!isPlainObject(saveResp) || saveResp.ok !== true) {
+              var serr = (isPlainObject(saveResp) &&
+                typeof saveResp.error === 'string') ?
+                saveResp.error : 'no-response';
+              // Save failed BEFORE the recorder ever saw the session:
+              // local reset only (nothing to clear recorder-side).
+              setSlots(null, null);
+              phase = CONTROL_PHASE_IDLE;
+              setButton('Start', true, 'session-save-failed:' + serr,
+                'Start recording session');
+              throw { handledAbort: true };
+            }
+          }
+          var setExtra = { sessionId: sessionId, gameId: gameId };
+          if (sessionCategory !== null) {
+            // 5.2: the recorder echoes this on recorder-get-status for
+            // boot adoption (contract §3.4; 5.1's gameId-echo
+            // precedent).
+            setExtra.sessionCategory = sessionCategory;
+          }
+          return channelCall(MSG_SET_SESSION, setExtra);
         })
         .then(function (setResp) {
           if (!isPlainObject(setResp) || setResp.ok !== true) {
@@ -616,6 +798,15 @@ var BlindfoldSession = BlindfoldSession || {};
           }
           phase = CONTROL_PHASE_ACTIVE;
           setButton('Stop', true, null, 'Stop recording session');
+          // 5.2: write-once rule (PLAN 1.2.1 "once at session start"
+          // + 5.3 "without silently changing a game's recorded
+          // conditions") — the fields are disabled while the session
+          // is active; mid-session setSelection is a no-op.
+          if (fieldsHandle !== null) {
+            try {
+              fieldsHandle.setEnabled(false);
+            } catch (e) { /* never break Start on the seam */ }
+          }
           try {
             pollOnce();
           } catch (e) { /* poll is self-guarding */ }
@@ -693,6 +884,24 @@ var BlindfoldSession = BlindfoldSession || {};
             lastStartResults = {};
             phase = CONTROL_PHASE_IDLE;
             setButton('Start', true, null, 'Start recording session');
+            // 5.2: the form is re-enabled for the next game. The
+            // user's last selection stays in place (5.3 will formalize
+            // remembered defaults); an adopted-unknown label is reset
+            // to blank by setEnabled(true).
+            var fh = resolveFieldsHandle();
+            if (fh !== null && fh !== false) {
+              try {
+                fh.setEnabled(true);
+              } catch (e) { /* never break Stop on the seam */ }
+            }
+            // 5.2: release the recorder-side session now that the
+            // stop-stream finalization SUCCEEDED. Without this the
+            // recorder keeps reporting {ok:true, sessionId} on
+            // get-status, so a page loaded after Stop would adopt a
+            // dead (already finalized) session — including a stale
+            // sessionCategory echo. Best-effort and failure-safe;
+            // a failed stop keeps the session for retry (above).
+            clearRecorderSession();
           });
         }, function () {
           setButton('Stopping…', true, 'stop-failed:no-response',
@@ -742,6 +951,22 @@ var BlindfoldSession = BlindfoldSession || {};
         setSlots(resp.sessionId, gid);
         phase = CONTROL_PHASE_ACTIVE;
         setButton('Stop', true, null, 'Stop recording session');
+        // 5.2: the adopted session's category shows in the disabled
+        // form (contract §3.4). A missing echo → the honest disabled
+        // "Unknown (adopted session)" label — never a remembered
+        // default masquerading as the active session's category.
+        var afh = resolveFieldsHandle();
+        if (afh !== null && afh !== false) {
+          try {
+            if (typeof afh.showAdoptedCategory === 'function') {
+              afh.showAdoptedCategory(
+                (typeof resp.sessionCategory === 'string' &&
+                 resp.sessionCategory !== '') ? resp.sessionCategory : null);
+            } else {
+              afh.setEnabled(false);
+            }
+          } catch (e) { /* never break adoption on the seam */ }
+        }
         applyStatusResponse(resp.statuses);
         schedulePoll();
       }, function () { /* no surviving session → idle */ });
@@ -773,6 +998,7 @@ var BlindfoldSession = BlindfoldSession || {};
   BlindfoldSession.SESSION_CONTROL_STREAM_KINDS = STREAM_KINDS;
   BlindfoldSession.SESSION_CONTROL_POLL_INTERVAL_MS = DEFAULT_POLL_INTERVAL_MS;
   BlindfoldSession.RECORDER_MSG_ENSURE = MSG_ENSURE;
+  BlindfoldSession.RECORDER_MSG_SESSION_SAVE = MSG_SESSION_SAVE;
   BlindfoldSession.classifyStreamStatus = classifyStreamStatus;
   BlindfoldSession.installSessionControls = installSessionControls;
 })();

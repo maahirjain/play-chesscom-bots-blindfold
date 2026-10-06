@@ -249,27 +249,29 @@ describe('AC2 — visible marker correct', () => {
     // the delta check is conditional (4.5 SF-1 precedent); the
     // registration + byte-identical assertions above pin the state
     // durably either way.
-    // Honest cumulative evolution (5.1): 5.1 legitimately adds
-    // session_identity.js + session_controls.js to the js list, and its
-    // install block to content.js (pinned in
-    // tests/session_controls.test.js AC7) — content.js is no longer
-    // byte-identical, and the delta check admits the 5.1 additions.
+    // Honest cumulative evolution (5.2): 5.2 legitimately adds
+    // session_fields.js to the js list and restructures the install
+    // block (the fields handle is installed after the controls) —
+    // the delta check admits the 5.2 addition too. (5.1's additions
+    // are committed, so the only uncommitted delta is session_fields.js.)
     const head = execSync('git show HEAD:manifest.json', { cwd: REPO }).toString();
     const headJs = JSON.parse(head).content_scripts[0].js;
-    if (JSON.stringify(js) !== JSON.stringify(headJs)) {
-      assert.deepEqual(
-        js.filter((f) => f !== 'session_identity.js' &&
-          f !== 'session_controls.js'),
-        headJs);
-    }
+    const added = js.filter((f) => headJs.indexOf(f) === -1);
+    assert.deepEqual(added, ['session_fields.js'],
+      'uncommitted js-list delta must be exactly the 5.2 addition');
     const diff = execSync('git diff HEAD -- content.js', { cwd: REPO }).toString();
     if (diff.trim() !== '') {
-      // While 5.1 is uncommitted, the only permitted content.js delta is
-      // the install block.
+      // While 5.2 is uncommitted, the content.js delta is the install
+      // wiring (5.1's block, restructured by 5.2, + the fields
+      // install). The detailed line-level pin lives in
+      // tests/session_controls.test.js AC7; here we only require the
+      // control install to still be present and no gameplay identifiers
+      // to appear in added lines.
       assert.ok(diff.includes('installSessionControls'),
-        'content.js delta must be the 5.1 install block');
-      const removed = diff.split('\n').filter((l) => l.startsWith('-') && !l.startsWith('---'));
-      assert.deepEqual(removed, [], 'content.js: no removed lines');
+        'content.js delta must keep the 5.1 install block');
+      const added = diff.split('\n').filter((l) => l.startsWith('+'));
+      assert.ok(!/move_input|piece_set|chess\.move/i.test(added.join('\n')),
+        'content.js delta must not touch gameplay');
     }
   });
 
@@ -916,6 +918,33 @@ describe('AC8 — changed-files discipline', () => {
       // after the pins were evolved (2.x/3.x/4.x precedent).
       '.autodev/evidence/5.1.review.md',
       '.autodev/evidence/5.1.behavior.md',
+      // Honest cumulative evolution: 5.2 (baseline/training/evaluation
+      // selection + training approach and verbal scaffolding fields)
+      // legitimately adds session_fields.js (pure buildInitialConditions +
+      // UNDETECTED_CONDITION_FIELDS placeholders + installSessionFields
+      // with the 5.3/5.4 seams), amends session_controls.js's Start
+      // sequence (metadata-first minting, session-save, category echo,
+      // category-required abort), adds the SW-side session-save handler
+      // to recording_host.js, accepts/stores/echoes sessionCategory in
+      // recorder.js, wires the fields install into content.js (+
+      // extensionVersion pass-through), adds session_fields.js to the
+      // manifest content_scripts list, adds additive classes to
+      // overlay.css, records the ## 5.2 decisions, and adds its test +
+      // evidence; its files join the allowlists.
+      'session_fields.js',
+      'tests/session_fields.test.js',
+      'session_controls.js',
+      'recorder.js',
+      'recording_host.js',
+      'content.js',
+      'manifest.json',
+      'overlay.css',
+      '.autodev/evidence/5.2.contract.md',
+      '.autodev/evidence/5.2.build.md',
+      // Honest cumulative evolution: 5.2's review/behavior evidence
+      // lands after the pins were evolved (2.x/3.x/4.x/5.1 precedent).
+      '.autodev/evidence/5.2.review.md',
+      '.autodev/evidence/5.2.behavior.md',
     ]);
     const stray = changed.filter((f) => !allowed.has(f));
     assert.deepEqual(stray, [],

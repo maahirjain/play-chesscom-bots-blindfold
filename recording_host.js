@@ -352,6 +352,21 @@ var BlindfoldSession = BlindfoldSession || {};
           });
         return true; // async sendResponse
       }
+      // 5.2: SW-side session intake. The content script cannot reach
+      // extension IDB (2.2), and no intake existed (5.1 build evidence)
+      // — this is it. Payload: {metadata, conditions}. Validates BOTH
+      // records before saving either (requireValidMetadata,
+      // requireValidConditions — no orphan metadata on a bad
+      // conditions record), then saveSessionMetadata → saveConditions
+      // (the 2.6 primitives, previously unwritten; 5.2 invents no new
+      // storage API). Every outcome is data ({ok:true} or
+      // {ok:false, error}); the listener never throws (3.2 SF-1
+      // precedent). Only an IDB failure between the two saves can
+      // orphan metadata without conditions — a plain-Error honest
+      // failure surfaced by 2.8's storage health, not a silent state.
+      if (message.msg === 'session-save') {
+        return handleSessionSave(message, sendResponse);
+      }
       // 4.3 SW-leg: the offscreen capture selector's broker client asks
       // the SW for chrome.* results. Each answers asynchronously with
       // plain data ({ok:true,...} or {ok:false, error}); a missing
@@ -371,6 +386,45 @@ var BlindfoldSession = BlindfoldSession || {};
         return handleSyncFlashRelay(message, sendResponse);
       }
       return false; // unknown msg: ignore, no response
+    }
+
+    // 5.2: the session-save implementation. Resolves the 2.6 storage
+    // primitives and the 1.1/1.2 validators at call time (never cached
+    // at load — the session_store.js precedent, independent of
+    // importScripts order). Both records are validated BEFORE either
+    // is saved.
+    function handleSessionSave(message, sendResponse) {
+      function answer(result) {
+        try {
+          sendResponse(isPlainObject(result) ? result :
+                       { ok: false, error: 'internal-error' });
+        } catch (e) { /* channel closed; nothing more to do */ }
+      }
+      Promise.resolve()
+        .then(function () {
+          var BS = shared();
+          if (typeof BS.requireValidMetadata !== 'function' ||
+              typeof BS.requireValidConditions !== 'function' ||
+              typeof BS.saveSessionMetadata !== 'function' ||
+              typeof BS.saveConditions !== 'function') {
+            throw new Error('session-store-unavailable');
+          }
+          // Both-or-neither: a bad conditions record must not leave
+          // an orphan metadata record behind.
+          BS.requireValidMetadata(message.metadata);
+          var normalized = BS.requireValidConditions(message.conditions);
+          var sessionId = message.metadata.sessionId;
+          return BS.saveSessionMetadata(message.metadata).then(function () {
+            return BS.saveConditions(sessionId, normalized);
+          });
+        })
+        .then(function () {
+          answer({ ok: true });
+        }, function (err) {
+          answer({ ok: false,
+                   error: (err && err.message) || 'internal-error' });
+        });
+      return true; // async sendResponse
     }
 
     function handleCaptureBrokerMessage(message, sendResponse) {

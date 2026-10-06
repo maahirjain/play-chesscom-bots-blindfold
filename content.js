@@ -301,8 +301,17 @@ BlindfoldSession.installStatusIndicator(BlindfoldSession.sender);
 // lights. Installed next to the 2.8 indicator (same anchor/fallback
 // precedent). Never throws into page code: the install itself is guarded,
 // and every async path inside is failure-isolated (3.2 SF-1).
+//
+// Task 5.2 (PLAN.md §5.2): the session-fields handle is resolved through
+// a thunk — the fields are installed AFTER the controls (so the fields
+// can anchor immediately before the control cluster: [fields][Start]
+// [lights], the "select then Start" reading), and the handle does not
+// exist at controls-install time. A null handle (fields install failed)
+// falls back to the 5.1 Start path (no category gating).
+var sessionFieldsHandle = null;
+var sessionControlsHandle = null;
 try {
-  BlindfoldSession.installSessionControls({
+  sessionControlsHandle = BlindfoldSession.installSessionControls({
     sender: BlindfoldSession.sender,
     sendRecorderMessage: function (envelope) {
       return chrome.runtime.sendMessage(envelope);
@@ -315,9 +324,26 @@ try {
       if (typeof BlindfoldSession.onSessionStopComplete === 'function') {
         BlindfoldSession.onSessionStopComplete(stopResponse);
       }
-    }
+    },
+    // 5.2: thunk — the fields install below has not run yet.
+    sessionFields: function () { return sessionFieldsHandle; },
+    extensionVersion: chrome.runtime.getManifest().version
   });
 } catch (installErr) { /* session UI must never break gameplay */ }
+
+// Task 5.2 (PLAN.md §5.2): baseline/training/evaluation selection with
+// training approach and verbal scaffolding fields. Installed after the
+// 5.1 controls so it can anchor immediately before the control
+// cluster. Never throws into page code.
+try {
+  sessionFieldsHandle = BlindfoldSession.installSessionFields({
+    extensionVersion: chrome.runtime.getManifest().version,
+    // 5.4's plug-in seam: detection is not implemented yet, so the
+    // default (UNDETECTED_CONDITION_FIELDS placeholders) applies.
+    beforeElement: (sessionControlsHandle && sessionControlsHandle.element) ?
+      sessionControlsHandle.element : null
+  });
+} catch (fieldsErr) { /* session UI must never break gameplay */ }
 
 document.addEventListener("keydown", (e) => {
     if (e.key == "j" || e.key == "J") {
