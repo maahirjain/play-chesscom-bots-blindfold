@@ -434,8 +434,12 @@
       "behavior": "BEHAVIOR_VERIFIED"
     },
     "5.1": {
-      "commit": null,
-      "status": "PENDING"
+      "status": "complete",
+      "sha": "9e7efed",
+      "suite": "1144/1144",
+      "harnesses": "sw-session-controls 56/56 + 3 regressions PASS",
+      "review": "APPROVE (0 defects)",
+      "behavior": "BEHAVIOR_VERIFIED"
     },
     "5.10": {
       "commit": null,
@@ -563,6 +567,6 @@
     }
   },
   "working_branch": "autodev/logging-instrumentation",
-  "current_task": "5.1",
-  "last_updated": "2026-10-06T18:10:00Z"
+  "current_task": "5.2",
+  "last_updated": "2026-10-06T18:45:00Z"
 }
