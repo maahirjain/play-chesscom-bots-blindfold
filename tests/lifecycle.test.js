@@ -901,9 +901,11 @@ describe('AC14 — SW anchor discipline', () => {
 describe('AC15 — diff discipline', () => {
   it('manifest js list is exactly the contracted order (lifecycle.js, status_indicator.js after sender.js)', () => {
     const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8'));
+    // 3.1 inserts game_records.js before chess_utils.js — the tracker
+    // needs the 1.4 payload factories in the content-script world.
     assert.deepEqual(manifest.content_scripts[0].js, [
       'event_envelope.js', 'sender.js', 'lifecycle.js', 'status_indicator.js',
-      'sounds.js', 'chess.min.js', 'chess_utils.js', 'content.js'
+      'sounds.js', 'chess.min.js', 'game_records.js', 'chess_utils.js', 'content.js'
     ]);
   });
 
@@ -1018,6 +1020,20 @@ describe('AC15 — diff discipline', () => {
       // evolved these pins (2.6/2.7/2.8 precedent).
       '.autodev/evidence/2.9.review.md',
       '.autodev/evidence/2.9.behavior.md',
+      // Honest cumulative evolution: 3.1 legitimately touches
+      // chess_utils.js (tracker), content.js (wiring), manifest.json
+      // (game_records.js for 1.4 factories), and adds the suite.
+      'chess_utils.js',
+      'content.js',
+      'manifest.json',
+      'tests/history_tracker.test.js',
+      '.autodev/evidence/3.1.contract.md',
+      '.autodev/evidence/3.1.build.md',
+      // Honest cumulative evolution: the adversarial review and
+      // behavioral verification evidence land after the builder
+      // evolved these pins (2.x precedent).
+      '.autodev/evidence/3.1.review.md',
+      '.autodev/evidence/3.1.behavior.md',
       // Honest cumulative evolution (2.2–2.6 precedent): earlier tasks'
       // suites pin files 2.7 legitimately touches, so their pins evolve
       // in this task's commit.

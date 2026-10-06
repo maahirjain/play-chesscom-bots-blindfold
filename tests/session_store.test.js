@@ -551,7 +551,7 @@ describe('AC9 — diff discipline', () => {
     assert.deepEqual(current, headManifest, 'manifest changed beyond the js list');
     assert.deepEqual(current.content_scripts[0].js, [
       'event_envelope.js', 'sender.js', 'lifecycle.js', 'status_indicator.js',
-      'sounds.js', 'chess.min.js', 'chess_utils.js', 'content.js'
+      'sounds.js', 'chess.min.js', 'game_records.js', 'chess_utils.js', 'content.js'
     ]);
   });
 
@@ -641,6 +641,20 @@ describe('AC9 — diff discipline', () => {
       // evolved these pins (2.6/2.7/2.8 precedent).
       '.autodev/evidence/2.9.review.md',
       '.autodev/evidence/2.9.behavior.md',
+      // Honest cumulative evolution: 3.1 legitimately touches
+      // chess_utils.js (tracker), content.js (wiring), manifest.json
+      // (game_records.js for 1.4 factories), and adds the suite.
+      'chess_utils.js',
+      'content.js',
+      'manifest.json',
+      'tests/history_tracker.test.js',
+      '.autodev/evidence/3.1.contract.md',
+      '.autodev/evidence/3.1.build.md',
+      // Honest cumulative evolution: the adversarial review and
+      // behavioral verification evidence land after the builder
+      // evolved these pins (2.x precedent).
+      '.autodev/evidence/3.1.review.md',
+      '.autodev/evidence/3.1.behavior.md',
       'tests/db.test.js',
       'tests/manifest_sw.test.js',
       'tests/sender.test.js',

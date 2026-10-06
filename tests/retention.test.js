@@ -90,6 +90,7 @@ describe('AC1 — no auto-deletion exists', () => {
       'content.js',
       'db.js',
       'event_envelope.js',
+      'game_records.js',
       'lifecycle.js',
       'sender.js',
       'session_conditions.js',
@@ -222,6 +223,20 @@ describe('AC4 — diff discipline', () => {
       // evolved these pins (2.6/2.7/2.8 precedent).
       '.autodev/evidence/2.9.review.md',
       '.autodev/evidence/2.9.behavior.md',
+      // Honest cumulative evolution: 3.1 legitimately touches
+      // chess_utils.js (tracker), content.js (wiring), manifest.json
+      // (game_records.js for 1.4 factories), and adds the suite.
+      'chess_utils.js',
+      'content.js',
+      'manifest.json',
+      'tests/history_tracker.test.js',
+      '.autodev/evidence/3.1.contract.md',
+      '.autodev/evidence/3.1.build.md',
+      // Honest cumulative evolution: the adversarial review and
+      // behavioral verification evidence land after the builder
+      // evolved these pins (2.x precedent).
+      '.autodev/evidence/3.1.review.md',
+      '.autodev/evidence/3.1.behavior.md',
       // This task records the binding §6 export constraint in DECISIONS.md.
       '.autodev/DECISIONS.md',
       // Honest cumulative evolution (2.2–2.8 precedent): earlier tasks'
@@ -241,11 +256,17 @@ describe('AC4 — diff discipline', () => {
     assert.ok(fs.existsSync(path.join(ROOT, 'tests', 'retention.test.js')));
   });
 
-  it('no product file differs from HEAD', () => {
+  it('no product file differs from HEAD (except 3.1\'s legitimately changed files)', () => {
+    // Honest cumulative evolution: 3.1 legitimately modifies
+    // chess_utils.js, content.js, and manifest.json (pinned by
+    // tests/history_tracker.test.js AC13). All other product files must
+    // remain byte-identical — the retention guarantee.
+    const changedBy31 = new Set(['chess_utils.js', 'content.js', 'manifest.json']);
     for (const f of PRODUCT_FILES) {
+      if (changedBy31.has(f)) continue;
       const head = execSync(`git show HEAD:${f}`, { cwd: ROOT, stdio: 'pipe' }).toString();
       const current = fs.readFileSync(path.join(ROOT, f), 'utf8');
-      assert.strictEqual(current, head, `${f} changed but 2.9 adds no product code`);
+      assert.strictEqual(current, head, `${f} changed but 3.1 must not touch it`);
     }
   });
 });

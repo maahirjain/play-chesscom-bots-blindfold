@@ -1,7 +1,23 @@
 BlindfoldSession.sender = BlindfoldSession.createSender();
 BlindfoldSession.installPageEndHook(BlindfoldSession.sender);
-const game = new Chess();
-let game_half_move_count = 0;
+
+// Task 3.1 (PLAN.md §3.1): confirmed-history tracker. Owns the stable
+// Chess instance (sounds.js's bare `game` references keep working via
+// getGame()). Until §5 mints game identities, activeGameId is null →
+// track-but-don't-emit: gameplay works, recording waits for §5.
+const historyTracker = BlindfoldSession.createHistoryTracker({
+  gameId: BlindfoldSession.activeGameId || null,
+  emitEvent: (eventType, payload, refs) =>
+    BlindfoldSession.sender.emit({
+      eventType,
+      sessionId: BlindfoldSession.activeSessionId,
+      gameId: BlindfoldSession.activeGameId,
+      payload,
+      refs: refs || null,
+    }),
+  onGameReset: () => { /* §5: mint new game identity + install new tracker */ },
+});
+const game = historyTracker.getGame();
 let latest_half_moves = [];
 
 const PIECESET_KEY = "blindfold_chess_piece_set";
@@ -11,8 +27,12 @@ applyCurrentPieceSet();
 
 observeMoves((half_moves) => {
   latest_half_moves = half_moves;
-  sayMove(game, half_moves[game_half_move_count]);
-  game_half_move_count = updateGame(game, game_half_move_count, half_moves);
+  const result = historyTracker.observe(half_moves);
+  // Speak each newly confirmed move in order (interrupt keeps the latest
+  // audible). preFen is the in-memory pre-move FEN — never persisted.
+  for (const m of result.confirmed) {
+    sayMove(new Chess(m.preFen), m.san);
+  }
   applyCurrentPieceSet();
   announceResultIfOver();
 });

@@ -264,3 +264,26 @@ Consequential engineering decisions with reasoning and evidence. Newest first.
   record counts are identical before and after export (the concrete,
   testable form of "export must not delete the originals"; also implied
   by §6.7 repeatable export). Authority: 2.9.contract.md §6.
+
+## 3.1: history tracker design decisions
+
+- **updateGame removed** (not wrapped): its contract — silent
+  reset-on-shorter, unvalidated `game.move()` with ignored return —
+  is exactly what 3.1.1/3.1.2/3.1.5 replace. A wrapper is impossible
+  (the tracker owns its game instance); dead code is worse. Flagged
+  explicitly in 3.1.contract.md §2.10.
+- **Shorter-divergent observations go to the suspect window, not
+  correction**: the contract's step 5/6 boundary was ambiguous for O
+  divergent but shorter than C. A truncated divergent list is the
+  ambiguous case 3.1.5 names; a complete divergent history is a
+  revision. (3.1.build.md deviation 2.)
+- **manifest.json gains game_records.js**: the 1.4 payload factories
+  were not loaded in the content-script world; the tracker needs them.
+  Minimal necessary change (3.1.build.md deviation 1).
+- **Immediate takeback on strict prefix** (contract §2.4 rationale): a
+  clean strict prefix is semantically a takeback; a transient
+  shorter-prefix glitch self-corrects via a follow-up correction
+  revision, and the stream stays honest about what the DOM showed.
+- **Null gameId = track-but-don't-emit**: gameplay (board, speech)
+  works without §5; recording waits for game identities. Honest
+  phased-mission seam, not a defect.
