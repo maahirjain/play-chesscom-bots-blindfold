@@ -684,7 +684,7 @@ describe('AC4 — restart detected', () => {
 // ------------------------------------------------------------------
 
 describe('AC5 — vocabulary discipline', () => {
-  it('no new channel message; MSG_* vocabulary unchanged', () => {
+  it('MSG_* vocabulary gains exactly the deliberate 4.13 stop-streams message (no other new message)', () => {
     const src = fs.readFileSync(path.join(REPO, 'recorder.js'), 'utf8');
     const found = [];
     const re = /var (MSG_[A-Z_]+) = '([^']+)';/g;
@@ -714,7 +714,10 @@ describe('AC5 — vocabulary discipline', () => {
       'MSG_START_STREAMS=recorder-start-streams',
       // Honest cumulative evolution: 4.11 deliberately adds the
       // single flash-relay message (contract §7).
-      'MSG_SYNC_FLASH=recorder-sync-flash'
+      'MSG_SYNC_FLASH=recorder-sync-flash',
+      // Honest cumulative evolution: 4.13 deliberately adds the single
+      // stop-streams message (contract §7).
+      'MSG_STOP_STREAMS=recorder-stop-streams'
     ]);
   });
 
@@ -969,6 +972,28 @@ describe('AC8 — changed-files discipline', () => {
       '.autodev/evidence/4.12.review.md',
       '.autodev/evidence/4.12.behavior.md',
       '.autodev/DECISIONS.md',
+      // Honest cumulative evolution: 4.13 (finalize recordings at Stop)
+      // legitimately adds finalizer.js (the Stop sequence: stop-marker
+      // wait, recorder stop, bounded final-flush await, device release,
+      // discontinuous-segment splits, per-(sessionId, streamKind)
+      // numbering, finalizedAtUtc mark), widens MANIFEST_KEYS 16 -> 18
+      // with the 4.13-owned segmentNumber + finalizedAtUtc fields, adds
+      // the MSG_STOP_STREAMS vocabulary entry, wires the
+      // recorder-stop-streams handler into recorder.js, adds the
+      // discardActiveStream seam to stream_starter.js, loads the new
+      // module in recorder.html, records the ## 4.13 decisions, and adds
+      // its test + evidence; its files join the allowlists.
+      'finalizer.js',
+      'tests/finalizer.test.js',
+      'format_support.js',
+      'recorder.js',
+      'stream_starter.js',
+      'recorder.html',
+      '.autodev/evidence/4.13.contract.md',
+      '.autodev/evidence/4.13.build.md',
+      // Honest cumulative evolution: 4.13's review evidence lands after
+      // the pins were evolved (2.x/3.x/4.1-4.12 precedent).
+      '.autodev/evidence/4.13.review.md',
       // Cumulative evolution: earlier suites' diff-discipline allowlists
       // are evolved by this task with justification comments.
       'tests/attempt_tracker.test.js',

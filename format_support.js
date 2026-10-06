@@ -111,7 +111,10 @@ var BlindfoldSession = BlindfoldSession || {};
     'screenAudioContent',
     'micAudioContent',
     // 4.10-owned:
-    'clockSegmentId'
+    'clockSegmentId',
+    // 4.13-owned:
+    'segmentNumber',
+    'finalizedAtUtc'
   ];
 
   var FILE_EXTENSIONS = ['.webm', '.mp4', '.m4a'];
@@ -197,6 +200,15 @@ var BlindfoldSession = BlindfoldSession || {};
   function requireBoolean(value, what) {
     if (typeof value !== 'boolean') {
       throw new TypeError(what + ' must be a boolean');
+    }
+    return value;
+  }
+
+  // Small 4.13 helper (AGENTS.md error conventions).
+  function requirePositiveInt(value, what) {
+    if (typeof value !== 'number' || !isFinite(value) ||
+        Math.floor(value) !== value || value <= 0) {
+      throw new TypeError(what + ' must be a positive integer');
     }
     return value;
   }
@@ -317,8 +329,9 @@ var BlindfoldSession = BlindfoldSession || {};
     // Exact-keys validator for a manifest record. Covers the eight
     // 4.5-owned fields plus the six 4.6-owned fields plus the two
     // 4.7-owned audio-content classifications plus the one 4.10-owned
-    // clock link (deliberate widenings — see MANIFEST_KEYS). The
-    // 4.6/4.7/4.10 fields are nullable: recordSegmentFormat derives
+    // clock link plus the two 4.13-owned finalization fields
+    // (deliberate widenings — see MANIFEST_KEYS). The
+    // 4.6/4.7/4.10/4.13 fields are nullable: recordSegmentFormat derives
     // them only when provided.
     function requireValidManifestRecord(record) {
       requireExactKeys(record, MANIFEST_KEYS, 'recording_manifest record');
@@ -375,6 +388,22 @@ var BlindfoldSession = BlindfoldSession || {};
       if (record.clockSegmentId !== null) {
         requireUuidV4(record.clockSegmentId, 'clockSegmentId');
       }
+      // 4.13-owned: chronological 1-based number per (sessionId,
+      // streamKind); null until the finalizer assigns it at Stop.
+      if (record.segmentNumber !== null &&
+          (typeof record.segmentNumber !== 'number' ||
+           !isFinite(record.segmentNumber) ||
+           Math.floor(record.segmentNumber) !== record.segmentNumber ||
+           record.segmentNumber <= 0)) {
+        throw new TypeError('segmentNumber must be a positive integer or null');
+      }
+      // 4.13-owned: ISO timestamp marking the segment's chunk set
+      // closed; null while recording.
+      if (record.finalizedAtUtc !== null &&
+          (typeof record.finalizedAtUtc !== 'string' ||
+           record.finalizedAtUtc === '')) {
+        throw new TypeError('finalizedAtUtc must be a non-empty string or null');
+      }
       return record;
     }
 
@@ -414,6 +443,11 @@ var BlindfoldSession = BlindfoldSession || {};
     // defaults to null otherwise — the same deliberate widening
     // pattern. The stream starter provides the real link at
     // manifest-write time; null means the anchor could not be captured.
+    //
+    // 4.13's fields (segmentNumber, finalizedAtUtc) are accepted when
+    // provided and default to null otherwise — the same deliberate
+    // widening pattern. The finalizer assigns the real values at Stop;
+    // null means "not yet finalized" (4.13's contract §2).
     //
     // Pre-session inertness (2.x/3.x/4.2 precedent): null/undefined
     // sessionId or gameId → plain data {ok:false, error:'no-session'},
@@ -471,7 +505,15 @@ var BlindfoldSession = BlindfoldSession || {};
           // not be captured or the linker was unavailable).
           clockSegmentId: (input.clockSegmentId === undefined ||
             input.clockSegmentId === null) ? null :
-            requireUuidV4(input.clockSegmentId, 'clockSegmentId')
+            requireUuidV4(input.clockSegmentId, 'clockSegmentId'),
+          // 4.13-owned (nullable; the finalizer assigns the real values
+          // at Stop; null while the segment is open).
+          segmentNumber: (input.segmentNumber === undefined ||
+            input.segmentNumber === null) ? null :
+            requirePositiveInt(input.segmentNumber, 'segmentNumber'),
+          finalizedAtUtc: (input.finalizedAtUtc === undefined ||
+            input.finalizedAtUtc === null) ? null :
+            requireNonEmptyString(input.finalizedAtUtc, 'finalizedAtUtc')
         };
         requireValidManifestRecord(record);
       } catch (e) {

@@ -378,6 +378,19 @@ var BlindfoldSession = BlindfoldSession || {};
       } : null;
     }
 
+    // 4.13 seam: remove one kind's registry entry after a clean Stop so
+    // a later recorder-start-streams passes the already-started guard.
+    // Additive (the getActiveStreams pattern). Validates the kind;
+    // idempotent (unknown/absent kinds are a no-op, not an error).
+    function discardActiveStream(streamKind) {
+      if (STREAM_KINDS.indexOf(streamKind) === -1) {
+        throw new RangeError('unknown streamKind: ' + streamKind);
+      }
+      if (registry[streamKind]) {
+        delete registry[streamKind];
+      }
+    }
+
     function failResult(stage, err, forcedCode) {
       return {
         ok: false,
@@ -800,6 +813,7 @@ var BlindfoldSession = BlindfoldSession || {};
       startStreams: startStreams,
       getActiveStreams: getActiveStreams,
       getStreamRecord: getStreamRecord,
+      discardActiveStream: discardActiveStream,
       // 4.8/4.9/4.13 seam introspection (Node tests drive these).
       _isStartInFlight: function () { return startInFlight; }
     };

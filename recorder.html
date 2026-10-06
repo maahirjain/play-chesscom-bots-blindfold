@@ -24,6 +24,9 @@
      writing chunk Blobs incrementally to the media_chunks IDB store),
      track_monitor.js (4.9 track mute/unmute/end + recorder-error
      observation and discontinuity flags, all to the event log),
+     finalizer.js (4.13 Stop: stop-marker wait, recorder stop, bounded
+     final-flush await, device release, discontinuous-segment splits,
+     per-(sessionId, streamKind) numbering, finalizedAtUtc mark),
      then recorder.js. Created by the service
      worker via chrome.offscreen.createDocument(); never opened by the
      user. -->
@@ -44,6 +47,7 @@
   <script src="stream_starter.js"></script>
   <script src="chunk_writer.js"></script>
   <script src="track_monitor.js"></script>
+  <script src="finalizer.js"></script>
   <script src="recorder.js"></script>
 </body>
 </html>

@@ -138,6 +138,12 @@ var BlindfoldSession = BlindfoldSession || {};
   // {kind:'blindfold-sync-flash', ...} to the content script. The only
   // deliberate channel-vocabulary addition of 4.11 (contract §7).
   var MSG_SYNC_FLASH = 'recorder-sync-flash';
+  // 4.13 stream stop (PLAN.md §4.13). §5 drives it at Stop; the response
+  // carries the stop-marker id, the per-stream stop outcomes, the
+  // finalized segment numbers, and the finalizedAtUtc mark.
+  // Session-gated (no session → no-session). The only deliberate
+  // channel-vocabulary addition of 4.13 (contract §7).
+  var MSG_STOP_STREAMS = 'recorder-stop-streams';
 
   // Source context stamped on every event this document emits (1.3's
   // SOURCE_CONTEXTS already includes 'recording_context').
@@ -369,6 +375,12 @@ var BlindfoldSession = BlindfoldSession || {};
       // the starter (no session → {ok:false, error:'no-session'}).
       if (message.msg === MSG_START_STREAMS) {
         return handleStartStreams(message, sendResponse);
+      }
+      // 4.13: stop the recording streams and finalize the segments.
+      // Session-gated inside the finalizer (no session →
+      // {ok:false, error:'no-session'}).
+      if (message.msg === MSG_STOP_STREAMS) {
+        return handleStopStreams(message, sendResponse);
       }
       return false; // unknown msg: ignore, no response
     }
@@ -967,6 +979,47 @@ var BlindfoldSession = BlindfoldSession || {};
       return new ACtor(url);
     }
 
+    // ----------------------------------------------------------------
+    // 4.13: finalize recordings at Stop (PLAN.md §4.13). recorder.js
+    // wires the finalizer the same way as formatSupport / audioPolicy /
+    // chunkWriter / trackMonitor / syncMarker: lazy,
+    // shared-namespace-resolved, test-injectable via o.finalizer.
+    // Absence is a wiring defect → plain Error, like
+    // createChunkWriter. The finalizer stops every stream, splits
+    // discontinuous recordings into numbered pieces, and marks the
+    // manifest finalized — but never assembles media files (§6.4).
+    // ----------------------------------------------------------------
+
+    var finalizer = null;
+    function getFinalizer() {
+      if (finalizer === null) {
+        var BS = shared();
+        if (typeof BS.createFinalizer !== 'function') {
+          throw new Error('recorder: createFinalizer is unavailable');
+        }
+        if (o.finalizer !== undefined && o.finalizer !== null) {
+          finalizer = o.finalizer;
+        } else {
+          finalizer = BS.createFinalizer({
+            starter: getStreamStarter(),
+            chunkWriter: getChunkWriter(),
+            trackMonitor: getTrackMonitor(),
+            syncMarker: getSyncMarker(),
+            clockLink: getClockLink(),
+            getAnchor: ensureAnchor,
+            formatSupport: getFormatSupport(),
+            // The DB and indexedDB default inside the finalizer
+            // (shared-namespace lazy read; the db.js pattern).
+            getSessionId: function () { return sessionId; },
+            getGameId: function () { return gameId; },
+            finalizedField: MANIFEST_FINALIZED_FIELD,
+            newUuidV4: newUuidV4
+          });
+        }
+      }
+      return finalizer;
+    }
+
     // Offscreen → SW flash-relay request (contract §7). Always resolves
     // (never rejects): an unreachable SW becomes data, never a thrown
     // marker failure.
@@ -1010,9 +1063,11 @@ var BlindfoldSession = BlindfoldSession || {};
 
     // 4.9's finalized-marker exclusion for the restart pre-check. The
     // marker name is 4.13's to define (db.js already anticipates "4.13
-    // marks it finalized"); until defined this matches nothing, so every
-    // manifest record counts as unfinalized.
-    var MANIFEST_FINALIZED_FIELD = null;
+    // marks it finalized"); 4.13 defines it as 'finalizedAtUtc' — the
+    // ISO timestamp the finalizer writes when a segment's chunk set is
+    // closed — so finalized segments are excluded from restart
+    // detection and from later finalize passes (idempotence).
+    var MANIFEST_FINALIZED_FIELD = 'finalizedAtUtc';
     function isManifestRecordFinalized(record) {
       return MANIFEST_FINALIZED_FIELD !== null &&
         !!record[MANIFEST_FINALIZED_FIELD];
@@ -1184,6 +1239,30 @@ var BlindfoldSession = BlindfoldSession || {};
           } catch (e) { /* marker is auxiliary; streams are recording */ }
           return result;
         }), sendResponse, toChannelError);
+    }
+
+    // 4.13: stop the recording streams and finalize the segments
+    // (PLAN.md §4.13). The finalizer owns the whole sequence: guards,
+    // stop-marker + capture window, chunker stop, recorder.stop() per
+    // stream, the bounded final-flush await, monitor detach before
+    // track stop, device release, registry discard, then the finalize
+    // pass (splits → per-(sessionId, streamKind) numbering →
+    // finalizedAtUtc). The finalizer never throws into the channel
+    // handler: a synchronously-throwing factory becomes {ok:false} here,
+    // and a rejected stop becomes {ok:false} via respondAsync.
+    function handleStopStreams(message, sendResponse) {
+      var fin;
+      try {
+        fin = getFinalizer();
+      } catch (e) {
+        try {
+          sendResponse(toChannelError(e));
+        } catch (w) { /* ignore */ }
+        return false;
+      }
+      return respondAsync(Promise.resolve()
+        .then(function () { return fin.stopAndFinalize(); }),
+        sendResponse, toChannelError);
     }
 
     function handleCaptureCommand(message, sendResponse) {
@@ -1467,6 +1546,10 @@ var BlindfoldSession = BlindfoldSession || {};
       // generation with ≥1 started stream; 4.13 calls
       // getSyncMarker().emitStopMarker() BEFORE recorder.stop()).
       getSyncMarker: getSyncMarker,
+      // 4.13 surface (Node tests drive this directly; the
+      // recorder-stop-streams handler stops the streams and finalizes
+      // the segments through the finalizer).
+      getFinalizer: getFinalizer,
       restoreDevices: restoreDevices,
       getSession: function () { return { sessionId: sessionId, gameId: gameId }; }
     };
@@ -1500,6 +1583,7 @@ var BlindfoldSession = BlindfoldSession || {};
   BlindfoldSession.RECORDER_MSG_CAPTURE_GET_STREAM_ID = MSG_CAPTURE_GET_STREAM_ID;
   BlindfoldSession.RECORDER_MSG_GET_FORMATS = MSG_FORMATS;
   BlindfoldSession.RECORDER_MSG_START_STREAMS = MSG_START_STREAMS;
+  BlindfoldSession.RECORDER_MSG_STOP_STREAMS = MSG_STOP_STREAMS;
   BlindfoldSession.RECORDER_MSG_SYNC_FLASH = MSG_SYNC_FLASH;
   BlindfoldSession.RECORDER_SOURCE_CONTEXT = RECORDER_SOURCE_CONTEXT;
   BlindfoldSession.isRecorderMessage = isRecorderMessage;

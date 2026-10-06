@@ -498,6 +498,28 @@ describe('AC4 — diff discipline', () => {
       '.autodev/evidence/3.5.rereview.md',
       '.autodev/evidence/3.5.behavior.md',
       '.autodev/DECISIONS.md',
+      // Honest cumulative evolution: 4.13 (finalize recordings at Stop)
+      // legitimately adds finalizer.js (the Stop sequence: stop-marker
+      // wait, recorder stop, bounded final-flush await, device release,
+      // discontinuous-segment splits, per-(sessionId, streamKind)
+      // numbering, finalizedAtUtc mark), widens MANIFEST_KEYS 16 -> 18
+      // with the 4.13-owned segmentNumber + finalizedAtUtc fields, adds
+      // the MSG_STOP_STREAMS vocabulary entry, wires the
+      // recorder-stop-streams handler into recorder.js, adds the
+      // discardActiveStream seam to stream_starter.js, loads the new
+      // module in recorder.html, records the ## 4.13 decisions, and adds
+      // its test + evidence; its files join the allowlists.
+      'finalizer.js',
+      'tests/finalizer.test.js',
+      'format_support.js',
+      'recorder.js',
+      'stream_starter.js',
+      'recorder.html',
+      '.autodev/evidence/4.13.contract.md',
+      '.autodev/evidence/4.13.build.md',
+      // Honest cumulative evolution: 4.13's review evidence lands after
+      // the pins were evolved (2.x/3.x/4.1-4.12 precedent).
+      '.autodev/evidence/4.13.review.md',
       // Honest cumulative evolution: 3.5's review/behavior evidence
       // lands after the pins were evolved (2.x/3.1/3.2/3.3/3.4 precedent).
       '.autodev/evidence/3.5.review.md',
@@ -505,6 +527,28 @@ describe('AC4 — diff discipline', () => {
       'tests/attempt_tracker.test.js',
       // This task records the binding §6 export constraint in DECISIONS.md.
       '.autodev/DECISIONS.md',
+      // Honest cumulative evolution: 4.13 (finalize recordings at Stop)
+      // legitimately adds finalizer.js (the Stop sequence: stop-marker
+      // wait, recorder stop, bounded final-flush await, device release,
+      // discontinuous-segment splits, per-(sessionId, streamKind)
+      // numbering, finalizedAtUtc mark), widens MANIFEST_KEYS 16 -> 18
+      // with the 4.13-owned segmentNumber + finalizedAtUtc fields, adds
+      // the MSG_STOP_STREAMS vocabulary entry, wires the
+      // recorder-stop-streams handler into recorder.js, adds the
+      // discardActiveStream seam to stream_starter.js, loads the new
+      // module in recorder.html, records the ## 4.13 decisions, and adds
+      // its test + evidence; its files join the allowlists.
+      'finalizer.js',
+      'tests/finalizer.test.js',
+      'format_support.js',
+      'recorder.js',
+      'stream_starter.js',
+      'recorder.html',
+      '.autodev/evidence/4.13.contract.md',
+      '.autodev/evidence/4.13.build.md',
+      // Honest cumulative evolution: 4.13's review evidence lands after
+      // the pins were evolved (2.x/3.x/4.1-4.12 precedent).
+      '.autodev/evidence/4.13.review.md',
       // Honest cumulative evolution (2.2–2.8 precedent): earlier tasks'
       // suites pin files 2.9 legitimately touches, so their pins evolve
       // in this task's commit.

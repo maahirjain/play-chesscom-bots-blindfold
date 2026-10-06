@@ -291,13 +291,17 @@ describe('AC2 — linking never fails the stream', () => {
 // ------------------------------------------------------------------
 
 describe('AC3 — manifest widening is deliberate', () => {
-  it('MANIFEST_KEYS is exactly the 16-key shape with the 4.10-owned field', () => {
+  it('MANIFEST_KEYS is exactly the 18-key shape (4.13 adds two owned fields)', () => {
     const keys = BS.MANIFEST_KEYS;
-    assert.equal(keys.length, 16);
+    assert.equal(keys.length, 18);
     assert.ok(keys.includes('clockSegmentId'), 'missing clockSegmentId');
+    assert.ok(keys.includes('segmentNumber'), 'missing segmentNumber');
+    assert.ok(keys.includes('finalizedAtUtc'), 'missing finalizedAtUtc');
     const src = fs.readFileSync(path.join(REPO, 'format_support.js'), 'utf8');
     assert.ok(/\/\/ 4\.10-owned:\s*\n\s*'clockSegmentId'/.test(src),
       'expected the // 4.10-owned: comment convention');
+    assert.ok(/\/\/ 4\.13-owned:\s*\n\s*'segmentNumber'/.test(src),
+      'expected the // 4.13-owned: comment convention');
   });
 
   it('requireValidManifestRecord rejects extra keys; clockSegmentId nullable/uuid', () => {
@@ -314,12 +318,15 @@ describe('AC3 — manifest widening is deliberate', () => {
       streamStartedAtUtc: null, streamStartedAtMonotonicMs: null,
       effectiveDeviceId: null, audioTrackPresent: null,
       videoTrackPresent: null, screenAudioContent: null,
-      micAudioContent: null, clockSegmentId: null
+      micAudioContent: null, clockSegmentId: null,
+      // Honest cumulative evolution (4.13): the 4.13-owned finalization
+      // fields (nullable until finalized).
+      segmentNumber: null, finalizedAtUtc: null
     };
     assert.doesNotThrow(() => fst.requireValidManifestRecord(base));
     assert.doesNotThrow(() => fst.requireValidManifestRecord(
       Object.assign({}, base, { clockSegmentId: ANCHOR_A })));
-    // Exact-keys discipline: a 17th key is rejected.
+    // Exact-keys discipline: a 19th key is rejected.
     assert.throws(() => fst.requireValidManifestRecord(
       Object.assign({}, base, { futureField: 1 })), TypeError);
     // Non-uuid link is rejected.
@@ -567,6 +574,28 @@ describe('AC8 — changed-files discipline', () => {
       '.autodev/evidence/4.12.review.md',
       '.autodev/evidence/4.12.behavior.md',
       '.autodev/DECISIONS.md',
+      // Honest cumulative evolution: 4.13 (finalize recordings at Stop)
+      // legitimately adds finalizer.js (the Stop sequence: stop-marker
+      // wait, recorder stop, bounded final-flush await, device release,
+      // discontinuous-segment splits, per-(sessionId, streamKind)
+      // numbering, finalizedAtUtc mark), widens MANIFEST_KEYS 16 -> 18
+      // with the 4.13-owned segmentNumber + finalizedAtUtc fields, adds
+      // the MSG_STOP_STREAMS vocabulary entry, wires the
+      // recorder-stop-streams handler into recorder.js, adds the
+      // discardActiveStream seam to stream_starter.js, loads the new
+      // module in recorder.html, records the ## 4.13 decisions, and adds
+      // its test + evidence; its files join the allowlists.
+      'finalizer.js',
+      'tests/finalizer.test.js',
+      'format_support.js',
+      'recorder.js',
+      'stream_starter.js',
+      'recorder.html',
+      '.autodev/evidence/4.13.contract.md',
+      '.autodev/evidence/4.13.build.md',
+      // Honest cumulative evolution: 4.13's review evidence lands after
+      // the pins were evolved (2.x/3.x/4.1-4.12 precedent).
+      '.autodev/evidence/4.13.review.md',
       // Cumulative evolution: earlier suites' diff-discipline
       // allowlists are evolved by this task with justification
       // comments.

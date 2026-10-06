@@ -320,8 +320,10 @@ describe('AC6 — purity and no persistence', () => {
     assert.ok(!/localStorage/.test(code), 'no localStorage');
   });
 
-  it('MANIFEST_KEYS is still exactly the 16-key shape (4.12 stores nothing)', () => {
-    assert.equal(BS_FMT.MANIFEST_KEYS.length, 16);
+  it('MANIFEST_KEYS is exactly the 18-key shape (4.12 stored nothing; 4.13 widens deliberately)', () => {
+    // Honest cumulative evolution (4.13): MANIFEST_KEYS widens 16 → 18
+    // with the 4.13-owned segmentNumber + finalizedAtUtc (contract §2).
+    assert.equal(BS_FMT.MANIFEST_KEYS.length, 18);
   });
 
   it('media_chunks shape unchanged; DB_VERSION still 2', () => {
@@ -333,13 +335,18 @@ describe('AC6 — purity and no persistence', () => {
       'media_chunks keeps its compound key [segmentId, chunkIndex]');
   });
 
-  it('no producer or consumer module was modified by 4.12', () => {
+  it('no producer or consumer module was modified by 4.12 (4.13 changes are deliberate)', () => {
+    // Honest cumulative evolution (4.13): 4.13 deliberately modifies
+    // stream_starter.js (discardActiveStream seam), format_support.js
+    // (MANIFEST_KEYS 16 → 18), recorder.js (recorder-stop-streams
+    // handler + getFinalizer), and recorder.html (finalizer.js script
+    // tag) — see .autodev/evidence/4.13.contract.md. The modules 4.13
+    // does NOT touch stay untouched.
     const names = execSync('git diff HEAD --name-only', { cwd: REPO })
       .toString().split('\n').filter((l) => l.trim());
-    for (const f of ['stream_starter.js', 'chunk_writer.js', 'clock_link.js',
-      'sync_marker.js', 'sync_flash.js', 'track_monitor.js',
-      'format_support.js', 'recorder.js', 'recorder.html', 'db.js']) {
-      assert.ok(!names.includes(f), `${f} must be untouched by 4.12`);
+    for (const f of ['chunk_writer.js', 'clock_link.js',
+      'sync_marker.js', 'sync_flash.js', 'track_monitor.js', 'db.js']) {
+      assert.ok(!names.includes(f), `${f} must be untouched by 4.12/4.13`);
     }
   });
 });
@@ -401,6 +408,28 @@ describe('AC8 — changed-files discipline', () => {
       '.autodev/evidence/4.12.review.md',
       '.autodev/evidence/4.12.behavior.md',
       '.autodev/DECISIONS.md',
+      // Honest cumulative evolution: 4.13 (finalize recordings at Stop)
+      // legitimately adds finalizer.js (the Stop sequence: stop-marker
+      // wait, recorder stop, bounded final-flush await, device release,
+      // discontinuous-segment splits, per-(sessionId, streamKind)
+      // numbering, finalizedAtUtc mark), widens MANIFEST_KEYS 16 -> 18
+      // with the 4.13-owned segmentNumber + finalizedAtUtc fields, adds
+      // the MSG_STOP_STREAMS vocabulary entry, wires the
+      // recorder-stop-streams handler into recorder.js, adds the
+      // discardActiveStream seam to stream_starter.js, loads the new
+      // module in recorder.html, records the ## 4.13 decisions, and adds
+      // its test + evidence; its files join the allowlists.
+      'finalizer.js',
+      'tests/finalizer.test.js',
+      'format_support.js',
+      'recorder.js',
+      'stream_starter.js',
+      'recorder.html',
+      '.autodev/evidence/4.13.contract.md',
+      '.autodev/evidence/4.13.build.md',
+      // Honest cumulative evolution: 4.13's review evidence lands after
+      // the pins were evolved (2.x/3.x/4.1-4.12 precedent).
+      '.autodev/evidence/4.13.review.md',
       // Cumulative evolution: earlier suites' diff-discipline
       // allowlists are evolved by this task with justification
       // comments.

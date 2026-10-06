@@ -1015,3 +1015,69 @@ Consequential engineering decisions with reasoning and evidence. Newest first.
   then genuinely advancing media times. One implementation's behavior
   is not a spec guarantee; §7/AC11 re-characterizes on the owner's
   device.
+
+## 4.13 finalize recordings at Stop
+
+- **Module name is `finalizer.js` (contract wins over the spawn brief).**
+  The parent brief said `stream_stopper.js`; the contract (§1, §8, AC8)
+  is authoritative and names `finalizer.js` / `tests/finalizer.test.js`.
+  Flagged in the build report; no functional impact.
+- **"Finalize" closes the chunk set; it never assembles a file.**
+  4.13 stops, splits, numbers, marks. No §6.4 assembly, no §6.6 ZIP, no
+  downloads/OPFS writes — the contract's §6.4/§6.6 prohibitions are
+  V1-pinned by code scan.
+- **`finalizedAtUtc` IS 4.9's reserved `MANIFEST_FINALIZED_FIELD`.**
+  `recorder.js` sets the reservation to the literal `'finalizedAtUtc'`;
+  4.9's `isManifestRecordFinalized()` exclusion then works as designed
+  (restart pre-check skips finalized segments; finalize passes skip
+  them — idempotence). No other 4.9 change.
+- **MANIFEST_KEYS 16 → 18 is the deliberate widening** (`segmentNumber`,
+  `finalizedAtUtc`, `// 4.13-owned:`). `DB_VERSION` stays 2, no new
+  store/index. `recordSegmentFormat` accepts/defaults both to null.
+  **Contract inconsistency flagged:** AC8's file list omits
+  `format_support.js`, but AC2 requires the widening — the change was
+  made; the build report records the inconsistency.
+- **The atomic split re-key needs raw indexedDB.** `BlindfoldSession.DB`
+  exposes only `put`/`get`/`getAll` — no delete, no multi-store
+  transaction — so the finalizer uses the injected `indexedDB` directly
+  (lazy `globalThis.indexedDB`, the db.js pattern) for the single
+  readwrite transaction over `['media_chunks', 'recording_manifest']`.
+  Targeted `delete([seg,idx])` + `put(rekeyed)` by explicit key (no
+  cursor, no IDBKeyRange). A mid-split document death leaves either the
+  old keys or the new keys — never a mixture.
+- **Splits only on media-both-sides; 'restart' never splits.**
+  A non-'restart' discontinuity with `maxIdx > lastChunkIndex` mints a
+  new uuid-v4 piece (fresh `segmentId`/`createdAtUtc`, fresh clock link
+  via 4.10's linker — never copied, null on linker failure),
+  re-keys post-gap chunks 0-based. Multi-gap segments split
+  sequentially with original-coordinate base tracking. Split failure →
+  best-effort unsplit finalize (the gap stays flagged in the event log).
+- **Numbering is per (sessionId, streamKind), chronological by
+  (createdAtUtc, segmentId), 1-based, assigned at finalize.**
+  Deterministic and idempotent: finalized records are never renumbered.
+  One `finalizedAtUtc` per pass.
+- **Final-flush await is bounded and honest.** Poll `recorder.state` →
+  `'inactive'` (≤5 s, 100 ms cadence), then 1 s write grace. Timeout →
+  `flushTimedOut:true`, still finalizes with available chunks. No
+  `lastChunkIndex` polling (0-byte flushes are legitimately index-less).
+- **Stop-marker wait is once, globally (1000 ms).** After
+  `emitStopMarker()`, before any `recorder.stop()`. Marker failure →
+  `markerId:null`, never a Stop failure.
+- **Monitor detach precedes track stop.** A clean Stop emits no
+  spurious track-ended discontinuities (4.9 logs mid-session ends).
+- **Crash recovery without marker.** No active streams + unfinalized
+  orphans → finalize orphans (`note:'finalized-orphans'`, no marker —
+  no media to align to). Double Stop → `note:'nothing-to-finalize'`.
+- **Exactly one new channel message** (`recorder-stop-streams`;
+  MSG_* 22→23). No new event types (manifest mark + 4.11's stop marker
+  events are the trace). No `timecode.js` use (ordering by ISO string
+  is not timestamp arithmetic). `finalizer.js` references no
+  media-capture APIs (V1 code-scan pin).
+- **V2 (headless Chrome 154, fake devices): 54/54.** Real start →
+  chunks → real stop → response shape, stop-marker events with matching
+  markerId, manifest `segmentNumber:1` + `finalizedAtUtc` per kind,
+  registry discard (new start not already-started), double Stop
+  no-op, second-generation numbering. The mid-segment split path is
+  V1-pinned (post-gap media not forceable headless — documented
+  honestly). Regressions: sw-chunks 42/42, sw-streams 57/57,
+  sw-track-monitor 46/46, sw-sync-marker 43/43.
