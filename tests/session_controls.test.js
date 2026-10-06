@@ -143,6 +143,15 @@ function makeOpts(overrides) {
     getStatus() {
       return { pendingCount: 0, lastError: null, transportAvailable: true, retryScheduled: false };
     },
+    // 5.10: the real sender exposes flush() → {delivered, pending}.
+    // Tests override flushImpl to control timing/outcome.
+    flushCalls: 0,
+    flushImpl: null,
+    flush() {
+      this.flushCalls++;
+      if (typeof this.flushImpl === 'function') return this.flushImpl();
+      return Promise.resolve({ delivered: 0, pending: 0 });
+    },
   };
   const glr = {
     stopTerminationCalls: [],
@@ -1141,12 +1150,17 @@ describe('AC5 — Stop sequence', () => {
     return { BS, opts, h, statuses };
   }
 
+  // 5.10: realistic 4.13 stop-response shape (per-stream results in
+  // `streams`; flushTimedOut is per-stream, response-only).
   const STOP_OK = {
     ok: true,
     markerId: 'm1',
     finalizedAtUtc: '2026-10-06T18:00:00.000Z',
-    flushTimedOut: false,
-    finalized: { microphone: { segmentNumber: 1 }, screen: { segmentNumber: 1 }, webcam: { segmentNumber: 1 } },
+    streams: {
+      microphone: { ok: true, segments: [{ segmentNumber: 1 }] },
+      screen: { ok: true, segments: [{ segmentNumber: 1 }] },
+      webcam: { ok: true, segments: [{ segmentNumber: 1 }] },
+    },
   };
 
   it('recordStopTermination(null, "*") when no game_ended observed; full response incl. flushTimedOut → 5.10 seam; slots cleared', async () => {
@@ -1166,11 +1180,19 @@ describe('AC5 — Stop sequence', () => {
       await sleep(80);
       // 3.5.4 seam: null reason (unknown), default '*' result.
       assert.deepEqual(opts._glr.stopTerminationCalls, [{ reason: null, result: '*' }]);
-      // 5.10 seam got the FULL stop response, flushTimedOut included.
+      // 5.10 seam got the enriched verdict: the FULL stop response is
+      // carried as .stopResp (5.1 handoff, extended not broken), with
+      // the flush result, verdict, and warnings.
       assert.equal(opts._stopCalls.length, 1);
-      assert.equal(opts._stopCalls[0], STOP_OK);
-      assert.equal('flushTimedOut' in opts._stopCalls[0], true);
-      assert.equal(h.getLastStopResponse(), STOP_OK);
+      assert.equal(opts._stopCalls[0].stopResp, STOP_OK);
+      assert.equal(opts._stopCalls[0].verdict, 'complete');
+      assert.deepEqual(opts._stopCalls[0].warnings, []);
+      assert.deepEqual(opts._stopCalls[0].flushResult, { delivered: 0, pending: 0 });
+      const retained = h.getLastStopResponse();
+      assert.equal(retained.stopResp, STOP_OK);
+      assert.equal(retained.verdict, 'complete');
+      // 5.10: the sender queue was flushed exactly once before idle.
+      assert.equal(opts._sender.flushCalls, 1);
       // Slots cleared, idle, polling stopped.
       assert.equal(BS.activeSessionId, null);
       assert.equal(BS.activeGameId, null);
@@ -1200,8 +1222,18 @@ describe('AC5 — Stop sequence', () => {
     } finally { h.stop(); }
   });
 
-  it('flushTimedOut:true is handed to the 5.10 seam undropped', async () => {
-    const timedOut = Object.assign({}, STOP_OK, { flushTimedOut: true });
+  it('flushTimedOut:true is handed to the 5.10 seam undropped and surfaced as a warning', async () => {
+    // 5.10: flushTimedOut is per-stream in the real 4.13 response.
+    const timedOut = {
+      ok: true,
+      markerId: 'm1',
+      finalizedAtUtc: '2026-10-06T18:00:00.000Z',
+      streams: {
+        microphone: { ok: true, segments: [{ segmentNumber: 1 }] },
+        screen: { ok: true, segments: [{ segmentNumber: 1 }] },
+        webcam: { ok: true, segments: [{ segmentNumber: 1 }], flushTimedOut: true },
+      },
+    };
     const { opts, h } = activeHarness(timedOut);
     try {
       await sleep(20);
@@ -1210,7 +1242,17 @@ describe('AC5 — Stop sequence', () => {
       h.button.click();
       await sleep(80);
       assert.equal(opts._stopCalls.length, 1);
-      assert.equal(opts._stopCalls[0].flushTimedOut, true);
+      const verdict = opts._stopCalls[0];
+      assert.equal(verdict.stopResp, timedOut);
+      assert.equal(verdict.verdict, 'complete-with-warnings');
+      assert.deepEqual(verdict.warnings, ['webcam-flush-timed-out']);
+      // The warning is surfaced in the button detail text (not a
+      // clean idle) and retained for §6.
+      assert.ok(String(h.button.title).includes('webcam-flush-timed-out'), h.button.title);
+      assert.ok(String(h.button.title).startsWith('finalize-warnings:'), h.button.title);
+      assert.deepEqual(h.getLastStopResponse().warnings, ['webcam-flush-timed-out']);
+      assert.equal(h.getPhase(), 'idle');
+      assert.equal(h.button.textContent, 'Start');
     } finally { h.stop(); }
   });
 
@@ -1674,6 +1716,21 @@ describe('AC7 — diff discipline and scope', () => {
       // after the pins are evolved (2.x/3.x/4.x/5.1-5.8 precedent).
       '.autodev/evidence/5.9.review.md',
       '.autodev/evidence/5.9.behavior.md',
+      // Honest cumulative evolution: 5.10 (Stop completion verdict)
+      // legitimately adds the sender.flush() await + transitional
+      // "Finalizing…" UI + pure computeCompletion() + enriched
+      // lastStopResponse retention to session_controls.js's Stop
+      // sequence (the specified deliverable; the Section 4 audit
+      // assigned flushTimedOut surfacing to §5.10), adds its
+      // unit/integration tests, and records its evidence; its files
+      // join the allowlists. No new channel messages, event types,
+      // stores, or permissions.
+      '.autodev/evidence/5.10.contract.md',
+      '.autodev/evidence/5.10.build.md',
+      // Honest cumulative evolution: 5.10's review/behavior evidence lands
+      // after the pins are evolved (2.x/3.x/4.x/5.1-5.9 precedent).
+      '.autodev/evidence/5.10.review.md',
+      '.autodev/evidence/5.10.behavior.md',
     ]);
     const stray = changed.filter((f) => !allowed.has(f));
     assert.deepEqual(stray, [],
@@ -2589,6 +2646,251 @@ describe('5.9 — mid-session game transition', () => {
       const stopMsgs = opts._transport.calls.filter(
         (c) => c.msg === 'recorder-stop-streams');
       assert.equal(stopMsgs.length, 0, 'no stop-channel message (5.7 holds)');
+    } finally { h.stop(); }
+  });
+});
+
+// ------------------------------------------------------------------
+// 5.10 — Stop completion verdict (PLAN.md §5.10).
+// ------------------------------------------------------------------
+describe('5.10 — computeCompletion', () => {
+  function okStreams() {
+    return {
+      microphone: { ok: true, segments: [{ segmentNumber: 1 }] },
+      screen: { ok: true, segments: [{ segmentNumber: 1 }] },
+      webcam: { ok: true, segments: [{ segmentNumber: 1 }] },
+    };
+  }
+  function okResp(streams) {
+    return {
+      ok: true,
+      markerId: 'm1',
+      finalizedAtUtc: '2026-10-06T18:00:00.000Z',
+      streams: streams || okStreams(),
+    };
+  }
+
+  it('exports the completion vocabulary', () => {
+    const BS = freshModule();
+    assert.equal(BS.COMPLETION_COMPLETE, 'complete');
+    assert.equal(BS.COMPLETION_COMPLETE_WITH_WARNINGS, 'complete-with-warnings');
+    assert.equal(typeof BS.computeCompletion, 'function');
+  });
+
+  it('AC1: all-ok + drained → complete, no warnings', () => {
+    const BS = freshModule();
+    const r = BS.computeCompletion(okResp(), { delivered: 5, pending: 0 });
+    assert.equal(r.verdict, 'complete');
+    assert.deepEqual(r.warnings, []);
+  });
+
+  it('AC1: flushTimedOut on a stream → complete-with-warnings naming it', () => {
+    const BS = freshModule();
+    const streams = okStreams();
+    streams.webcam.flushTimedOut = true;
+    const r = BS.computeCompletion(okResp(streams), { delivered: 5, pending: 0 });
+    assert.equal(r.verdict, 'complete-with-warnings');
+    assert.deepEqual(r.warnings, ['webcam-flush-timed-out']);
+  });
+
+  it('AC1: failed stream → warning naming it with its error', () => {
+    const BS = freshModule();
+    const streams = okStreams();
+    streams.screen = { ok: false, error: 'no-track', errorName: 'Error', stage: 'start', segments: [] };
+    const r = BS.computeCompletion(okResp(streams), { delivered: 5, pending: 0 });
+    assert.equal(r.verdict, 'complete-with-warnings');
+    assert.deepEqual(r.warnings, ['screen-failed:no-track']);
+  });
+
+  it('AC1: warnings accumulate across streams and pipeline', () => {
+    const BS = freshModule();
+    const streams = okStreams();
+    streams.webcam.flushTimedOut = true;
+    streams.microphone = { ok: false, error: 'denied', segments: [] };
+    const r = BS.computeCompletion(okResp(streams), { delivered: 3, pending: 2 });
+    assert.equal(r.verdict, 'complete-with-warnings');
+    assert.deepEqual(r.warnings, [
+      'microphone-failed:denied',
+      'webcam-flush-timed-out',
+      '2-events-undelivered',
+    ]);
+  });
+
+  it('AC1+AC4: pending > 0 → warning with the count; never complete', () => {
+    const BS = freshModule();
+    const r = BS.computeCompletion(okResp(), { delivered: 3, pending: 7 });
+    assert.equal(r.verdict, 'complete-with-warnings');
+    assert.deepEqual(r.warnings, ['7-events-undelivered']);
+  });
+
+  it('AC1: malformed inputs fail closed toward warning, never silent complete', () => {
+    const BS = freshModule();
+    // Null stop response.
+    let r = BS.computeCompletion(null, { delivered: 0, pending: 0 });
+    assert.equal(r.verdict, 'complete-with-warnings');
+    assert.ok(r.warnings.includes('stop-response-malformed'));
+    // Missing streams object.
+    r = BS.computeCompletion({ ok: true }, { delivered: 0, pending: 0 });
+    assert.equal(r.verdict, 'complete-with-warnings');
+    // Null flush result.
+    r = BS.computeCompletion(okResp(), null);
+    assert.equal(r.verdict, 'complete-with-warnings');
+    assert.ok(r.warnings.includes('flush-result-unknown'));
+    // Both malformed.
+    r = BS.computeCompletion(null, null);
+    assert.equal(r.verdict, 'complete-with-warnings');
+    assert.equal(r.warnings.length, 2);
+  });
+
+  it('AC1: missing stream result in stop response → warning naming the kind', () => {
+    const BS = freshModule();
+    const streams = okStreams();
+    delete streams.screen;
+    const r = BS.computeCompletion(okResp(streams), { delivered: 0, pending: 0 });
+    assert.equal(r.verdict, 'complete-with-warnings');
+    assert.deepEqual(r.warnings, ['screen:missing-stream-result']);
+  });
+});
+
+describe('5.10 — Stop completion sequence', () => {
+  let savedDocument;
+  beforeEach(() => { savedDocument = globalThis.document; });
+  afterEach(() => {
+    if (savedDocument === undefined) delete globalThis.document;
+    else globalThis.document = savedDocument;
+    unpublishNS();
+  });
+
+  function stopHarness(stopResponse, flushImpl) {
+    const BS = publishNS(freshModule());
+    globalThis.document = makeFakeDocument(true);
+    const opts = makeOpts();
+    if (typeof flushImpl === 'function') opts._sender.flushImpl = flushImpl;
+    const statuses = {
+      microphone: streamStatus({ streamKind: 'microphone', lifecycle: 'recording' }),
+      screen: streamStatus({ streamKind: 'screen', lifecycle: 'recording' }),
+      webcam: streamStatus({ streamKind: 'webcam', lifecycle: 'recording' }),
+    };
+    let started = false;
+    opts._transport.handler = (env) => {
+      if (env.msg === 'recorder-ensure') return Promise.resolve({ ok: true, bootId: 'b', created: true });
+      if (env.msg === 'recorder-set-session') return Promise.resolve({ ok: true });
+      if (env.msg === 'recorder-start-streams') {
+        started = true;
+        return Promise.resolve({ ok: true, streams: {} });
+      }
+      if (env.msg === 'recorder-stop-streams') return Promise.resolve(stopResponse);
+      if (env.msg === 'recorder-get-status') {
+        if (!started) return Promise.resolve({ ok: false, error: 'no-session' });
+        return Promise.resolve({ ok: true, sessionId: 's', gameId: 'g', queriedAtUtc: 't', statuses });
+      }
+      return Promise.resolve({ ok: false, error: 'unexpected' });
+    };
+    const h = BS.installSessionControls(stripInternal(opts));
+    return { BS, opts, h, statuses };
+  }
+
+  function okStopResponse() {
+    return {
+      ok: true,
+      markerId: 'm1',
+      finalizedAtUtc: '2026-10-06T18:00:00.000Z',
+      streams: {
+        microphone: { ok: true, segments: [{ segmentNumber: 1 }] },
+        screen: { ok: true, segments: [{ segmentNumber: 1 }] },
+        webcam: { ok: true, segments: [{ segmentNumber: 1 }] },
+      },
+    };
+  }
+
+  it('AC2: flush is awaited exactly once before the idle transition', async () => {
+    const { opts, h } = stopHarness(okStopResponse());
+    try {
+      await sleep(20);
+      h.button.click(); // Start
+      await sleep(60);
+      assert.equal(h.getPhase(), 'active');
+      h.button.click(); // Stop
+      await sleep(80);
+      assert.equal(opts._sender.flushCalls, 1, 'sender.flush() called exactly once');
+      assert.equal(h.getPhase(), 'idle');
+      assert.equal(h.button.textContent, 'Start');
+      assert.equal(opts._stopCalls[0].verdict, 'complete');
+    } finally { h.stop(); }
+  });
+
+  it('AC5: button shows Finalizing… (not clean idle) while the flush is in flight', async () => {
+    let resolveFlush;
+    const gate = new Promise((res) => { resolveFlush = res; });
+    const { opts, h } = stopHarness(okStopResponse(), () => gate);
+    try {
+      await sleep(20);
+      h.button.click(); // Start
+      await sleep(60);
+      h.button.click(); // Stop
+      await sleep(80);
+      // Flush still gated: not idle, transitional label shown.
+      assert.equal(h.getPhase(), 'stopping');
+      assert.equal(h.button.textContent, 'Finalizing…');
+      assert.equal(opts._stopCalls.length, 0, 'no completion handed off before flush resolves');
+      // Release the flush: completion proceeds to clean idle.
+      resolveFlush({ delivered: 4, pending: 0 });
+      await sleep(80);
+      assert.equal(h.getPhase(), 'idle');
+      assert.equal(h.button.textContent, 'Start');
+      assert.equal(opts._stopCalls.length, 1);
+      assert.equal(opts._stopCalls[0].verdict, 'complete');
+    } finally { h.stop(); }
+  });
+
+  it('AC4: undelivered events → complete-with-warnings with the count; button detail names it', async () => {
+    const { opts, h } = stopHarness(okStopResponse(),
+      () => Promise.resolve({ delivered: 2, pending: 3 }));
+    try {
+      await sleep(20);
+      h.button.click();
+      await sleep(60);
+      h.button.click();
+      await sleep(80);
+      const verdict = opts._stopCalls[0];
+      assert.equal(verdict.verdict, 'complete-with-warnings');
+      assert.deepEqual(verdict.warnings, ['3-events-undelivered']);
+      assert.equal(h.getPhase(), 'idle');
+      assert.equal(h.button.textContent, 'Start');
+      assert.ok(String(h.button.title).includes('3-events-undelivered'), h.button.title);
+      assert.deepEqual(h.getLastStopResponse().flushResult, { delivered: 2, pending: 3 });
+    } finally { h.stop(); }
+  });
+
+  it('AC6: stop-channel failure → no flush attempted; stays in Stopping… for retry', async () => {
+    const { opts, h } = stopHarness({ ok: false, error: 'channel-dead' });
+    try {
+      await sleep(20);
+      h.button.click();
+      await sleep(60);
+      h.button.click();
+      await sleep(80);
+      assert.equal(opts._sender.flushCalls, 0, 'no flush when stop failed');
+      assert.equal(opts._stopCalls.length, 0, 'no completion on failed stop');
+      assert.equal(h.getPhase(), 'stopping');
+      assert.equal(h.button.textContent, 'Stopping…');
+      assert.ok(String(h.button.title).includes('stop-failed:channel-dead'), h.button.title);
+    } finally { h.stop(); }
+  });
+
+  it('AC6: missing sender.flush is an honest warning, never a hang or crash', async () => {
+    const { opts, h } = stopHarness(okStopResponse());
+    delete opts._sender.flush; // sender without flush (defensive path)
+    try {
+      await sleep(20);
+      h.button.click();
+      await sleep(60);
+      h.button.click();
+      await sleep(80);
+      assert.equal(h.getPhase(), 'idle', 'Stop completes even without flush()');
+      const verdict = opts._stopCalls[0];
+      assert.equal(verdict.verdict, 'complete-with-warnings');
+      assert.deepEqual(verdict.warnings, ['flush-result-unknown']);
     } finally { h.stop(); }
   });
 });

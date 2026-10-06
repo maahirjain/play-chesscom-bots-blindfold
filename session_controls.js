@@ -284,6 +284,22 @@ var BlindfoldSession = BlindfoldSession || {};
   var READINESS_NOT_READY = 'not-ready';
   var READINESS_UNKNOWN = 'unknown';
 
+  // ------------------------------------------------------------------
+  // 5.10: completion verdicts (PLAN.md §5.10). After Stop, the control
+  // awaits final storage acknowledgments (sender.flush()) and consumes
+  // 4.13's media-finalization result, then computes an honest verdict:
+  // 'complete' (clean) vs 'complete-with-warnings' (finalized, but with
+  // named gaps) vs the existing 'failed' stop path (unchanged).
+  // ------------------------------------------------------------------
+
+  var COMPLETION_COMPLETE = 'complete';
+  var COMPLETION_COMPLETE_WITH_WARNINGS = 'complete-with-warnings';
+
+  var COMPLETION_VERDICTS = Object.freeze([
+    COMPLETION_COMPLETE,
+    COMPLETION_COMPLETE_WITH_WARNINGS
+  ]);
+
   var READINESS_VERDICTS = Object.freeze([
     READINESS_READY,
     READINESS_NOT_READY,
@@ -438,6 +454,62 @@ var BlindfoldSession = BlindfoldSession || {};
       verdict: READINESS_NOT_READY,
       reasons: Object.freeze(reasons),
       blocked: blocked
+    });
+  }
+
+  // ------------------------------------------------------------------
+  // 5.10: completion verdict (PLAN.md §5.10). Pure: no DOM, no timers,
+  // no chrome.*. Computes an honest completion verdict from 4.13's
+  // stop response (media finalization, incl. per-stream flushTimedOut)
+  // and the sender.flush() result (final storage acknowledgments).
+  //
+  // 'complete' only when every required stream finalized ok with no
+  // flush timeout AND the event queue drained (pending === 0).
+  // Anything else is 'complete-with-warnings' with each gap named.
+  // Malformed inputs fail closed toward warning — never a silent
+  // 'complete'. (The 'failed' stop path is separate and unchanged.)
+  // ------------------------------------------------------------------
+
+  function computeCompletion(stopResp, flushResult) {
+    var warnings = [];
+    // Media finalization: 4.13's per-stream results. A missing or
+    // malformed streams object is itself a warning (cannot confirm
+    // clean finalization).
+    var streams = (isPlainObject(stopResp) &&
+      isPlainObject(stopResp.streams)) ? stopResp.streams : null;
+    if (streams === null) {
+      warnings.push('stop-response-malformed');
+    } else {
+      for (var i = 0; i < STREAM_KINDS.length; i++) {
+        var kind = STREAM_KINDS[i];
+        var st = isPlainObject(streams[kind]) ? streams[kind] : null;
+        if (st === null) {
+          warnings.push(kind + ':missing-stream-result');
+        } else if (st.ok !== true) {
+          var errDetail = (typeof st.error === 'string' && st.error !== '') ?
+            st.error : 'failed';
+          warnings.push(kind + '-failed:' + errDetail);
+        } else if (st.flushTimedOut === true) {
+          warnings.push(kind + '-flush-timed-out');
+        }
+      }
+    }
+    // Final storage acknowledgments: sender.flush() resolves
+    // {delivered, pending}. pending > 0 means events were not
+    // durably acknowledged — an honest warning, never a hang.
+    var pending = (isPlainObject(flushResult) &&
+      typeof flushResult.pending === 'number' &&
+      flushResult.pending >= 0) ? flushResult.pending : -1;
+    if (pending < 0) {
+      warnings.push('flush-result-unknown');
+    } else if (pending > 0) {
+      warnings.push(pending + '-events-undelivered');
+    }
+    var verdict = (warnings.length === 0) ?
+      COMPLETION_COMPLETE : COMPLETION_COMPLETE_WITH_WARNINGS;
+    return Object.freeze({
+      verdict: verdict,
+      warnings: Object.freeze(warnings.slice())
     });
   }
 
@@ -1573,14 +1645,66 @@ var BlindfoldSession = BlindfoldSession || {};
             return;
           }
           // One final status poll so the lights reflect the finalized
-          // states, then hand the FULL stop response — including
-          // flushTimedOut — to 5.10's completion seam (the Section 4
-          // audit carry-forward: §5.10 surfaces it; 5.1 must not drop
-          // it).
+          // states, then 5.10's completion sequence: await the final
+          // storage acknowledgments (sender.flush()), compute the
+          // honest completion verdict, and only then present idle.
+          // The button must never show a clean idle before the flush
+          // resolves — a premature "done" is the masquerade 5.10
+          // exists to prevent.
           return pollOnce().then(function () {
-            lastStopResponse = stopResp;
+            // 5.10: transitional UI while the flush runs. Phase stays
+            // STOPPING; the button stays enabled so a hung flush never
+            // traps the user (the existing retry philosophy).
+            setButton('Finalizing…', true, null,
+              'Finalizing recording session');
+            var flushPromise;
             try {
-              opts.onStopComplete(stopResp);
+              flushPromise = (opts.sender !== null &&
+                typeof opts.sender === 'object' &&
+                typeof opts.sender.flush === 'function') ?
+                opts.sender.flush() : Promise.resolve(null);
+            } catch (e) {
+              flushPromise = Promise.resolve(null);
+            }
+            return Promise.resolve(flushPromise).then(function (fr) {
+              finalizeStop(stopResp, fr);
+            }, function () {
+              // 5.10: sender.flush() never rejects per its contract;
+              // this is unreachable defense-in-depth. Treat as an
+              // unknown flush result → honest warning, never a hang.
+              finalizeStop(stopResp, null);
+            });
+          });
+          // 5.10: complete the Stop after the final storage
+          // acknowledgments resolve. Computes the honest completion
+          // verdict, retains it for §6, hands the enriched verdict to
+          // the completion seam, and only then presents idle — with
+          // warnings as the button detail when they exist.
+          function finalizeStop(stopResp, flushResult) {
+            var completion;
+            try {
+              completion = computeCompletion(stopResp, flushResult);
+            } catch (e) {
+              // computeCompletion is total by contract (malformed →
+              // warnings, never throws); this is unreachable
+              // defense-in-depth. Fail closed toward warning.
+              completion = {
+                verdict: COMPLETION_COMPLETE_WITH_WARNINGS,
+                warnings: ['completion-computation-failed']
+              };
+            }
+            // 5.10: enriched retention for §6's media-sync.json "known
+            // gaps" and export completeness reporting. Still null
+            // before any Stop (existing seam, extended shape).
+            var enriched = {
+              stopResp: stopResp,
+              flushResult: isPlainObject(flushResult) ? flushResult : null,
+              verdict: completion.verdict,
+              warnings: completion.warnings
+            };
+            lastStopResponse = enriched;
+            try {
+              opts.onStopComplete(enriched);
             } catch (e) { /* a throwing 5.10 handler must not break us */ }
             stopPolling();
             setSlots(null, null);
@@ -1590,7 +1714,9 @@ var BlindfoldSession = BlindfoldSession || {};
             resetReadiness();
             setMarkerEnabled(false); // 5.8
             phase = CONTROL_PHASE_IDLE;
-            setButton('Start', true, null, 'Start recording session');
+            var detail = (completion.warnings.length > 0) ?
+              'finalize-warnings:' + completion.warnings.join(';') : null;
+            setButton('Start', true, detail, 'Start recording session');
             // 5.2: the form is re-enabled for the next game. The
             // user's last selection stays in place (5.3 will formalize
             // remembered defaults); an adopted-unknown label is reset
@@ -1609,7 +1735,7 @@ var BlindfoldSession = BlindfoldSession || {};
             // sessionCategory echo. Best-effort and failure-safe;
             // a failed stop keeps the session for retry (above).
             clearRecorderSession();
-          });
+          }
         }, function () {
           setButton('Stopping…', true, 'stop-failed:no-response',
             'Stop recording session (retry)');
@@ -1725,6 +1851,11 @@ var BlindfoldSession = BlindfoldSession || {};
   BlindfoldSession.READINESS_NOT_READY = READINESS_NOT_READY;
   BlindfoldSession.READINESS_UNKNOWN = READINESS_UNKNOWN;
   BlindfoldSession.computeReadiness = computeReadiness;
+  // 5.10: completion verdict (PLAN.md §5.10).
+  BlindfoldSession.COMPLETION_COMPLETE = COMPLETION_COMPLETE;
+  BlindfoldSession.COMPLETION_COMPLETE_WITH_WARNINGS =
+    COMPLETION_COMPLETE_WITH_WARNINGS;
+  BlindfoldSession.computeCompletion = computeCompletion;
   // 5.8: moment marker event type + payload validator.
   BlindfoldSession.MOMENT_MARKER_EVENT_TYPE = MOMENT_MARKER_EVENT_TYPE;
   BlindfoldSession.MOMENT_MARKER_NOTE_MAX_LENGTH =

@@ -671,6 +671,19 @@ describe('AC6 — wiring and diff discipline', () => {
       // after the pins are evolved (2.x/3.x/4.x/5.1-5.8 precedent).
       '.autodev/evidence/5.9.review.md',
       '.autodev/evidence/5.9.behavior.md',
+      // Honest cumulative evolution: 5.10 (Stop completion verdict)
+      // legitimately adds the sender.flush() await + transitional
+      // "Finalizing…" UI + pure computeCompletion() + enriched
+      // lastStopResponse retention to session_controls.js's Stop
+      // sequence, adds its unit/integration tests, and records its
+      // evidence; its files join the allowlists. No new channel
+      // messages, event types, stores, or permissions.
+      '.autodev/evidence/5.10.contract.md',
+      '.autodev/evidence/5.10.build.md',
+      // Honest cumulative evolution: 5.10's review/behavior evidence lands
+      // after the pins are evolved (2.x/3.x/4.x/5.1-5.9 precedent).
+      '.autodev/evidence/5.10.review.md',
+      '.autodev/evidence/5.10.behavior.md',
     ]);
     const stray = changed.filter((f) => !allowed.has(f));
     assert.deepEqual(stray, [],
@@ -778,6 +791,29 @@ describe('AC6 — wiring and diff discipline', () => {
       l.includes('CONTROL_PHASE_ACTIVE') ||
       l.includes('Promise.resolve') || l.includes('e.error') ||
       l.includes('internal-error');
+    // Honest cumulative evolution: 5.10's Stop completion verdict adds
+    // the pure computeCompletion() function, the sender.flush() await +
+    // transitional "Finalizing…" UI + finalizeStop() + enriched
+    // lastStopResponse retention. Its added lines are 5.10-keyworded
+    // or use the completion/flush vocabulary.
+    const kw510 = (l) =>
+      l.includes('5.10') || l.includes('computeCompletion') ||
+      l.includes('COMPLETION') || l.includes('finalizeStop') ||
+      l.includes('Finalizing') || l.includes('finalize-warnings') ||
+      l.includes('complete-with-warnings') || l.includes('flushResult') ||
+      l.includes('flush-result') || l.includes('stopResp') ||
+      l.includes('enriched') || l.includes('completion') ||
+      l.includes('verdict') || l.includes('warnings') ||
+      l.includes('sender.flush') || l.includes('flushPromise') ||
+      l.includes('delivered') || l.includes('pending') ||
+      l.includes('undelivered') || l.includes('flush-timed-out') ||
+      l.includes('-failed:') || l.includes('missing-stream-result') ||
+      l.includes('stop-response-malformed') ||
+      l.includes('completion-computation-failed') ||
+      l.includes('Promise.resolve(flushPromise)') ||
+      l.includes('streams') || l.includes('errDetail') ||
+      l.includes('st.error') || l.includes('detail') ||
+      l.includes('STOPPING') || l.includes('wasStopping');
     const removed = diff.split('\n')
       .filter((l) => l.startsWith('-') && !l.startsWith('---'))
       .map((l) => l.slice(1).trim())
@@ -785,7 +821,7 @@ describe('AC6 — wiring and diff discipline', () => {
     const bad55 = added.filter((l) =>
       !(structural(l) || l.includes('onSessionStarted') || l.includes('5.3') ||
         l.trim() === 'extensionVersion: extensionVersion,' ||
-        kw55(l) || kw56(l) || kw58(l) || kw59(l) || removed.includes(l.trim())));
+        kw55(l) || kw56(l) || kw58(l) || kw59(l) || kw510(l) || removed.includes(l.trim())));
     assert.deepEqual(bad55, [], 'unexpected added lines in session_controls.js:\n' + bad55.join('\n'));
     const badRemoved = removed.filter((l) =>
       !(l === 'extensionVersion: extensionVersion' ||
@@ -793,7 +829,10 @@ describe('AC6 — wiring and diff discipline', () => {
         l.startsWith('//') || // 5.5 rewrote the contract-order comment
         l.includes('abortStart(') || // → localAbortStart
         l === 'return;' || // → throw { handledAbort: true }
-        l === 'var factoriesOk =')); // 5.5 restructured the declaration
+        l === 'var factoriesOk =' || // 5.5 restructured the declaration
+        l === 'lastStopResponse = stopResp;' || // 5.10 enriched retention
+        l === 'opts.onStopComplete(stopResp);' || // 5.10 enriched handoff
+        l === "setButton('Start', true, null, 'Start recording session');")); // 5.10 warning detail
     assert.deepEqual(badRemoved, [],
       'unexpected removed lines in session_controls.js:\n' + badRemoved.join('\n'));
     // No new offscreen MSG_* constants (5.3 and 5.5 add no channel messages).

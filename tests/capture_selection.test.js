@@ -1068,6 +1068,19 @@ describe('AC8 — diff discipline', () => {
       // after the pins are evolved (2.x/3.x/4.x/5.1-5.8 precedent).
       '.autodev/evidence/5.9.review.md',
       '.autodev/evidence/5.9.behavior.md',
+      // Honest cumulative evolution: 5.10 (Stop completion verdict)
+      // legitimately adds the sender.flush() await + transitional
+      // "Finalizing…" UI + pure computeCompletion() + enriched
+      // lastStopResponse retention to session_controls.js's Stop
+      // sequence, adds its unit/integration tests, and records its
+      // evidence; its files join the allowlists. No new channel
+      // messages, event types, stores, or permissions.
+      '.autodev/evidence/5.10.contract.md',
+      '.autodev/evidence/5.10.build.md',
+      // Honest cumulative evolution: 5.10's review/behavior evidence lands
+      // after the pins are evolved (2.x/3.x/4.x/5.1-5.9 precedent).
+      '.autodev/evidence/5.10.review.md',
+      '.autodev/evidence/5.10.behavior.md',
     ]);
     for (const f of changed) {
       assert.ok(allowed.has(f), `unexpected modified file: ${f}`);
