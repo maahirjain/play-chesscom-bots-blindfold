@@ -799,6 +799,18 @@ describe('AC4 — diff discipline', () => {
       // after the pins are evolved (2.x/3.x/4.x/5.1-5.5 precedent).
       '.autodev/evidence/5.6.review.md',
       '.autodev/evidence/5.6.behavior.md',
+      // Honest cumulative evolution: 5.7 (keep recording through game
+      // end until the user clicks Stop) is primarily a pinning task —
+      // it adds no product-code changes, only the 5.7 no-auto-stop
+      // tests to tests/session_controls.test.js, and records its
+      // evidence; its files join the allowlists. No new channel
+      // messages, events, stores, or permissions.
+      '.autodev/evidence/5.7.contract.md',
+      '.autodev/evidence/5.7.build.md',
+      // Honest cumulative evolution: 5.7's review/behavior evidence lands
+      // after the pins are evolved (2.x/3.x/4.x/5.1-5.6 precedent).
+      '.autodev/evidence/5.7.review.md',
+      '.autodev/evidence/5.7.behavior.md',
     ]);
     for (const f of changed) {
       assert.ok(allowed.has(f), `unexpected modified file: ${f}`);

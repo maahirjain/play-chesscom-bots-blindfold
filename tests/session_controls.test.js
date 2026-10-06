@@ -1634,6 +1634,18 @@ describe('AC7 — diff discipline and scope', () => {
       // after the pins are evolved (2.x/3.x/4.x/5.1-5.5 precedent).
       '.autodev/evidence/5.6.review.md',
       '.autodev/evidence/5.6.behavior.md',
+      // Honest cumulative evolution: 5.7 (keep recording through game
+      // end until the user clicks Stop) is primarily a pinning task —
+      // it adds no product-code changes, only the 5.7 no-auto-stop
+      // tests to tests/session_controls.test.js, and records its
+      // evidence; its files join the allowlists. No new channel
+      // messages, events, stores, or permissions.
+      '.autodev/evidence/5.7.contract.md',
+      '.autodev/evidence/5.7.build.md',
+      // Honest cumulative evolution: 5.7's review/behavior evidence lands
+      // after the pins are evolved (2.x/3.x/4.x/5.1-5.6 precedent).
+      '.autodev/evidence/5.7.review.md',
+      '.autodev/evidence/5.7.behavior.md',
     ]);
     const stray = changed.filter((f) => !allowed.has(f));
     assert.deepEqual(stray, [],
@@ -1822,5 +1834,263 @@ describe('AC7 — diff discipline and scope', () => {
       const diff = execSync(`git diff HEAD -- ${f}`, { cwd: REPO }).toString();
       assert.equal(diff.trim(), '', `${f} must be untouched`);
     }
+  });
+});
+
+// ------------------------------------------------------------------
+// 5.7 — no auto-stop on game end (PLAN.md §5.7).
+//
+// "Keep recording through game end until the user clicks Stop,
+// allowing a spoken reflection." The game lifecycle recorder (3.5)
+// observes endings, but no code path connects a game_ended observation
+// to the Stop sequence. These tests pin that invariant.
+// ------------------------------------------------------------------
+describe('5.7 — no auto-stop on game end', () => {
+  // AC1 — static pin: no code path from any game_ended recording site
+  // reaches onStopClick, the stop channel message, or stream-stop.
+  describe('AC1 — static no-path-to-stop pin', () => {
+    function stripComments(src) {
+      return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+    }
+
+    it('content.js never references onStopClick (game-end observer cannot trigger stop)', () => {
+      const src = fs.readFileSync(path.join(REPO, 'content.js'), 'utf8');
+      const code = stripComments(src);
+      assert.ok(!/\bonStopClick\b/.test(code),
+        'content.js must not reference onStopClick');
+    });
+
+    it('session_controls.js calls onStopClick() only from the UI event handler', () => {
+      const src = fs.readFileSync(path.join(REPO, 'session_controls.js'), 'utf8');
+      const code = stripComments(src);
+      // Definition + exactly one call site.
+      const calls = code.match(/(?<!function )onStopClick\(\)/g) || [];
+      assert.equal(calls.length, 1,
+        'exactly one onStopClick() call site (the UI handler)');
+      // The call site is in the button/keydown handler, not in any
+      // game-end observation path.
+      const idx = code.indexOf('onStopClick()');
+      const ctx = code.slice(Math.max(0, idx - 400), idx);
+      assert.ok(!/game_ended|recordGameEnded|getLastObservedEnd/i.test(ctx),
+        'onStopClick call site is not in a game-end path');
+    });
+
+    it('chess_utils.js recordGameEnded cannot reach stop (no stop references)', () => {
+      const src = fs.readFileSync(path.join(REPO, 'chess_utils.js'), 'utf8');
+      const code = stripComments(src);
+      // Extract the recordGameEnded function body by brace matching.
+      const start = code.indexOf('function recordGameEnded(');
+      assert.ok(start !== -1, 'recordGameEnded found');
+      let depth = 0, i = code.indexOf('{', start);
+      const bodyStart = i;
+      for (; i < code.length; i++) {
+        if (code[i] === '{') depth++;
+        else if (code[i] === '}') { depth--; if (depth === 0) break; }
+      }
+      const body = code.slice(bodyStart, i + 1);
+      assert.ok(!/\bonStopClick\b/.test(body), 'no onStopClick in recordGameEnded');
+      assert.ok(!/stop-streams/i.test(body), 'no stop-streams in recordGameEnded');
+      assert.ok(!/MSG_STOP_STREAMS/.test(body), 'no MSG_STOP_STREAMS in recordGameEnded');
+      assert.ok(!/channelCall/.test(body), 'no channelCall in recordGameEnded');
+    });
+  });
+
+  // AC2–AC5 — behavioral pins with the REAL game lifecycle recorder.
+  describe('AC2–AC5 — behavioral pins (real lifecycle recorder)', () => {
+    let savedDocument, savedChess, savedBS;
+
+    beforeEach(() => {
+      savedDocument = globalThis.document;
+      savedChess = globalThis.Chess;
+      savedBS = globalThis.BlindfoldSession;
+    });
+    afterEach(() => {
+      if (savedDocument === undefined) delete globalThis.document;
+      else globalThis.document = savedDocument;
+      if (savedChess === undefined) delete globalThis.Chess;
+      else globalThis.Chess = savedChess;
+      if (savedBS === undefined) delete globalThis.BlindfoldSession;
+      else globalThis.BlindfoldSession = savedBS;
+    });
+
+    // Real 3.5 lifecycle recorder wired to the harness session.
+    function makeRealGlr() {
+      if (typeof globalThis.Chess === 'undefined') {
+        globalThis.Chess = require('../chess.min.js').Chess;
+      }
+      const GameRecords = require('../game_records.js');
+      const ChessUtils = require('../chess_utils.js');
+      const SessionControls = freshModule();
+      const merged = Object.assign({}, GameRecords, ChessUtils, SessionControls);
+      // Stub the 5.1 minters + emitPageStart like publishNS does.
+      merged.newSessionId = () => 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa';
+      merged.newGameId = () => 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb';
+      const emitted = [];
+      merged.emitPageStart = (sender, sessionId) => {
+        emitted.push(sessionId);
+        return { eventId: 'ps1' };
+      };
+      merged.activeSessionId = null;
+      merged.activeGameId = null;
+      globalThis.BlindfoldSession = merged;
+      const glrEmitted = [];
+      const glr = merged.createGameLifecycleRecorder({
+        getSessionId: () => merged.activeSessionId,
+        getGameId: () => merged.activeGameId,
+        emitEvent: (eventType, payload, refs) => {
+          glrEmitted.push({ eventType, payload, refs });
+          return { eventId: 'glr-e1' };
+        },
+      });
+      // Spy on recordStopTermination (3.5.4 seam) without changing behavior.
+      const stopTerms = [];
+      const origStopTerm = glr.recordStopTermination.bind(glr);
+      glr.recordStopTermination = (reason, result) => {
+        stopTerms.push({ reason, result });
+        return origStopTerm(reason, result);
+      };
+      return { merged, glr, glrEmitted, stopTerms };
+    }
+
+    function activeHarnessWithGlr(glr) {
+      globalThis.document = makeFakeDocument(true);
+      const opts = makeOpts({ gameLifecycleRecorder: glr });
+      const statuses = {
+        microphone: streamStatus({ streamKind: 'microphone', lifecycle: 'recording' }),
+        screen: streamStatus({ streamKind: 'screen', lifecycle: 'recording' }),
+        webcam: streamStatus({ streamKind: 'webcam', lifecycle: 'recording' }),
+      };
+      let started = false;
+      opts._transport.handler = (env) => {
+        if (env.msg === 'recorder-ensure') return Promise.resolve({ ok: true, bootId: 'b', created: true });
+        if (env.msg === 'recorder-set-session') return Promise.resolve({ ok: true });
+        if (env.msg === 'recorder-start-streams') {
+          started = true;
+          return Promise.resolve({ ok: true, streams: {} });
+        }
+        if (env.msg === 'recorder-stop-streams') {
+          return Promise.resolve({ ok: true, markerId: 'm1', finalizedAtUtc: 't', flushTimedOut: false, finalized: {} });
+        }
+        if (env.msg === 'recorder-get-status') {
+          if (!started) return Promise.resolve({ ok: false, error: 'no-session' });
+          return Promise.resolve({ ok: true, sessionId: 's', gameId: 'g', queriedAtUtc: 't', statuses });
+        }
+        return Promise.resolve({ ok: false, error: 'unexpected' });
+      };
+      const h = globalThis.BlindfoldSession.installSessionControls(stripInternal(opts));
+      return { opts, h, statuses };
+    }
+
+    const GAME_END_INPUT = {
+      result: '1-0',
+      terminationReason: 'checkmate',
+      evidenceSource: 'observed',
+      observedText: null,
+    };
+
+    it('AC2: game_ended from chess_rules does not stop the session', async () => {
+      const { merged, glr } = makeRealGlr();
+      const { opts, h } = activeHarnessWithGlr(glr);
+      try {
+        await sleep(20);
+        h.button.click(); // Start
+        await sleep(60);
+        assert.equal(h.getPhase(), 'active');
+        const stopMsgsBefore = opts._transport.calls.filter((c) => c.msg === 'recorder-stop-streams').length;
+        // Simulate the game ending (chess_rules source, as content.js does).
+        const eid = glr.recordGameEnded('chess_rules', GAME_END_INPUT, null);
+        assert.ok(eid, 'game_ended recorded');
+        await sleep(40); // let polls run
+        // 5.7 invariant: nothing stops.
+        assert.equal(h.getPhase(), 'active', 'phase stays ACTIVE');
+        assert.deepEqual(h.getSession(), {
+          sessionId: 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa',
+          gameId: 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb',
+        }, 'slots unchanged');
+        assert.equal(merged.activeSessionId, 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa');
+        assert.equal(
+          opts._transport.calls.filter((c) => c.msg === 'recorder-stop-streams').length,
+          stopMsgsBefore, 'no stop-streams message sent');
+        assert.equal(h.button.textContent, 'Stop', 'button still Stop');
+      } finally { h.stop(); }
+    });
+
+    it('AC2: game_ended from chesscom_dialog does not stop the session', async () => {
+      const { glr } = makeRealGlr();
+      const { opts, h } = activeHarnessWithGlr(glr);
+      try {
+        await sleep(20);
+        h.button.click();
+        await sleep(60);
+        assert.equal(h.getPhase(), 'active');
+        const eid = glr.recordGameEnded('chesscom_dialog',
+          Object.assign({}, GAME_END_INPUT, { result: '0-1', terminationReason: 'resignation' }), null);
+        assert.ok(eid, 'game_ended recorded');
+        await sleep(40);
+        assert.equal(h.getPhase(), 'active');
+        assert.equal(opts._transport.calls.filter((c) => c.msg === 'recorder-stop-streams').length, 0);
+      } finally { h.stop(); }
+    });
+
+    it('AC3: reflection window preserved — emitter still active, 5.6 badge unchanged', async () => {
+      const { glr, glrEmitted } = makeRealGlr();
+      const { h } = activeHarnessWithGlr(glr);
+      try {
+        await sleep(20);
+        h.button.click();
+        await sleep(80);
+        assert.equal(h.getPhase(), 'active');
+        const badge = h.element.children.find(
+          (c) => c.getAttribute('data-readiness') !== null);
+        assert.ok(badge, 'readiness badge exists');
+        const badgeBefore = badge.getAttribute('data-readiness');
+        glr.recordGameEnded('chess_rules', GAME_END_INPUT, null);
+        await sleep(40);
+        // The session still accepts events after game_ended (the
+        // reflection window): a post-end observation emits normally.
+        const visId = glr.recordVisibilityChange('visible', true);
+        assert.ok(visId, 'post-game-end event still emits (emitter active)');
+        assert.ok(glrEmitted.some((e) => e.eventType === 'document_visibility_changed'),
+          'visibility event recorded under the still-active session');
+        // 5.6 badge does not change on game end (latched / honest).
+        assert.equal(badge.getAttribute('data-readiness'), badgeBefore,
+          'readiness badge unchanged by game end');
+      } finally { h.stop(); }
+    });
+
+    it('AC4: Stop after game_ended passes the observed reason to recordStopTermination', async () => {
+      const { glr, stopTerms } = makeRealGlr();
+      const { h } = activeHarnessWithGlr(glr);
+      try {
+        await sleep(20);
+        h.button.click();
+        await sleep(60);
+        glr.recordGameEnded('chess_rules', GAME_END_INPUT, null);
+        await sleep(20);
+        h.button.click(); // Stop
+        await sleep(80);
+        // 3.5.4 seam: the observed reason/result flows to Stop.
+        assert.deepEqual(stopTerms, [{ reason: 'checkmate', result: '1-0' }]);
+        assert.equal(h.getPhase(), 'idle');
+      } finally { h.stop(); }
+    });
+
+    it('AC5: getLastObservedEnd persists after game_ended (5.7 does not reset it)', async () => {
+      const { glr } = makeRealGlr();
+      const { h } = activeHarnessWithGlr(glr);
+      try {
+        await sleep(20);
+        h.button.click();
+        await sleep(60);
+        glr.recordGameEnded('chess_rules', GAME_END_INPUT, null);
+        await sleep(20);
+        // The ended state survives for 5.9's boundary input and the Stop seam.
+        const observed = glr.getLastObservedEnd();
+        assert.ok(observed, 'observed end retained');
+        assert.equal(observed.source, 'chess_rules');
+        assert.equal(observed.result, '1-0');
+        assert.equal(observed.terminationReason, 'checkmate');
+      } finally { h.stop(); }
+    });
   });
 });
