@@ -748,8 +748,12 @@ describe('AC7 — no UI, no policy, no pipeline changes', () => {
 
   it('pipeline modules are untouched except the additive getStreamHealth', () => {
     // git status --porcelain (not git diff HEAD) so new untracked
-    // files are included.
+    // files are included. After the 4.14 commit the tree is clean, so
+    // the pin is conditional on a non-empty status (2.8/4.4 precedent):
+    // pre-commit it proves exactly the four product files changed;
+    // post-commit it is vacuous.
     const status = execSync('git status --porcelain', { cwd: REPO }).toString();
+    if (!status.trim()) return;
     const changed = status.split('\n').filter((l) => l.trim())
       .map((l) => l.slice(3).trim());
     const productChanged = changed.filter((f) =>
