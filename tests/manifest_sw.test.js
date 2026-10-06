@@ -80,24 +80,25 @@ describe('AC3 — sw.js functional code is exactly the db.js import', () => {
   const swRaw = fs.readFileSync(path.join(REPO, 'sw.js'), 'utf8');
   const codeOnly = stripComments(swRaw);
 
-  it('stripped of comments, functional code is the 2.6 wiring (cumulative)', () => {
+  it('stripped of comments, functional code is the 2.7 wiring (cumulative)', () => {
     // 2.1 pinned the comment-only stub; 2.2 added the db.js import; 2.4
     // legitimately added the writer intake per its contract; 2.6
     // legitimately added the session-state storage primitives per its
+    // contract; 2.7 legitimately added the lifecycle detector per its
     // contract. Cumulative invariant: exactly these three functional
     // lines.
     const lines = codeOnly.split('\n').map(l => l.trim()).filter(l => l.length > 0);
     assert.deepStrictEqual(lines, [
       "'use strict';",
-      "importScripts('db.js', 'event_envelope.js', 'writer.js', 'session_identity.js', 'session_conditions.js', 'session_store.js');",
+      "importScripts('db.js', 'event_envelope.js', 'writer.js', 'session_identity.js', 'session_conditions.js', 'session_store.js', 'lifecycle.js');",
       'BlindfoldSession.writerListener = BlindfoldSession.installWriterListener();'
     ]);
   });
 
-  it('exactly one importScripts call, importing the 2.6 module set', () => {
+  it('exactly one importScripts call, importing the 2.7 module set', () => {
     const calls = codeOnly.match(/importScripts\s*\(/g) || [];
     assert.strictEqual(calls.length, 1, 'expected exactly one importScripts call');
-    assert.ok(codeOnly.includes("importScripts('db.js', 'event_envelope.js', 'writer.js', 'session_identity.js', 'session_conditions.js', 'session_store.js')"),
+    assert.ok(codeOnly.includes("importScripts('db.js', 'event_envelope.js', 'writer.js', 'session_identity.js', 'session_conditions.js', 'session_store.js', 'lifecycle.js')"),
       'must import the storage layer, the event contract, the writer, and the session-state modules');
   });
 

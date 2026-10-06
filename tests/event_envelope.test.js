@@ -276,23 +276,15 @@ describe('AC4 — conditions_changed round-trip, 1.2 module untouched', () => {
     assert.ok(Envelope.isValidEvent(ev));
   });
 
-  it('session_identity.js and session_conditions.js diffs are only the 2.6 validator export lines', () => {
-    // Task 2.6 (PLAN §2.6) authorizes exactly one additive export line per
-    // module (requireValidMetadata / requireValidConditions) so
-    // session_store.js can validate on save/restore. This pins the diff
-    // to exactly those lines — no behavior change permitted.
-    const diff = execFileSync('git', [
-      'diff', '--', 'session_identity.js', 'session_conditions.js'
-    ], { cwd: REPO_ROOT, stdio: 'pipe' }).toString();
-    const added = diff.split('\n').filter((l) => l.startsWith('+') && !l.startsWith('+++'));
-    assert.deepEqual(added, [
-      '+  // Exported for task 2.6 (session_store.js save/restore validation).',
-      '+  // Additive only: no behavior change to this module.',
-      '+  BlindfoldSession.requireValidConditions = requireValidConditions;',
-      '+  // Exported for task 2.6 (session_store.js save/restore validation).',
-      '+  // Additive only: no behavior change to this module.',
-      '+  BlindfoldSession.requireValidMetadata = requireValidMetadata;'
-    ]);
+  it('session_identity.js and session_conditions.js byte-identical to HEAD (2.6 export lines committed)', () => {
+    // Honest cumulative evolution: the 2.6 "only the export lines" pin
+    // was transient (pre-commit working tree). 2.6 is committed; the
+    // durable invariant is that later tasks leave the 1.1/1.2 modules
+    // untouched.
+    for (const f of ['session_identity.js', 'session_conditions.js']) {
+      execFileSync('git', ['diff', '--exit-code', '--', f],
+        { cwd: REPO_ROOT, stdio: 'pipe' });
+    }
   });
 });
 

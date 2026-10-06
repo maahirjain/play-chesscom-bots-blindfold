@@ -181,11 +181,12 @@ describe('Static guards (AC2/AC4)', () => {
     assert.ok(!codeOnly.includes('importScripts'), 'db.js must not call importScripts');
   });
 
-  it('AC4: sw.js functional code is exactly the 2.6 wiring (cumulative)', () => {
+  it('AC4: sw.js functional code is exactly the 2.7 wiring (cumulative)', () => {
     // 2.2 pinned ["'use strict';", "importScripts('db.js');"]; 2.4
     // legitimately extended the worker per its contract (writer intake);
     // 2.6 legitimately extended it per its contract (session-state
-    // storage primitives). Cumulative invariant: exactly these three
+    // storage primitives); 2.7 legitimately extends it per its contract
+    // (lifecycle detector). Cumulative invariant: exactly these three
     // functional lines.
     const codeLines = swSource
       .split('\n')
@@ -193,16 +194,17 @@ describe('Static guards (AC2/AC4)', () => {
       .filter((l) => l.length > 0);
     assert.deepEqual(codeLines, [
       "'use strict';",
-      "importScripts('db.js', 'event_envelope.js', 'writer.js', 'session_identity.js', 'session_conditions.js', 'session_store.js');",
+      "importScripts('db.js', 'event_envelope.js', 'writer.js', 'session_identity.js', 'session_conditions.js', 'session_store.js', 'lifecycle.js');",
       'BlindfoldSession.writerListener = BlindfoldSession.installWriterListener();'
     ]);
   });
 
-  it('AC4: sw.js header no longer lists 2.2/2.4/2.6 as absent; still lists 2.3, 2.5, 2.7-2.9', () => {
+  it('AC4: sw.js header no longer lists 2.2/2.4/2.6/2.7 as absent; still lists 2.3, 2.5, 2.8, 2.9', () => {
     assert.ok(!swSource.includes('2.2:'), 'sw.js still lists 2.2 as absent');
     assert.ok(!swSource.includes('2.4:'), 'sw.js still lists 2.4 as absent');
     assert.ok(!swSource.includes('2.6:'), 'sw.js still lists 2.6 as absent');
-    for (const n of ['2.3', '2.5', '2.7', '2.8', '2.9']) {
+    assert.ok(!swSource.includes('2.7:'), 'sw.js still lists 2.7 as absent');
+    for (const n of ['2.3', '2.5', '2.8', '2.9']) {
       assert.ok(swSource.includes(n + ':'), 'sw.js missing absent entry ' + n);
     }
   });

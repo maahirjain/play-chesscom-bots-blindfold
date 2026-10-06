@@ -182,3 +182,47 @@ Consequential engineering decisions with reasoning and evidence. Newest first.
   mismatch); session_store.test.js byte-identical pin for writer.js →
   exact-diff pin for the repair; sender/session_store git-status
   allowlists admit writer.js. All honest cumulative evolution.
+
+## 2.7: page/context lifecycle — start/end events + SW-side discontinuity detection
+
+- **Three event types** (`page_start`, `page_end_clean`,
+  `page_discontinuity`), owned by the new `lifecycle.js` per the 1.3
+  task-owns-constants precedent; `event_envelope.js` untouched.
+- **2.5 tension resolved**: `page_end_clean` is a single best-effort
+  `emit()` on `pagehide` — `flush()` is NEVER called at unload. Its loss
+  is the designed-for trigger case. bfcache `pagehide` (`persisted=true`)
+  skips emission. Conservative by design: may flag a clean reload whose
+  end lost the race; never hides a real gap.
+- **Detection runs on every committed `page_start`** (via the writer's
+  generic post-commit hook `fireAfterEventStored`), not just after SW
+  restarts — the next start subsumes the restart case. No eager SW-startup
+  check (no new information without a new start).
+- **Marker's honest meaning**: "when context N started, context M (older)
+  had no clean end and no prior marker on record" — NOT "M crashed".
+  Concurrent tabs / lost races / late ends documented; markers are
+  point-in-time, never retracted (append-only history).
+- **Deviation from the 2.6 contract's downstream note**: lifecycle state
+  lives in the event stream (queried via the `bySessionId` index), not the
+  2.6 triple — the triple is untouched. `session_store.js` byte-identical.
+- **SW anchor**: lazy per-(SW-instance,session), sourceSeq 0, written via
+  `writeEvent`; discontinuities at 1, 2, …. lifecycle.js performs zero
+  raw IDB writes (sole-writer invariant). Per-session promise-chain
+  serialization prevents double-marking; temporal guard (anchor
+  `utcEpochMs` strict `<`) handles out-of-order delayed starts.
+- **§5 seam**: `BlindfoldSession.activeSessionId` (null until §5 sets it
+  at Start); content.js gains one line (`installPageEndHook`); §5 owns
+  calling `emitPageStart` and session continuity.
+
+## 2.7 review NOTEs (carried forward, no action now)
+
+- **Refactor warning:** the per-session promise-chain keepalive in
+  `lifecycle.js` is incidentally protected against unhandled rejections
+  (the chain-keepalive `.catch()` shields the discarded promise), not
+  explicitly. Any future refactor of the chaining must preserve this or
+  add an explicit guard. (2.7 review.)
+- **§5 decision needed:** session scoping across tabs controls the
+  `page_discontinuity` marker noise rate (concurrent tabs on the same
+  session = conservative false positives by design). §5 should define
+  whether tabs share a session or get distinct sessions.
+- Spurious-marker rate on clean reloads is unmeasured until V3/AC18
+  (real-browser lifecycle timing).

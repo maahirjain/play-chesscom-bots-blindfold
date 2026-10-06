@@ -522,42 +522,78 @@ describe('AC9 — diff discipline', () => {
       .replace(/\/\*[\s\S]*?\*\//g, '')
       .replace(/\/\/.*$/gm, '');
     const lines = swCode.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
+    // 2.7 legitimately appends lifecycle.js to the importScripts line per
+    // its contract (SW-side discontinuity detection).
     assert.deepEqual(lines, [
       "'use strict';",
-      "importScripts('db.js', 'event_envelope.js', 'writer.js', 'session_identity.js', 'session_conditions.js', 'session_store.js');",
+      "importScripts('db.js', 'event_envelope.js', 'writer.js', 'session_identity.js', 'session_conditions.js', 'session_store.js', 'lifecycle.js');",
       'BlindfoldSession.writerListener = BlindfoldSession.installWriterListener();'
     ]);
   });
 
-  it('db.js, sender.js, manifest.json, content.js byte-identical to HEAD', () => {
-    for (const f of ['db.js', 'sender.js', 'manifest.json', 'content.js']) {
+  it('db.js, sender.js byte-identical to HEAD', () => {
+    for (const f of ['db.js', 'sender.js']) {
       const head = execSync(`git show HEAD:${f}`, { cwd: ROOT, stdio: 'pipe' }).toString();
       const current = fs.readFileSync(path.join(ROOT, f), 'utf8');
-      assert.strictEqual(current, head, `${f} changed but 2.6 must not touch it`);
+      assert.strictEqual(current, head, `${f} changed but 2.7 must not touch it`);
     }
   });
 
-  it('writer.js diff is only the 2.6 SF-1 corruption-honesty repair', () => {
-    // Honest cumulative evolution: the 2.6 adversarial review's SHOULD_FIX
-    // (SF-1) required the writer to fail honestly on a corrupt counter
-    // instead of silently renumbering to 0. The diff is the repair block
-    // only — no other writer.js change.
+  it('manifest.json diff is only the lifecycle.js js-list entry', () => {
+    // Honest cumulative evolution: 2.7 legitimately inserts lifecycle.js
+    // after sender.js in the content_scripts js list per its contract.
+    const headManifest = JSON.parse(
+      execSync('git show HEAD:manifest.json', { cwd: ROOT, stdio: 'pipe' }).toString());
+    const current = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8'));
+    headManifest.content_scripts[0].js = current.content_scripts[0].js;
+    assert.deepEqual(current, headManifest, 'manifest changed beyond the js list');
+    assert.deepEqual(current.content_scripts[0].js, [
+      'event_envelope.js', 'sender.js', 'lifecycle.js', 'sounds.js',
+      'chess.min.js', 'chess_utils.js', 'content.js'
+    ]);
+  });
+
+  it('content.js diff is only the 2.7 install line', () => {
+    const diff = execSync('git diff HEAD -- content.js', { cwd: ROOT }).toString();
+    const added = diff.split('\n').filter((l) => l.startsWith('+') && !l.startsWith('+++'));
+    const removed = diff.split('\n').filter((l) => l.startsWith('-') && !l.startsWith('---'));
+    assert.strictEqual(removed.length, 0, 'content.js: no lines removed');
+    assert.strictEqual(added.length, 1, 'content.js: exactly one line added');
+    assert.ok(added[0].includes('BlindfoldSession.installPageEndHook(BlindfoldSession.sender);'));
+  });
+
+  it('writer.js diff is only the 2.7 §3.2 hook', () => {
+    // Honest cumulative evolution: the 2.6 SF-1 repair is committed, so
+    // the working-tree diff is 2.7's type-agnostic post-commit hook only:
+    // the fireAfterEventStored helper, its two call sites, and the 2.7
+    // header-line removal. No other writer.js change.
     const diff = execSync('git diff HEAD -- writer.js', { cwd: ROOT }).toString();
     const added = diff.split('\n').filter((l) => l.startsWith('+') && !l.startsWith('+++'));
     const removed = diff.split('\n').filter((l) => l.startsWith('-') && !l.startsWith('---'));
-    assert.equal(removed.length, 3, `writer.js: expected exactly 3 removed lines, got ${removed.length}`);
-    assert.ok(removed[0].includes('var next = (rec && typeof rec.nextAppendSeq'), 'removed line must be the old fallback');
-    assert.ok(added.some((l) => l.includes('CorruptSequenceState')), 'added block must name the corruption error');
-    assert.ok(added.some((l) => l.includes('fail(corruptErr)')), 'added block must fail the write');
-    assert.ok(added.every((l) => !l.includes('.put(')), 'repair must not add any store writes');
+    assert.ok(added.some((l) => l.includes('function fireAfterEventStored')),
+      'hook helper must be added');
+    assert.ok(added.some((l) => l.includes('fireAfterEventStored(message, ack)')),
+      'success-path call site');
+    assert.ok(added.some((l) => l.includes('fireAfterEventStored(message, failAck)')),
+      'failure-path call site');
+    assert.ok(added.some((l) => l.includes('afterEventStored')),
+      'hook consumer reference');
+    assert.ok(!added.some((l) => l.includes('eventType')),
+      'hook must stay type-agnostic');
+    assert.ok(removed.some((l) => l.includes('2.7: lifecycle event types/emission')),
+      '2.7 header line removed from the absent list');
+    assert.ok(!added.some((l) => l.includes('.put(')),
+      'hook must not add any store writes');
   });
 
-  it('session_identity.js / session_conditions.js diffs are only the export lines', () => {
+  it('session_identity.js / session_conditions.js byte-identical to HEAD', () => {
+    // Honest cumulative evolution: the 2.6 "only the export lines" pin
+    // was transient (it could only pass pre-commit); 2.6 is committed,
+    // so the 2.7 invariant is that 2.7 does not touch the 1.1/1.2 modules.
     for (const f of ['session_identity.js', 'session_conditions.js']) {
-      const diff = execSync(`git diff HEAD -- ${f}`, { cwd: ROOT }).toString();
-      const added = diff.split('\n').filter((l) => l.startsWith('+') && !l.startsWith('+++'));
-      assert.equal(added.length, 3, `${f}: expected exactly 3 added lines, got ${added.length}`);
-      assert.ok(added[2].includes('requireValid'), `${f}: third added line must be the export`);
+      const head = execSync(`git show HEAD:${f}`, { cwd: ROOT, stdio: 'pipe' }).toString();
+      const current = fs.readFileSync(path.join(ROOT, f), 'utf8');
+      assert.strictEqual(current, head, `${f} changed but 2.7 must not touch it`);
     }
   });
 
@@ -576,6 +612,21 @@ describe('AC9 — diff discipline', () => {
       // touches writer.js: the corrupt-counter fallback becomes an
       // honest write failure instead of a silent renumber to 0.
       'writer.js',
+      // Honest cumulative evolution: task 2.7 legitimately adds
+      // lifecycle.js, the writer's type-agnostic hook, the content.js
+      // install line, the manifest js-list entry, and extends the suites
+      // that pin those files.
+      'lifecycle.js',
+      'content.js',
+      'manifest.json',
+      'tests/lifecycle.test.js',
+      '.autodev/evidence/2.7.contract.md',
+      '.autodev/evidence/2.7.build.md',
+      // Honest cumulative evolution: the adversarial review and
+      // behavioral verification evidence land after the builder
+      // evolved these pins (2.6 precedent).
+      '.autodev/evidence/2.7.review.md',
+      '.autodev/evidence/2.7.behavior.md',
       'tests/db.test.js',
       'tests/manifest_sw.test.js',
       'tests/sender.test.js',
@@ -593,7 +644,11 @@ describe('AC9 — diff discipline', () => {
     for (const f of changed) {
       assert.ok(allowed.has(f), `unexpected modified file: ${f}`);
     }
-    assert.ok(changed.includes('session_store.js'), 'session_store.js must be new');
+    // NOTE (2.7): the 2.6 "session_store.js must be new / sw.js must be
+    // modified" assertions were transient — they could only pass before
+    // the 2.6 feature commit. The durable invariant is no unexpected
+    // files (above) plus 2.7's own novelty:
+    assert.ok(changed.includes('lifecycle.js'), 'lifecycle.js must be new');
     assert.ok(changed.includes('sw.js'), 'sw.js must be modified');
   });
 });

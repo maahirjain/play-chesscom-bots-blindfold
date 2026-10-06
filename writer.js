@@ -48,7 +48,6 @@
 //     already speak)
 //   - 2.6: restore after worker restart (the writer only WRITES
 //     sequence_state; 2.6 reads it back)
-//   - 2.7: lifecycle event types/emission
 //   - 2.8: status-indicator UI (only error strings in acks)
 //   - 2.9 / §6: retention and export
 //   - writes to session_metadata, conditions, or media_chunks (owned by
@@ -394,6 +393,20 @@ var BlindfoldSession = BlindfoldSession || {};
     });
   }
 
+  // 2.7: generic post-commit hook. Type-agnostic: the writer never inspects
+  // event types here. lifecycle.js consumes it for page_start →
+  // discontinuity detection. Fire-and-forget: hook failures must never
+  // break the ack path. Called with every produced ack (the hook itself
+  // filters on ack.ok).
+  function fireAfterEventStored(message, ack) {
+    try {
+      var nsHook = shared();
+      if (nsHook && typeof nsHook.afterEventStored === 'function') {
+        nsHook.afterEventStored(message.event, ack);
+      }
+    } catch (hookErr) { /* never break the ack path */ }
+  }
+
   // Installs the chrome.runtime.onMessage adapter. Returns the listener
   // function so tests can remove it to simulate a genuine no-ack state.
   // (Not for production use: a service-worker restart recreates the whole
@@ -434,16 +447,20 @@ var BlindfoldSession = BlindfoldSession || {};
         } catch (respondErr) {
           // The message channel closed; the write already committed.
         }
+        fireAfterEventStored(message, ack);
       }, function (err) {
+        var failAck;
         try {
-          sendResponse({
+          failAck = {
             ok: false,
             eventId: eventId,
             error: toWriteFailed(err)
-          });
+          };
+          sendResponse(failAck);
         } catch (respondErr) {
           // The message channel closed; nothing more to do.
         }
+        fireAfterEventStored(message, failAck);
       });
       return true; // async response follows
     };

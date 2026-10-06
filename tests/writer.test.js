@@ -675,18 +675,20 @@ describe('AC10 — listener installation and adapter', () => {
 // AC11: diff discipline.
 // ------------------------------------------------------------------
 describe('AC11 — diff discipline', () => {
-  it('sw.js: importScripts line + install call + header update only (2.6 cumulative)', () => {
-    // 2.6 legitimately extends the importScripts line per its contract
-    // (session-state storage primitives). Cumulative invariant: exactly
+  it('sw.js: importScripts line + install call + header update only (2.7 cumulative)', () => {
+    // 2.6 legitimately extended the importScripts line per its contract
+    // (session-state storage primitives); 2.7 legitimately extends it per
+    // its contract (lifecycle detector). Cumulative invariant: exactly
     // one importScripts call, exactly one installWriterListener call, and
-    // the 2.6 line removed from the absent list.
+    // the 2.7 line removed from the absent list.
     const sw = fs.readFileSync(path.join(ROOT, 'sw.js'), 'utf8');
-    assert.ok(sw.includes("importScripts('db.js', 'event_envelope.js', 'writer.js', 'session_identity.js', 'session_conditions.js', 'session_store.js');"),
+    assert.ok(sw.includes("importScripts('db.js', 'event_envelope.js', 'writer.js', 'session_identity.js', 'session_conditions.js', 'session_store.js', 'lifecycle.js');"),
       'importScripts line');
     assert.ok(sw.includes('BlindfoldSession.writerListener = BlindfoldSession.installWriterListener();'),
       'install call with lifecycle handle');
     assert.ok(!sw.includes('2.4:'), '2.4 line removed from the absent list');
     assert.ok(!sw.includes('2.6:'), '2.6 line removed from the absent list');
+    assert.ok(!sw.includes('2.7: page/context start'), '2.7 line removed from the absent list');
     // No other functional surface: exactly one importScripts call, exactly
     // one installWriterListener call.
     const codeStripped = sw
@@ -696,10 +698,14 @@ describe('AC11 — diff discipline', () => {
     assert.equal((codeStripped.match(/installWriterListener\s*\(/g) || []).length, 1);
   });
 
-  it('manifest.json byte-identical to HEAD (this task changes no manifest)', () => {
-    const head = execSync('git show HEAD:manifest.json', { cwd: ROOT }).toString();
-    const current = fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8');
-    assert.strictEqual(current, head);
+  it('manifest.json differs from HEAD only in the content_scripts js list (2.7)', () => {
+    // Honest cumulative evolution: 2.7 legitimately inserts lifecycle.js
+    // after sender.js per its contract. The cumulative invariant is that
+    // nothing else in the manifest changed.
+    const headManifest = JSON.parse(execSync('git show HEAD:manifest.json', { cwd: ROOT }).toString());
+    const current = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8'));
+    headManifest.content_scripts[0].js = current.content_scripts[0].js;
+    assert.deepEqual(current, headManifest, 'manifest changed beyond the js list');
   });
 
   it('no other repo files modified (git status allowlist)', () => {
@@ -744,7 +750,28 @@ describe('AC11 — diff discipline', () => {
       '.autodev/evidence/2.6.contract.md',
       '.autodev/evidence/2.6.build.md',
       '.autodev/evidence/2.6.review.md',
-      '.autodev/evidence/2.6.behavior.md'
+      '.autodev/evidence/2.6.behavior.md',
+      // Honest cumulative evolution: task 2.7 legitimately adds
+      // lifecycle.js (page/context lifecycle), the writer's type-agnostic
+      // post-commit hook, the one-line content.js install, the manifest
+      // js-list entry, the sw.js import, and its own suite + evidence;
+      // the suites that pin those files evolve accordingly.
+      'lifecycle.js',
+      'content.js',
+      'manifest.json',
+      'tests/lifecycle.test.js',
+      'tests/session_store.test.js',
+      'tests/manifest_sw.test.js',
+      'tests/db.test.js',
+      'tests/event_envelope.test.js',
+      'tests/game_records.test.js',
+      '.autodev/evidence/2.7.contract.md',
+      '.autodev/evidence/2.7.build.md',
+      // Honest cumulative evolution: the adversarial review and
+      // behavioral verification evidence land after the builder
+      // evolved these pins (2.6 precedent).
+      '.autodev/evidence/2.7.review.md',
+      '.autodev/evidence/2.7.behavior.md'
     ]);
     for (const f of changed) {
       assert.ok(allowed.has(f), `unexpected modified file: ${f}`);

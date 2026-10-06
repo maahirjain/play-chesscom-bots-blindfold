@@ -1,4 +1,5 @@
 BlindfoldSession.sender = BlindfoldSession.createSender();
+BlindfoldSession.installPageEndHook(BlindfoldSession.sender);
 const game = new Chess();
 let game_half_move_count = 0;
 let latest_half_moves = [];
