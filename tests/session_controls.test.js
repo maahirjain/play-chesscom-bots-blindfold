@@ -402,6 +402,371 @@ describe('AC2 — classifyStreamStatus', () => {
 });
 
 // ------------------------------------------------------------------
+// 5.6 — computeReadiness (PLAN.md §5.6).
+// ------------------------------------------------------------------
+describe('5.6 — computeReadiness', () => {
+  // All three streams recording-healthy.
+  function healthyStatuses() {
+    return {
+      microphone: streamStatus({ lifecycle: 'recording', recorderState: 'recording' }),
+      screen: streamStatus({ lifecycle: 'recording', recorderState: 'recording' }),
+      webcam: streamStatus({ lifecycle: 'recording', recorderState: 'recording' }),
+    };
+  }
+  // Sender with ≥1 acknowledged write: queue drained, no error.
+  function ackedSender() {
+    return { pendingCount: 0, lastError: null, transportAvailable: true, retryScheduled: false };
+  }
+
+  it('exports the readiness vocabulary', () => {
+    const BS = freshModule();
+    assert.equal(BS.READINESS_READY, 'ready');
+    assert.equal(BS.READINESS_NOT_READY, 'not-ready');
+    assert.equal(BS.READINESS_UNKNOWN, 'unknown');
+    assert.equal(typeof BS.computeReadiness, 'function');
+  });
+
+  it('AC1: ready only when all three streams healthy AND storage acked', () => {
+    const BS = freshModule();
+    const r = BS.computeReadiness(healthyStatuses(), ackedSender(), {}, true);
+    assert.equal(r.verdict, 'ready');
+    assert.deepEqual(r.reasons, []);
+    assert.equal(r.blocked, false);
+    assert.ok(Object.isFrozen(r));
+    assert.ok(Object.isFrozen(r.reasons));
+  });
+
+  it('AC1: not-ready when any stream is not healthy (names the stream)', () => {
+    const BS = freshModule();
+    const statuses = healthyStatuses();
+    statuses.webcam = streamStatus({ lifecycle: 'idle' });
+    const r = BS.computeReadiness(statuses, ackedSender(), {}, true);
+    assert.equal(r.verdict, 'not-ready');
+    assert.ok(r.reasons.some((x) => x.indexOf('webcam') === 0), JSON.stringify(r.reasons));
+    assert.ok(r.reasons.some((x) => x.indexOf('off-idle') !== -1), JSON.stringify(r.reasons));
+  });
+
+  it('AC1: not-ready when storage has zero acknowledged writes (pending)', () => {
+    const BS = freshModule();
+    const r = BS.computeReadiness(healthyStatuses(),
+      { pendingCount: 2, lastError: null, transportAvailable: true, retryScheduled: false },
+      {}, true);
+    assert.equal(r.verdict, 'not-ready');
+    assert.ok(r.reasons.some((x) => x.indexOf('storage write pending') !== -1),
+      JSON.stringify(r.reasons));
+  });
+
+  it('AC2: recording-degraded never counts as started (stream named)', () => {
+    const BS = freshModule();
+    const statuses = healthyStatuses();
+    statuses.microphone = streamStatus({
+      lifecycle: 'recording',
+      recorderState: 'recording',
+      tracks: [{ trackKind: 'audio', readyState: 'live', muted: true }],
+    });
+    const r = BS.computeReadiness(statuses, ackedSender(), {}, true);
+    assert.equal(r.verdict, 'not-ready');
+    assert.ok(r.reasons.some((x) => x.indexOf('microphone: recording-degraded') === 0),
+      JSON.stringify(r.reasons));
+    assert.equal(r.blocked, true);
+  });
+
+  it('AC3: failed-not-started yields not-ready (blocked)', () => {
+    const BS = freshModule();
+    const statuses = healthyStatuses();
+    statuses.screen = streamStatus({ lifecycle: 'idle' });
+    const startResults = { screen: { ok: false, error: 'denied' } };
+    const r = BS.computeReadiness(statuses, ackedSender(), startResults, true);
+    assert.equal(r.verdict, 'not-ready');
+    assert.ok(r.reasons.some((x) => x.indexOf('screen: failed-not-started') === 0),
+      JSON.stringify(r.reasons));
+    assert.ok(r.reasons.some((x) => x.indexOf('start-failed:denied') !== -1),
+      JSON.stringify(r.reasons));
+    assert.equal(r.blocked, true);
+  });
+
+  it('AC3: off-idle with no failure is waiting (not blocked)', () => {
+    const BS = freshModule();
+    const statuses = healthyStatuses();
+    statuses.screen = streamStatus({ lifecycle: 'idle' });
+    const r = BS.computeReadiness(statuses, ackedSender(), {}, true);
+    assert.equal(r.verdict, 'not-ready');
+    assert.equal(r.blocked, false);
+  });
+
+  it('AC3: null statuses (query failed) yields unknown, never ready', () => {
+    const BS = freshModule();
+    for (const bad of [null, undefined]) {
+      const r = BS.computeReadiness(bad, ackedSender(), {}, true);
+      assert.equal(r.verdict, 'unknown', 'input: ' + String(bad));
+      assert.notEqual(r.verdict, 'ready');
+    }
+  });
+
+  it('AC3: malformed streamStatuses container throws TypeError', () => {
+    const BS = freshModule();
+    assert.throws(() => BS.computeReadiness('nope', ackedSender(), {}, true), TypeError);
+    assert.throws(() => BS.computeReadiness(healthyStatuses(), ackedSender(), 'nope', true), TypeError);
+  });
+
+  it('AC3: missing kind in response is not-ready (blocked)', () => {
+    const BS = freshModule();
+    const statuses = healthyStatuses();
+    delete statuses.webcam;
+    const r = BS.computeReadiness(statuses, ackedSender(), {}, true);
+    assert.equal(r.verdict, 'not-ready');
+    assert.ok(r.reasons.some((x) => x.indexOf('webcam: no status') === 0),
+      JSON.stringify(r.reasons));
+    assert.equal(r.blocked, true);
+  });
+
+  it('AC4: persistent write-failed yields storage-not-ready (blocked)', () => {
+    const BS = freshModule();
+    const r = BS.computeReadiness(healthyStatuses(),
+      { pendingCount: 1, lastError: 'write-failed:QuotaExceededError', transportAvailable: true, retryScheduled: false },
+      {}, true);
+    assert.equal(r.verdict, 'not-ready');
+    assert.ok(r.reasons.some((x) => x.indexOf('storage write failed') === 0),
+      JSON.stringify(r.reasons));
+    assert.equal(r.blocked, true);
+  });
+
+  it('AC4: unrecognized sender error is fail-closed (blocked)', () => {
+    const BS = freshModule();
+    const r = BS.computeReadiness(healthyStatuses(),
+      { pendingCount: 0, lastError: 'weird-error', transportAvailable: true, retryScheduled: false },
+      {}, true);
+    assert.equal(r.verdict, 'not-ready');
+    assert.equal(r.blocked, true);
+  });
+
+  it('AC4: transient sender error is not-ready but not blocked (retrying)', () => {
+    const BS = freshModule();
+    for (const terr of ['send-timeout', 'no-ack', 'transport-error:TypeError']) {
+      const r = BS.computeReadiness(healthyStatuses(),
+        { pendingCount: 1, lastError: terr, transportAvailable: true, retryScheduled: true },
+        {}, true);
+      assert.equal(r.verdict, 'not-ready', 'error: ' + terr);
+      assert.equal(r.blocked, false, 'error: ' + terr);
+    }
+  });
+
+  it('AC4: no initial emission observed (boot adoption) never yields ready', () => {
+    const BS = freshModule();
+    const r = BS.computeReadiness(healthyStatuses(), ackedSender(), {}, false);
+    assert.equal(r.verdict, 'not-ready');
+    assert.notEqual(r.verdict, 'ready');
+    assert.ok(r.reasons.some((x) => x.indexOf('storage write unconfirmed') !== -1),
+      JSON.stringify(r.reasons));
+    // A fresh sender with an empty queue is ambiguous — never ready.
+    const r2 = BS.computeReadiness(healthyStatuses(),
+      { pendingCount: 0, lastError: null, transportAvailable: false, retryScheduled: false },
+      {}, false);
+    assert.equal(r2.verdict, 'not-ready');
+  });
+
+  it('AC4: sender without getStatus shape yields storage-not-ready', () => {
+    const BS = freshModule();
+    for (const bad of [null, undefined, {}, { pendingCount: 'x' }]) {
+      const r = BS.computeReadiness(healthyStatuses(), bad, {}, true);
+      assert.equal(r.verdict, 'not-ready', 'input: ' + JSON.stringify(bad));
+      assert.notEqual(r.verdict, 'ready');
+    }
+  });
+
+  it('AC4: malformed per-stream status degrades to not-ready (never throws)', () => {
+    const BS = freshModule();
+    const statuses = healthyStatuses();
+    statuses.microphone = { lifecycle: 42 }; // malformed: lifecycle not a string
+    const r = BS.computeReadiness(statuses, ackedSender(), {}, true);
+    assert.equal(r.verdict, 'not-ready');
+    assert.ok(r.reasons.some((x) => x.indexOf('microphone: malformed') === 0),
+      JSON.stringify(r.reasons));
+  });
+});
+
+// ------------------------------------------------------------------
+// 5.6 — readiness badge (AC5: presentation + latch).
+// ------------------------------------------------------------------
+describe('5.6 — readiness badge', () => {
+  let savedDocument;
+  beforeEach(() => { savedDocument = globalThis.document; });
+  afterEach(() => {
+    if (savedDocument === undefined) delete globalThis.document;
+    else globalThis.document = savedDocument;
+    unpublishNS();
+  });
+
+  function healthyStatuses() {
+    const mk = (kind) => ({
+      streamKind: kind,
+      lifecycle: 'recording',
+      recorderState: 'recording',
+      segmentId: 'seg-1',
+      segmentNumber: 0,
+      startedAtUtc: '2026-10-06T00:00:00.000Z',
+      startedAtMonotonicMs: 1000,
+      clockSegmentId: 'clk-1',
+      actualMimeType: 'video/webm',
+      fileExtension: 'webm',
+      audioContent: null,
+      chunk: { status: 'open' },
+      tracks: [],
+      lastRecorderError: null,
+      lastDiscontinuity: null,
+      finalizedAtUtc: null,
+      unfinalizedSegments: 0,
+    });
+    return {
+      microphone: mk('microphone'),
+      screen: mk('screen'),
+      webcam: mk('webcam'),
+    };
+  }
+
+  function badgeHarness(statusesFn) {
+    const BS = publishNS(freshModule());
+    globalThis.document = makeFakeDocument(true);
+    const opts = makeOpts();
+    let statuses = statusesFn;
+    let getStatusCalls = 0;
+    opts._transport.handler = (env) => {
+      if (env.msg === 'recorder-ensure') return Promise.resolve({ ok: true, bootId: 'b', created: true });
+      if (env.msg === 'recorder-set-session') return Promise.resolve({ ok: true });
+      if (env.msg === 'recorder-start-streams') {
+        return Promise.resolve({
+          ok: true,
+          streams: {
+            microphone: { ok: true },
+            screen: { ok: true },
+            webcam: { ok: true },
+          },
+        });
+      }
+      if (env.msg === 'recorder-get-status') {
+        getStatusCalls++;
+        if (getStatusCalls === 1) {
+          // Boot adoption probe: no surviving session.
+          return Promise.resolve({ ok: false, error: 'no-session' });
+        }
+        return Promise.resolve({ ok: true, sessionId: 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa', statuses: statuses() });
+      }
+      if (env.msg === 'recorder-stop-streams') {
+        return Promise.resolve({ ok: true, streams: {}, finalized: true });
+      }
+      return Promise.resolve({ ok: false, error: 'unexpected' });
+    };
+    const h = BS.installSessionControls(stripInternal(opts));
+    const badge = h.element.children.find(
+      (c) => c.getAttribute('data-readiness') !== null);
+    assert.ok(badge, 'readiness badge exists');
+    return { BS, opts, h, badge, setStatuses: (fn) => { statuses = fn; } };
+  }
+
+  it('AC5: badge hidden while idle, shows waiting on Start', async () => {
+    const { h, badge } = badgeHarness(healthyStatuses);
+    try {
+      await sleep(20); // boot adoption resolves idle
+      assert.equal(badge.getAttribute('data-readiness'), 'hidden');
+      h.button.click(); // Start
+      await sleep(10);
+      // Starting… → waiting (poll has not returned yet, or not-ready/waiting).
+      const state = badge.getAttribute('data-readiness');
+      assert.ok(state === 'waiting' || state === 'ready' || state === 'not-ready',
+        'badge visible after Start, got: ' + state);
+      assert.notEqual(state, 'hidden');
+    } finally { h.stop(); }
+  });
+
+  it('AC5: waiting → ready when streams healthy and storage acked; latched', async () => {
+    const { h, badge, setStatuses } = badgeHarness(healthyStatuses);
+    try {
+      await sleep(20);
+      h.button.click();
+      await sleep(80); // Start completes, polls run
+      assert.equal(h.getPhase(), 'active');
+      // The sender stub reports pendingCount 0 / lastError null, and
+      // pageStartEmitted is true → storage ready; streams healthy →
+      // verdict ready → badge shows ready.
+      assert.equal(badge.getAttribute('data-readiness'), 'ready', badge.textContent);
+      assert.ok(badge.textContent.indexOf('Ready') === 0, badge.textContent);
+      // Latch: degrade a stream — badge stays ready (lights show truth).
+      setStatuses(() => {
+        const s = healthyStatuses();
+        s.webcam.tracks = [{ trackKind: 'video', readyState: 'live', muted: true }];
+        return s;
+      });
+      await sleep(40); // another poll
+      assert.equal(badge.getAttribute('data-readiness'), 'ready',
+        'readiness latches; badge must not flap, got: ' + badge.textContent);
+    } finally { h.stop(); }
+  });
+
+  it('AC5: never shows ready before the verdict (stream failed)', async () => {
+    const { h, badge } = badgeHarness(() => {
+      const s = healthyStatuses();
+      // Mic failed: idle lifecycle with a recorder error fact →
+      // failed-not-started (blocked), not off-idle.
+      s.microphone.lifecycle = 'idle';
+      s.microphone.lastRecorderError = { errorName: 'NotAllowedError', errorMessage: null, atUtc: null };
+      return s;
+    });
+    try {
+      await sleep(20);
+      h.button.click();
+      await sleep(80);
+      assert.equal(h.getPhase(), 'active'); // 4.6 isolation: session active
+      const state = badge.getAttribute('data-readiness');
+      assert.notEqual(state, 'ready', 'must never claim ready with a failed stream');
+      assert.equal(state, 'not-ready', 'got: ' + state + ' / ' + badge.textContent);
+      assert.ok(badge.textContent.indexOf('Not ready:') === 0, badge.textContent);
+      assert.ok(badge.textContent.indexOf('microphone') !== -1, badge.textContent);
+    } finally { h.stop(); }
+  });
+
+  it('AC5: badge hidden again after Stop', async () => {
+    const { h, badge } = badgeHarness(healthyStatuses);
+    try {
+      await sleep(20);
+      h.button.click();
+      await sleep(80);
+      assert.equal(h.getPhase(), 'active');
+      assert.equal(badge.getAttribute('data-readiness'), 'ready');
+      h.button.click(); // Stop
+      await sleep(80);
+      assert.equal(h.getPhase(), 'idle');
+      assert.equal(badge.getAttribute('data-readiness'), 'hidden',
+        'badge hidden after Stop, got: ' + badge.getAttribute('data-readiness'));
+    } finally { h.stop(); }
+  });
+
+  it('AC5: query failure shows unknown (not ready, not hidden)', async () => {
+    const BS = publishNS(freshModule());
+    globalThis.document = makeFakeDocument(true);
+    const opts = makeOpts();
+    opts._transport.handler = (env) => {
+      if (env.msg === 'recorder-ensure') return Promise.resolve({ ok: true, bootId: 'b', created: true });
+      if (env.msg === 'recorder-set-session') return Promise.resolve({ ok: true });
+      if (env.msg === 'recorder-start-streams') {
+        return Promise.resolve({ ok: true, streams: { microphone: { ok: true }, screen: { ok: true }, webcam: { ok: true } } });
+      }
+      if (env.msg === 'recorder-get-status') return Promise.resolve({ ok: false, error: 'no-session' });
+      return Promise.resolve({ ok: false, error: 'unexpected' });
+    };
+    const h = BS.installSessionControls(stripInternal(opts));
+    const badge = h.element.children.find((c) => c.getAttribute('data-readiness') !== null);
+    try {
+      await sleep(20);
+      h.button.click();
+      await sleep(80);
+      assert.equal(h.getPhase(), 'active');
+      assert.equal(badge.getAttribute('data-readiness'), 'unknown', badge.textContent);
+      assert.ok(badge.textContent.indexOf('unknown') !== -1, badge.textContent);
+    } finally { h.stop(); }
+  });
+});
+
+// ------------------------------------------------------------------
 // AC3 — installSessionControls DOM behavior and guards.
 // ------------------------------------------------------------------
 describe('AC3 — installSessionControls', () => {
@@ -1255,6 +1620,20 @@ describe('AC7 — diff discipline and scope', () => {
       // 5.5 also evolves the working-tree diff pins in these suites.
       'tests/clock_link.test.js',
       'tests/timecode.test.js',
+      // Honest cumulative evolution: 5.6 (show readiness only after
+      // required media streams have started and an initial storage
+      // write has succeeded) legitimately adds the pure
+      // computeReadiness() policy function + readiness badge
+      // presentation + poll-loop wiring to session_controls.js, adds
+      // its unit/integration tests, and records its evidence; its
+      // files join the allowlists. No new channel messages, events,
+      // stores, or permissions.
+      '.autodev/evidence/5.6.contract.md',
+      '.autodev/evidence/5.6.build.md',
+      // Honest cumulative evolution: 5.6's review/behavior evidence lands
+      // after the pins are evolved (2.x/3.x/4.x/5.1-5.5 precedent).
+      '.autodev/evidence/5.6.review.md',
+      '.autodev/evidence/5.6.behavior.md',
     ]);
     const stray = changed.filter((f) => !allowed.has(f));
     assert.deepEqual(stray, [],

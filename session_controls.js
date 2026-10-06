@@ -241,6 +241,207 @@ var BlindfoldSession = BlindfoldSession || {};
   }
 
   // ------------------------------------------------------------------
+  // 5.6: readiness policy (PLAN.md §5.6).
+  //
+  // computeReadiness(streamStatuses, senderStatus, startResults,
+  //   initialEmitObserved) — pure. Inputs:
+  //   - streamStatuses: the 4.14 per-stream status objects ({microphone,
+  //     screen, webcam} -> 17-key status), or null/malformed when the
+  //     status query itself failed.
+  //   - senderStatus: the object returned by sender.getStatus()
+  //     ({pendingCount, lastError, transportAvailable, retryScheduled}),
+  //     or null when unavailable (sender without getStatus, throwing
+  //     getStatus — never a reason to claim ready).
+  //   - startResults: the per-stream start-streams results 5.1 remembers
+  //     (lastStartResults), or null.
+  //   - initialEmitObserved: boolean — true when this control observed
+  //     the Start's initial event emission (emitPageStart succeeded).
+  //     False on boot adoption or when the emission was never observed;
+  //     the storage signal is then ambiguous and can never yield ready.
+  //
+  // Output: frozen {verdict, reasons, blocked} where verdict is one of
+  //   'ready' | 'not-ready' | 'unknown', reasons is a frozen array of
+  //   raw fact strings, and blocked is true when a confirmed failure
+  //   (vs mere pending) keeps the session from being ready.
+  //
+  // The required set is all three stream kinds (contract §2.1). A stream
+  // counts as started only when it classifies 'recording-healthy' —
+  // 'recording-degraded' is recording but not healthy and never counts
+  // (the 4.14 masquerade rule). Storage counts only when ≥1 event
+  // emitted since Start has been durably acknowledged: the sender
+  // dequeues exclusively on positive ack, so pendingCount===0 with
+  // lastError===null and an observed initial emission honestly means
+  // every emitted event was acknowledged. Ambiguous signals degrade to
+  // not-ready, never to a premature ready.
+  //
+  // No DOM, no timers, no chrome.* — independently unit-testable.
+  // Throws TypeError only on wrong-typed streamStatuses/startResults
+  // containers (caller error); a null streamStatuses is the honest
+  // 'unknown' (query failed), not a throw.
+  // ------------------------------------------------------------------
+
+  var READINESS_READY = 'ready';
+  var READINESS_NOT_READY = 'not-ready';
+  var READINESS_UNKNOWN = 'unknown';
+
+  var READINESS_VERDICTS = Object.freeze([
+    READINESS_READY,
+    READINESS_NOT_READY,
+    READINESS_UNKNOWN
+  ]);
+
+  // 2.8's sender-error taxonomy (status_indicator.js): the transient
+  // family recovers via the 2.5 retry; anything else non-null is a
+  // persistent write failure (fail-closed).
+  function isTransientSenderError(err) {
+    return err === 'send-timeout' || err === 'no-ack' ||
+      (typeof err === 'string' && err.indexOf('transport-error:') === 0);
+  }
+
+  // Storage readiness for 5.6's purpose. Returns {ready, reason, blocked}.
+  // reason is null when ready; blocked distinguishes a confirmed failure
+  // from mere pending.
+  function classifyStorageReadiness(senderStatus, initialEmitObserved) {
+    if (!isPlainObject(senderStatus) ||
+        typeof senderStatus.pendingCount !== 'number' ||
+        !isFinite(senderStatus.pendingCount) ||
+        (senderStatus.lastError !== null &&
+         typeof senderStatus.lastError !== 'string')) {
+      return {
+        ready: false,
+        reason: 'storage status unavailable',
+        blocked: true
+      };
+    }
+    var lastError = senderStatus.lastError;
+    if (lastError !== null && !isTransientSenderError(lastError)) {
+      // Persistent write failure (write-failed:* or unrecognized) —
+      // the head event never dequeues, so this latches. Fail-closed.
+      return {
+        ready: false,
+        reason: 'storage write failed: ' + lastError,
+        blocked: true
+      };
+    }
+    if (initialEmitObserved !== true) {
+      // No emission observed in this context (boot adoption, or the
+      // Start path was never taken here). pendingCount===0 /
+      // lastError===null is then ambiguous — it cannot confirm the
+      // initial write. Never a premature ready.
+      return {
+        ready: false,
+        reason: 'storage write unconfirmed',
+        blocked: true
+      };
+    }
+    if (senderStatus.pendingCount > 0) {
+      return {
+        ready: false,
+        reason: 'storage write pending',
+        blocked: false
+      };
+    }
+    if (lastError !== null) {
+      // Transient failure with an empty queue: the pump will retry
+      // (2.5); the write has not succeeded yet.
+      return {
+        ready: false,
+        reason: 'storage write retrying: ' + lastError,
+        blocked: false
+      };
+    }
+    // pendingCount===0, lastError===null, initial emission observed:
+    // the sender dequeues exclusively on positive ack, so every event
+    // emitted since Start has been durably acknowledged.
+    return { ready: true, reason: null, blocked: false };
+  }
+
+  function computeReadiness(streamStatuses, senderStatus, startResults,
+      initialEmitObserved) {
+    if (streamStatuses !== null && streamStatuses !== undefined &&
+        !isPlainObject(streamStatuses)) {
+      throw new TypeError(
+        'streamStatuses must be an object, null, or undefined');
+    }
+    if (startResults !== null && startResults !== undefined &&
+        !isPlainObject(startResults)) {
+      throw new TypeError(
+        'startResults must be an object, null, or undefined');
+    }
+    // The status query itself failed or returned malformed data:
+    // unknown is unknown; never default to ready.
+    if (!isPlainObject(streamStatuses)) {
+      return Object.freeze({
+        verdict: READINESS_UNKNOWN,
+        reasons: Object.freeze(['status query failed']),
+        blocked: false
+      });
+    }
+    var reasons = [];
+    var blocked = false;
+    var allStreamsReady = true;
+    for (var i = 0; i < STREAM_KINDS.length; i++) {
+      var kind = STREAM_KINDS[i];
+      var st = isPlainObject(streamStatuses[kind]) ?
+        streamStatuses[kind] : null;
+      if (st === null) {
+        allStreamsReady = false;
+        blocked = true;
+        reasons.push(kind + ': no status in response');
+        continue;
+      }
+      var classified;
+      try {
+        classified = classifyStreamStatus(st,
+          (isPlainObject(startResults) ? startResults[kind] : null) || null);
+      } catch (e) {
+        allStreamsReady = false;
+        blocked = true;
+        reasons.push(kind + ': malformed status');
+        continue;
+      }
+      if (classified.state !== LIGHT_RECORDING_HEALTHY) {
+        allStreamsReady = false;
+        var r = kind + ': ' + classified.state;
+        if (classified.detail) {
+          r += ' (' + classified.detail + ')';
+        }
+        reasons.push(r);
+        // A confirmed failure blocks; mere not-yet-started waits.
+        // 'failed-not-started' and 'recording-degraded' are failures;
+        // a malformed/unknown stream is a blocker (cannot confirm);
+        // 'off-idle' with no failure facts is still pending.
+        if (classified.state === LIGHT_FAILED_NOT_STARTED ||
+            classified.state === LIGHT_RECORDING_DEGRADED ||
+            classified.state === LIGHT_UNKNOWN) {
+          blocked = true;
+        }
+      }
+    }
+    var storage = classifyStorageReadiness(senderStatus,
+      initialEmitObserved);
+    if (!storage.ready) {
+      allStreamsReady = false;
+      reasons.push(storage.reason);
+      if (storage.blocked) {
+        blocked = true;
+      }
+    }
+    if (allStreamsReady) {
+      return Object.freeze({
+        verdict: READINESS_READY,
+        reasons: Object.freeze([]),
+        blocked: false
+      });
+    }
+    return Object.freeze({
+      verdict: READINESS_NOT_READY,
+      reasons: Object.freeze(reasons),
+      blocked: blocked
+    });
+  }
+
+  // ------------------------------------------------------------------
   // Installation: DOM + Start/Stop wiring.
   // ------------------------------------------------------------------
 
@@ -405,6 +606,22 @@ var BlindfoldSession = BlindfoldSession || {};
       })(STREAM_KINDS[li]);
     }
 
+    // 5.6: readiness badge (PLAN.md §5.6). A text summary of the
+    // readiness verdict — "Waiting for recording…" until all required
+    // streams are recording-healthy and the initial storage write is
+    // confirmed, then "Ready — recording" (latched per session).
+    // Presentation-only: it never gates the session or the Stop
+    // button. Hidden while idle (no session).
+    var readinessEl = doc.createElement('span');
+    readinessEl.className = 'blindfold-readiness';
+    readinessEl.setAttribute('data-readiness', 'hidden');
+    readinessEl.setAttribute('aria-hidden', 'true');
+    readinessEl.textContent = '';
+    try {
+      readinessEl.style.display = 'none';
+    } catch (e) { /* non-CSS DOM stub */ }
+    cluster.appendChild(readinessEl);
+
     // Anchor: the extension's own move-input UI (2.8 precedent), so the
     // cluster reads [Start][mic][screen][webcam] ahead of 2.8's saving
     // light — four lights total, PLAN §(c) step 4. Fixed-corner fallback
@@ -433,6 +650,17 @@ var BlindfoldSession = BlindfoldSession || {};
     // Cleared on Stop and on each new Start; empty on boot adoption
     // (the reloaded control observed no start).
     var lastStartResults = {};
+    // 5.6: readiness state. readinessLatched is set on the first
+    // 'ready' verdict and holds for the session (no flapping — the
+    // "initial" conditions were met; ongoing health stays the lights'
+    // job). pageStartEmitted tracks whether this control observed the
+    // Start's initial event emission (emitPageStart); false on boot
+    // adoption — the storage signal is then ambiguous and can never
+    // yield ready. lastReadinessRendered is {verdict, text} for
+    // change-detected DOM updates.
+    var readinessLatched = false;
+    var pageStartEmitted = false;
+    var lastReadinessRendered = null;
 
     function setButton(label, enabled, detailText, ariaLabel) {
       button.textContent = label;
@@ -472,6 +700,62 @@ var BlindfoldSession = BlindfoldSession || {};
       }
     }
 
+    // 5.6: readiness badge rendering. Change-detected (no DOM churn
+    // per poll). Takes the computeReadiness result ({verdict, reasons,
+    // blocked}) or the 'hidden' sentinel. Never throws into the poll
+    // loop (3.2 SF-1).
+    function renderReadiness(readiness) {
+      var verdict = readiness === 'hidden' ? 'hidden' : readiness.verdict;
+      var reasons = readiness === 'hidden' || !Array.isArray(readiness.reasons) ?
+        [] : readiness.reasons;
+      var blocked = readiness !== 'hidden' && readiness.blocked === true;
+      var text;
+      var dataState;
+      if (verdict === 'hidden') {
+        text = '';
+        dataState = 'hidden';
+      } else if (verdict === READINESS_READY) {
+        text = 'Ready \u2014 recording';
+        dataState = 'ready';
+      } else if (verdict === READINESS_UNKNOWN) {
+        text = 'Recording status unknown';
+        dataState = 'unknown';
+      } else if (blocked) {
+        // Confirmed failure: name the blocker honestly.
+        text = 'Not ready: ' + reasons.join('; ');
+        dataState = 'not-ready';
+      } else {
+        // Still pending (streams not yet started, storage write in
+        // flight): waiting, never a premature "ready".
+        text = 'Waiting for recording\u2026';
+        dataState = 'waiting';
+      }
+      var prev = lastReadinessRendered;
+      if (prev !== null && prev.verdict === dataState && prev.text === text) {
+        return; // no DOM churn per poll
+      }
+      lastReadinessRendered = { verdict: dataState, text: text };
+      try {
+        readinessEl.textContent = text;
+        readinessEl.setAttribute('data-readiness', dataState);
+        if (verdict === 'hidden') {
+          readinessEl.setAttribute('aria-hidden', 'true');
+          try {
+            readinessEl.style.display = 'none';
+          } catch (e) { /* non-CSS DOM stub */ }
+        } else {
+          readinessEl.setAttribute('aria-hidden', 'false');
+          try {
+            readinessEl.style.display = '';
+          } catch (e) { /* non-CSS DOM stub */ }
+          var title = (verdict === READINESS_READY) ?
+            'All required streams recording; initial storage write confirmed' :
+            text;
+          readinessEl.setAttribute('title', title);
+        }
+      } catch (e) { /* never break the poll on a render throw */ }
+    }
+
     function applyStatusResponse(statuses) {
       // statuses: {microphone: {...}, screen: {...}, webcam: {...}} or
       // missing kinds (a kind absent from the response is unknown, not
@@ -505,6 +789,14 @@ var BlindfoldSession = BlindfoldSession || {};
         p = opts.sendRecorderMessage(recorderEnvelope(MSG_GET_STATUS));
       } catch (e) {
         renderAllUnknown('query-failed');
+        // 5.6: status unknown (unless latched ready).
+        if (!readinessLatched) {
+          renderReadiness({
+            verdict: READINESS_UNKNOWN,
+            reasons: ['query-failed'],
+            blocked: false
+          });
+        }
         return Promise.resolve();
       }
       return Promise.resolve(p).then(function (resp) {
@@ -515,12 +807,57 @@ var BlindfoldSession = BlindfoldSession || {};
           var err = (isPlainObject(resp) && typeof resp.error === 'string') ?
             resp.error : 'no-response';
           renderAllUnknown(err);
+          // 5.6: status unknown (unless latched ready).
+          if (!readinessLatched) {
+            renderReadiness({
+              verdict: READINESS_UNKNOWN,
+              reasons: [err],
+              blocked: false
+            });
+          }
           return;
         }
         applyStatusResponse(resp.statuses);
+        // 5.6: feed the readiness policy from the same poll. No new
+        // poll cadence, no new channel messages. The sender status is
+        // read defensively — a sender without getStatus() (5.1-era) or
+        // a throwing getStatus degrades to storage-unconfirmed, never
+        // to a premature ready.
+        var senderStatus = null;
+        try {
+          if (opts.sender !== null && typeof opts.sender === 'object' &&
+              typeof opts.sender.getStatus === 'function') {
+            senderStatus = opts.sender.getStatus();
+          }
+        } catch (e) { /* senderStatus stays null */ }
+        var readiness;
+        try {
+          readiness = computeReadiness(resp.statuses, senderStatus,
+            lastStartResults, pageStartEmitted);
+        } catch (e) {
+          readiness = {
+            verdict: READINESS_UNKNOWN,
+            reasons: ['readiness computation failed'],
+            blocked: false
+          };
+        }
+        if (readiness.verdict === READINESS_READY) {
+          readinessLatched = true;
+        }
+        renderReadiness(readinessLatched ?
+          { verdict: READINESS_READY, reasons: [], blocked: false } :
+          readiness);
       }, function () {
         if (!stopped) {
           renderAllUnknown('query-failed');
+          // 5.6: status unknown (unless latched ready).
+          if (!readinessLatched) {
+            renderReadiness({
+              verdict: READINESS_UNKNOWN,
+              reasons: ['query-failed'],
+              blocked: false
+            });
+          }
         }
       });
     }
@@ -587,10 +924,19 @@ var BlindfoldSession = BlindfoldSession || {};
       } catch (e) { /* best-effort */ }
     }
 
+    // 5.6: reset readiness state (badge hidden while idle). Called on
+    // every path that returns to idle.
+    function resetReadiness() {
+      readinessLatched = false;
+      pageStartEmitted = false;
+      renderReadiness('hidden');
+    }
+
     function abortStart(detailText) {
       clearRecorderSession();
       setSlots(null, null);
       lastStartResults = {};
+      resetReadiness();
       phase = CONTROL_PHASE_IDLE;
       setButton('Start', true, detailText, 'Start recording session');
     }
@@ -605,6 +951,7 @@ var BlindfoldSession = BlindfoldSession || {};
     function localAbortStart(detailText) {
       setSlots(null, null);
       lastStartResults = {};
+      resetReadiness();
       phase = CONTROL_PHASE_IDLE;
       setButton('Start', true, detailText, 'Start recording session');
     }
@@ -636,6 +983,16 @@ var BlindfoldSession = BlindfoldSession || {};
       }
       phase = CONTROL_PHASE_STARTING;
       setButton('Starting…', false, null, 'Starting recording session');
+      // 5.6: reset readiness latch; show "waiting" immediately — the
+      // poll refines it once the session is active. (Aborts hide the
+      // badge via resetReadiness.)
+      readinessLatched = false;
+      pageStartEmitted = false;
+      renderReadiness({
+        verdict: READINESS_NOT_READY,
+        reasons: [],
+        blocked: false
+      });
 
       var fieldsHandle = resolveFieldsHandle();
       if (fieldsHandle === false) {
@@ -688,6 +1045,7 @@ var BlindfoldSession = BlindfoldSession || {};
           // category (1.1 RangeError); 1.2.3's "represent unavailable
           // as unknown" applies to conditions, not to the 1.1 metadata
           // category — so Start cannot proceed uncategorized.
+          resetReadiness();
           phase = CONTROL_PHASE_IDLE;
           setButton('Start', true,
             factoriesOk ? 'no-category-selected' : 'record-build-failed',
@@ -724,6 +1082,7 @@ var BlindfoldSession = BlindfoldSession || {};
             // Ensure failed BEFORE any session was minted into a stream:
             // abort without the recorder-side clear (nothing to clear).
             setSlots(null, null);
+            resetReadiness();
             phase = CONTROL_PHASE_IDLE;
             setButton('Start', true, 'ensure-failed:' + reason,
               'Start recording session');
@@ -777,6 +1136,7 @@ var BlindfoldSession = BlindfoldSession || {};
               conditions = BS.buildInitialConditions(selection,
                 fieldsHandle.getDetectedConditions());
             } catch (e) {
+              resetReadiness();
               phase = CONTROL_PHASE_IDLE;
               setButton('Start', true, 'record-build-failed',
                 'Start recording session');
@@ -811,6 +1171,7 @@ var BlindfoldSession = BlindfoldSession || {};
               // Save failed BEFORE the recorder ever saw the session:
               // local reset only (nothing to clear recorder-side).
               setSlots(null, null);
+              resetReadiness();
               phase = CONTROL_PHASE_IDLE;
               setButton('Start', true, 'session-save-failed:' + serr,
                 'Start recording session');
@@ -891,6 +1252,10 @@ var BlindfoldSession = BlindfoldSession || {};
             abortStart('page-start-failed');
             throw { handledAbort: true };
           }
+          // 5.6: the initial event emission was observed — the storage
+          // side of the readiness policy can now honestly confirm the
+          // first acknowledged write (pendingCount drain + no error).
+          pageStartEmitted = true;
           phase = CONTROL_PHASE_ACTIVE;
           setButton('Stop', true, null, 'Stop recording session');
           // 5.3: remembered-defaults capture — fired exactly once per
@@ -989,6 +1354,8 @@ var BlindfoldSession = BlindfoldSession || {};
             setSlots(null, null);
             // The observed start results belong to the ended session.
             lastStartResults = {};
+            // 5.6: readiness resets with the session.
+            resetReadiness();
             phase = CONTROL_PHASE_IDLE;
             setButton('Start', true, null, 'Start recording session');
             // 5.2: the form is re-enabled for the next game. The
@@ -1107,6 +1474,11 @@ var BlindfoldSession = BlindfoldSession || {};
   BlindfoldSession.RECORDER_MSG_ENSURE = MSG_ENSURE;
   BlindfoldSession.RECORDER_MSG_SESSION_SAVE = MSG_SESSION_SAVE;
   BlindfoldSession.classifyStreamStatus = classifyStreamStatus;
+  // 5.6: readiness policy (PLAN.md §5.6).
+  BlindfoldSession.READINESS_READY = READINESS_READY;
+  BlindfoldSession.READINESS_NOT_READY = READINESS_NOT_READY;
+  BlindfoldSession.READINESS_UNKNOWN = READINESS_UNKNOWN;
+  BlindfoldSession.computeReadiness = computeReadiness;
   BlindfoldSession.installSessionControls = installSessionControls;
 })();
 

@@ -620,6 +620,20 @@ describe('AC6 — wiring and diff discipline', () => {
       // 5.5 also evolves the working-tree diff pins in these suites.
       'tests/clock_link.test.js',
       'tests/timecode.test.js',
+      // Honest cumulative evolution: 5.6 (show readiness only after
+      // required media streams have started and an initial storage
+      // write has succeeded) legitimately adds the pure
+      // computeReadiness() policy function + readiness badge
+      // presentation + poll-loop wiring to session_controls.js, adds
+      // its unit/integration tests, and records its evidence; its
+      // files join the allowlists. No new channel messages, events,
+      // stores, or permissions.
+      '.autodev/evidence/5.6.contract.md',
+      '.autodev/evidence/5.6.build.md',
+      // Honest cumulative evolution: 5.6's review/behavior evidence lands
+      // after the pins are evolved (2.x/3.x/4.x/5.1-5.5 precedent).
+      '.autodev/evidence/5.6.review.md',
+      '.autodev/evidence/5.6.behavior.md',
     ]);
     const stray = changed.filter((f) => !allowed.has(f));
     assert.deepEqual(stray, [],
@@ -657,6 +671,32 @@ describe('AC6 — wiring and diff discipline', () => {
       l.includes('factoriesOk') || l.includes('setSlots(null, null)') ||
       l.includes('lastStartResults = {}') || l.includes('return null;') ||
       l.includes('fieldsHandle !== null');
+    // Honest cumulative evolution: 5.6's readiness policy adds the pure
+    // computeReadiness() function, the readiness badge DOM + rendering,
+    // and the poll-loop wiring. Its added lines are 5.6-keyworded or
+    // use the readiness/storage vocabulary.
+    const kw56 = (l) =>
+      l.includes('5.6') || l.includes('readiness') || l.includes('Readiness') ||
+      l.includes('READINESS') || l.includes('computeReadiness') ||
+      l.includes('classifyStorageReadiness') || l.includes('isTransientSenderError') ||
+      l.includes('pageStartEmitted') || l.includes('readinessLatched') ||
+      l.includes('resetReadiness') || l.includes('renderReadiness') ||
+      l.includes('senderStatus') || l.includes('lastError') ||
+      l.includes('pendingCount') || l.includes('storage') ||
+      l.includes('initialEmitObserved') || l.includes('blocked') ||
+      l.includes('verdict') || l.includes('reasons') ||
+      l.includes('send-timeout') || l.includes('no-ack') ||
+      l.includes('transport-error') || l.includes('ready:') ||
+      l.includes('reason:') || l.includes('streamStatuses') ||
+      l.includes('startResults') || l.trim() === 'return {' ||
+      l.trim() === ']);' || l.includes('allStreamsReady') ||
+      l.includes('STREAM_KINDS') || l.includes('var kind =') ||
+      l.includes('st === null') || l.includes('Object.freeze') ||
+      l.includes('throw new TypeError') || l.includes('classified') ||
+      l.includes('dataState') || l.includes('LIGHT_') ||
+      l.trim() === 'continue;' || l.includes('var text;') ||
+      l.includes('text =') || l.includes('opts.sender') ||
+      l.trim().startsWith('return;') || l.trim() === 'text;';
     const removed = diff.split('\n')
       .filter((l) => l.startsWith('-') && !l.startsWith('---'))
       .map((l) => l.slice(1).trim())
@@ -664,7 +704,7 @@ describe('AC6 — wiring and diff discipline', () => {
     const bad55 = added.filter((l) =>
       !(structural(l) || l.includes('onSessionStarted') || l.includes('5.3') ||
         l.trim() === 'extensionVersion: extensionVersion,' ||
-        kw55(l) || removed.includes(l.trim())));
+        kw55(l) || kw56(l) || removed.includes(l.trim())));
     assert.deepEqual(bad55, [], 'unexpected added lines in session_controls.js:\n' + bad55.join('\n'));
     const badRemoved = removed.filter((l) =>
       !(l === 'extensionVersion: extensionVersion' ||

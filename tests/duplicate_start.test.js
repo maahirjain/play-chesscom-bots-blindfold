@@ -629,6 +629,20 @@ describe('AC7 — diff discipline', () => {
       'tests/track_monitor.test.js',
       'tests/visibility.test.js',
       'tests/writer.test.js',
+      // Honest cumulative evolution: 5.6 (show readiness only after
+      // required media streams have started and an initial storage
+      // write has succeeded) legitimately adds the pure
+      // computeReadiness() policy function + readiness badge
+      // presentation + poll-loop wiring to session_controls.js, adds
+      // its unit/integration tests, and records its evidence; its
+      // files join the allowlists. No new channel messages, events,
+      // stores, or permissions.
+      '.autodev/evidence/5.6.contract.md',
+      '.autodev/evidence/5.6.build.md',
+      // Honest cumulative evolution: 5.6's review/behavior evidence lands
+      // after the pins are evolved (2.x/3.x/4.x/5.1-5.5 precedent).
+      '.autodev/evidence/5.6.review.md',
+      '.autodev/evidence/5.6.behavior.md',
     ]);
     for (const f of changed) {
       assert.ok(allowed.has(f), `unexpected modified file: ${f}`);
