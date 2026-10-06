@@ -287,3 +287,32 @@ Consequential engineering decisions with reasoning and evidence. Newest first.
 - **Null gameId = track-but-don't-emit**: gameplay (board, speech)
   works without §5; recording waits for game identities. Honest
   phased-mission seam, not a defect.
+
+## 3.2 design decisions
+
+- **Attempt lifecycle**: `createAttemptTracker` in chess_utils.js —
+  pending → matched | unconfirmed | terminal-at-birth. Emission gated on
+  non-empty sessionId AND gameId via thunks (pre-§5 inert; no dangling
+  half-lifecycles). Matching is FIFO on (from, to, promotion); null
+  eventIds never link (3.2.5 honesty).
+- **First-edit time** (3.2.1): one monotonic timestamp per attempt from
+  the first `input` event; programmatic field clears don't fire `input`.
+  No keystroke contents/counts/timings, ever.
+- **No normalized string stored** (3.2.3): `submittedText` is verbatim;
+  the normalized form is derivable from submittedText + position via the
+  versioned `normalizeMove`.
+- **makeMoveOnBoard returns `true` | DISPATCH_FAILURE_REASONS member**
+  (3.2.4): the five `return false` sites now return their specific
+  reason. Single caller (content.js) updated; Enter handler is async.
+- **3.2.7 — rejected mouse attempts outside guaranteed coverage**:
+  mouse input goes directly to Chess.com's own handlers; the extension
+  observes only the resulting move list (3.1 covers confirmed mouse
+  moves). There is no reliable DOM signal for a *rejected* mouse attempt
+  — no error element or state change observable without speculating from
+  click coordinates (which would be fabrication, violating the mission's
+  honesty rule). Guaranteed coverage: keyboard attempts only. V3 (§7)
+  will audit the live DOM and document findings.
+- **Minor implementation deviation**: `createFirstEditCapture` helper
+  extracted in chess_utils.js (not named in the contract) to make the
+  first-write-wins/reset logic unit-testable; content.js wires it to the
+  input listener.

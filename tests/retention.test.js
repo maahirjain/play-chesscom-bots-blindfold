@@ -237,6 +237,15 @@ describe('AC4 — diff discipline', () => {
       // evolved these pins (2.x precedent).
       '.autodev/evidence/3.1.review.md',
       '.autodev/evidence/3.1.behavior.md',
+      // Honest cumulative evolution: 3.2's planner contract lands
+      // before this task's pins evolve (3.1 precedent).
+      '.autodev/evidence/3.2.contract.md',
+      '.autodev/evidence/3.2.build.md',
+      // Honest cumulative evolution: 3.2's review/behavior evidence
+      // lands after the pins were evolved (2.x/3.1 precedent).
+      '.autodev/evidence/3.2.review.md',
+      '.autodev/evidence/3.2.behavior.md',
+      'tests/attempt_tracker.test.js',
       // This task records the binding §6 export constraint in DECISIONS.md.
       '.autodev/DECISIONS.md',
       // Honest cumulative evolution (2.2–2.8 precedent): earlier tasks'

@@ -24,6 +24,24 @@ BlindfoldSession.SYNC_FAILURE_REASONS = Object.freeze([
   'internal_desync'          // observed history replays clean but internal board diverged
 ]);
 
+// 3.2-owned event vocabulary (1.3 §2.2: each task owns its vocabulary).
+// move input attempts: submit → dispatch → match/unconfirmed lifecycle.
+BlindfoldSession.MOVE_ATTEMPT_EVENT_TYPE = 'move_attempt';
+BlindfoldSession.MOVE_DISPATCH_STARTED_EVENT_TYPE = 'move_dispatch_started';
+BlindfoldSession.MOVE_DISPATCH_FAILED_EVENT_TYPE = 'move_dispatch_failed';
+BlindfoldSession.MOVE_ATTEMPT_MATCHED_EVENT_TYPE = 'move_attempt_matched';
+BlindfoldSession.MOVE_ATTEMPT_UNCONFIRMED_EVENT_TYPE = 'move_attempt_unconfirmed';
+
+// 3.2.4: makeMoveOnBoard failure reasons (frozen). Returned instead of
+// `false`; the single caller (content.js) records them.
+BlindfoldSession.DISPATCH_FAILURE_REASONS = Object.freeze([
+  'move_unparsable',          // parseMoveSquares returned null
+  'board_not_found',          // getBoardElement() returned null
+  'square_coordinates_failed',// squareToXY failed for from or to
+  'promotion_window_timeout', // promotion window never became visible
+  'promotion_choice_missing'  // promotion window visible but no matching choice
+]);
+
 // Cross-module access (Node test pattern): the 1.4 payload factories live
 // on the merged globalThis.BlindfoldSession in tests; in the browser the
 // module-scoped BlindfoldSession IS the global. Read at call time.
@@ -129,15 +147,18 @@ function isMoveLegal(game, move) {
 }
 
 async function makeMoveOnBoard(game, move) {
+    // 3.2.4: returns true on success, otherwise a member of
+    // BlindfoldSession.DISPATCH_FAILURE_REASONS. Single caller: content.js.
+    var REASONS = BlindfoldSession.DISPATCH_FAILURE_REASONS;
     const move_squares = parseMoveSquares(game, move);
-    if (!move_squares) return false;
+    if (!move_squares) return REASONS[0]; // 'move_unparsable'
 
     const board = getBoardElement();
-    if (!board) return false;
+    if (!board) return REASONS[1]; // 'board_not_found'
 
     const fromXY = squareToXY(board, move_squares.from);
     const toXY = squareToXY(board, move_squares.to);
-    if (!fromXY || !toXY) return false;
+    if (!fromXY || !toXY) return REASONS[2]; // 'square_coordinates_failed'
 
     const moving_color = game.turn();
 
@@ -146,12 +167,16 @@ async function makeMoveOnBoard(game, move) {
     clickElementAt(board, toXY.x, toXY.y);
 
     if (move_squares.promotion) {
-        const promotion_handled = await handlePromotionIfNeeded(move_squares.promotion, moving_color);
-        if (!promotion_handled) return false;
+        const promotion_outcome = await handlePromotionIfNeeded(move_squares.promotion, moving_color);
+        if (promotion_outcome !== true) return promotion_outcome;
     }
 
     return true;
 }
+
+// Exported for testability (3.2.4 failure-reason contract); content.js
+// keeps calling the module-local binding.
+BlindfoldSession.makeMoveOnBoard = makeMoveOnBoard;
 
 function parseMoveSquares(game, move) {
     const game_copy = new Chess(game.fen());
@@ -225,14 +250,16 @@ function sleep(ms) {
 }
 
 async function handlePromotionIfNeeded(promotion_letter, moving_color) {
+    // 3.2.4: returns true on success, otherwise the specific
+    // DISPATCH_FAILURE_REASON. Single caller: makeMoveOnBoard.
     if (!promotion_letter) return true;
 
     const promotion_window = await waitForVisiblePromotionWindow();
-    if (!promotion_window) return false;
+    if (!promotion_window) return BlindfoldSession.DISPATCH_FAILURE_REASONS[3]; // 'promotion_window_timeout'
 
     const piece_class = moving_color + promotion_letter;
     const choice = promotion_window.querySelector(`.promotion-piece.${piece_class}`);
-    if (!choice) return false;
+    if (!choice) return BlindfoldSession.DISPATCH_FAILURE_REASONS[4]; // 'promotion_choice_missing'
 
     const choice_rect = choice.getBoundingClientRect();
     const x = choice_rect.left + choice_rect.width / 2;
@@ -853,6 +880,435 @@ function createHistoryTracker(options) {
 }
 
 BlindfoldSession.createHistoryTracker = createHistoryTracker;
+
+// ------------------------------------------------------------------
+// Task 3.2: 3.2-owned payload validators (exact keys, per 1.3 §2.2).
+// TypeError = wrong type/shape; RangeError = bad domain value.
+// ------------------------------------------------------------------
+
+function requireExactKeys(obj, keys, what) {
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
+    throw new TypeError(what + ' must be a plain object');
+  }
+  var actual = Object.keys(obj).sort();
+  var expected = keys.slice().sort();
+  if (actual.length !== expected.length ||
+      actual.some(function (k, i) { return k !== expected[i]; })) {
+    throw new TypeError(what + ' must have exactly the keys: ' + expected.join(', '));
+  }
+  return obj;
+}
+
+function requireUuidV4(value, what) {
+  if (typeof value !== 'string' || !UUID_V4_RE_31.test(value)) {
+    throw new TypeError(what + ' must be a uuid-v4 string');
+  }
+  return value;
+}
+
+function requireValidMoveAttemptPayload(payload) {
+  requireExactKeys(payload, ['submittedText', 'firstEditMonotonicMs', 'validation'],
+    'move_attempt payload');
+  if (typeof payload.submittedText !== 'string') {
+    throw new TypeError('move_attempt payload.submittedText must be a string');
+  }
+  if (payload.firstEditMonotonicMs !== null &&
+      typeof payload.firstEditMonotonicMs !== 'number') {
+    throw new TypeError('move_attempt payload.firstEditMonotonicMs must be a number or null');
+  }
+  if (payload.validation !== 'legal' && payload.validation !== 'illegal') {
+    throw new RangeError("move_attempt payload.validation must be 'legal' or 'illegal'");
+  }
+  return payload;
+}
+
+function requireValidDispatchFailedPayload(payload) {
+  requireExactKeys(payload, ['failureReason'], 'move_dispatch_failed payload');
+  if (BlindfoldSession.DISPATCH_FAILURE_REASONS.indexOf(payload.failureReason) === -1) {
+    throw new RangeError('move_dispatch_failed payload.failureReason must be a member of DISPATCH_FAILURE_REASONS');
+  }
+  return payload;
+}
+
+function requireValidDispatchStartedRefs(refs) {
+  requireExactKeys(refs, ['attemptEventId'], 'move_dispatch_started refs');
+  requireUuidV4(refs.attemptEventId, 'move_dispatch_started refs.attemptEventId');
+  return refs;
+}
+
+function requireValidDispatchFailedRefs(refs) {
+  requireExactKeys(refs, ['attemptEventId', 'dispatchStartedEventId'],
+    'move_dispatch_failed refs');
+  requireUuidV4(refs.attemptEventId, 'move_dispatch_failed refs.attemptEventId');
+  // dispatchStartedEventId may be null when the start event itself could
+  // not be emitted (dormant tracker); otherwise a uuid-v4 string.
+  if (refs.dispatchStartedEventId !== null) {
+    requireUuidV4(refs.dispatchStartedEventId,
+      'move_dispatch_failed refs.dispatchStartedEventId');
+  }
+  return refs;
+}
+
+function requireValidAttemptMatchedRefs(refs) {
+  requireExactKeys(refs, ['attemptEventId', 'confirmedMoveEventId'],
+    'move_attempt_matched refs');
+  requireUuidV4(refs.attemptEventId, 'move_attempt_matched refs.attemptEventId');
+  requireUuidV4(refs.confirmedMoveEventId,
+    'move_attempt_matched refs.confirmedMoveEventId');
+  return refs;
+}
+
+function requireValidAttemptUnconfirmedPayload(payload) {
+  requireExactKeys(payload, ['reason'], 'move_attempt_unconfirmed payload');
+  if (payload.reason !== 'timeout' && payload.reason !== 'pagehide' &&
+      payload.reason !== 'game_reset') {
+    throw new RangeError("move_attempt_unconfirmed payload.reason must be 'timeout', 'pagehide', or 'game_reset'");
+  }
+  return payload;
+}
+
+function requireValidAttemptUnconfirmedRefs(refs) {
+  requireExactKeys(refs, ['attemptEventId'], 'move_attempt_unconfirmed refs');
+  requireUuidV4(refs.attemptEventId, 'move_attempt_unconfirmed refs.attemptEventId');
+  return refs;
+}
+
+BlindfoldSession.requireValidMoveAttemptPayload = requireValidMoveAttemptPayload;
+BlindfoldSession.requireValidDispatchFailedPayload = requireValidDispatchFailedPayload;
+BlindfoldSession.requireValidDispatchStartedRefs = requireValidDispatchStartedRefs;
+BlindfoldSession.requireValidDispatchFailedRefs = requireValidDispatchFailedRefs;
+BlindfoldSession.requireValidAttemptMatchedRefs = requireValidAttemptMatchedRefs;
+BlindfoldSession.requireValidAttemptUnconfirmedPayload = requireValidAttemptUnconfirmedPayload;
+BlindfoldSession.requireValidAttemptUnconfirmedRefs = requireValidAttemptUnconfirmedRefs;
+
+// ------------------------------------------------------------------
+// Task 3.2: createFirstEditCapture — 3.2.1 first-edit timestamp.
+//
+// One monotonic timestamp per submit attempt: the first `input` event
+// sets it; later inputs before submit do not overwrite; submit snapshots
+// and resets. Only the timestamp is retained — no keystroke contents,
+// counts, or inter-key timings. DOM-free; content.js wires it to the
+// input listener.
+// ------------------------------------------------------------------
+
+function createFirstEditCapture(nowFn) {
+  if (typeof nowFn !== 'function') {
+    throw new TypeError('createFirstEditCapture nowFn must be a function');
+  }
+  var firstEdit = null;
+  return {
+    onInput: function () {
+      if (firstEdit === null) {
+        firstEdit = nowFn();
+      }
+    },
+    onSubmit: function () {
+      var v = firstEdit;
+      firstEdit = null;
+      return v;
+    },
+    peek: function () {
+      return firstEdit;
+    }
+  };
+}
+
+BlindfoldSession.createFirstEditCapture = createFirstEditCapture;
+
+// ------------------------------------------------------------------
+// Task 3.2: createAttemptTracker — move-input attempt lifecycle.
+//
+// DOM-free state machine: submitAttempt → pending → noteConfirmedMoves
+// matches it to a 3.1 confirmed move (move_attempt_matched), or the
+// attempt goes unconfirmed (timeout / pagehide / game_reset), or it is
+// terminal at birth (illegal at submit, unparsable, dispatch failed).
+//
+// Emission gate (2.7/3.1 §5-seam precedent): every emit path requires
+// getSessionId() and getGameId() to return non-empty strings; otherwise
+// the tracker is inert (no events, no timers). Thunks (not
+// construction-time values) so §5 can set the IDs later without
+// recreating the tracker.
+//
+// Matching is FIFO on (from, to, promotion) against the 3.1 tracker's
+// confirmed entries; entries with null eventId cannot be linked honestly
+// and are skipped. Absence of confirmation is never recorded as illegal
+// (3.2.6).
+// ------------------------------------------------------------------
+
+function createAttemptTracker(options) {
+  if (!options || typeof options !== 'object' || Array.isArray(options)) {
+    throw new TypeError('createAttemptTracker options must be an object');
+  }
+  var emitEvent = options.emitEvent;
+  if (typeof emitEvent !== 'function') {
+    throw new TypeError('createAttemptTracker emitEvent must be a function');
+  }
+  var getSessionId = options.getSessionId;
+  if (typeof getSessionId !== 'function') {
+    throw new TypeError('createAttemptTracker getSessionId must be a function');
+  }
+  var getGameId = options.getGameId;
+  if (typeof getGameId !== 'function') {
+    throw new TypeError('createAttemptTracker getGameId must be a function');
+  }
+  var unconfirmedTimeoutMs = options.unconfirmedTimeoutMs === undefined
+    ? 30000 : options.unconfirmedTimeoutMs;
+  if (!Number.isInteger(unconfirmedTimeoutMs) || unconfirmedTimeoutMs < 1) {
+    throw new TypeError('createAttemptTracker unconfirmedTimeoutMs must be a positive integer');
+  }
+  var setTimeoutFn = options.setTimeoutFn === undefined
+    ? function (fn, ms) { return globalThis.setTimeout(fn, ms); }
+    : options.setTimeoutFn;
+  var clearTimeoutFn = options.clearTimeoutFn === undefined
+    ? function (id) { return globalThis.clearTimeout(id); }
+    : options.clearTimeoutFn;
+  if (typeof setTimeoutFn !== 'function' || typeof clearTimeoutFn !== 'function') {
+    throw new TypeError('createAttemptTracker setTimeoutFn/clearTimeoutFn must be functions');
+  }
+
+  var BS = BlindfoldSession;
+
+  // Pending attempts, FIFO by submission order.
+  // {attemptEventId, from, to, promotion, timerId}
+  var pending = [];
+
+  function isActive() {
+    var sid = getSessionId();
+    var gid = getGameId();
+    return typeof sid === 'string' && sid !== '' &&
+           typeof gid === 'string' && gid !== '';
+  }
+
+  function eventIdOf(result) {
+    return (result && typeof result.eventId === 'string') ? result.eventId : null;
+  }
+
+  function findPending(attemptEventId) {
+    for (var i = 0; i < pending.length; i++) {
+      if (pending[i].attemptEventId === attemptEventId) return i;
+    }
+    return -1;
+  }
+
+  function dropPending(attemptEventId) {
+    var i = findPending(attemptEventId);
+    if (i === -1) return null;
+    var p = pending[i];
+    pending.splice(i, 1);
+    try {
+      clearTimeoutFn(p.timerId);
+    } catch (e) {
+      // Timer cleanup is best-effort; the attempt is dropped regardless.
+    }
+    return p;
+  }
+
+  function submitAttempt(input) {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) {
+      throw new TypeError('submitAttempt input must be an object');
+    }
+    var submittedText = input.submittedText;
+    var firstEditMonotonicMs = input.firstEditMonotonicMs === undefined
+      ? null : input.firstEditMonotonicMs;
+    var validation = input.validation;
+    var from = input.from === undefined ? null : input.from;
+    var to = input.to === undefined ? null : input.to;
+    var promotion = input.promotion === undefined ? null : input.promotion;
+
+    if (typeof submittedText !== 'string') {
+      throw new TypeError('submitAttempt submittedText must be a string');
+    }
+    if (firstEditMonotonicMs !== null && typeof firstEditMonotonicMs !== 'number') {
+      throw new TypeError('submitAttempt firstEditMonotonicMs must be a number or null');
+    }
+    if (validation !== 'legal' && validation !== 'illegal') {
+      throw new RangeError("submitAttempt validation must be 'legal' or 'illegal'");
+    }
+    for (var k = 0; k < 3; k++) {
+      var sq = [from, to, promotion][k];
+      if (sq !== null && typeof sq !== 'string') {
+        throw new TypeError('submitAttempt from/to/promotion must be strings or null');
+      }
+    }
+
+    if (!isActive()) {
+      return null;
+    }
+
+    var payload = requireValidMoveAttemptPayload({
+      submittedText: submittedText,
+      firstEditMonotonicMs: firstEditMonotonicMs,
+      validation: validation
+    });
+    var attemptEventId = eventIdOf(emitEvent(BS.MOVE_ATTEMPT_EVENT_TYPE, payload, null));
+
+    // Terminal at birth (3.2.6): illegal-at-submit and unparsable
+    // attempts have known outcomes — no timer, no unconfirmed event.
+    if (validation === 'legal' && from !== null && to !== null) {
+      var timerId = setTimeoutFn(function () {
+        onAttemptTimeout(attemptEventId);
+      }, unconfirmedTimeoutMs);
+      pending.push({
+        attemptEventId: attemptEventId,
+        from: from,
+        to: to,
+        promotion: promotion,
+        timerId: timerId
+      });
+    }
+    return { attemptEventId: attemptEventId };
+  }
+
+  function onAttemptTimeout(attemptEventId) {
+    var p = dropPending(attemptEventId);
+    if (p === null) {
+      return;
+    }
+    if (!isActive()) {
+      return;
+    }
+    emitEvent(
+      BS.MOVE_ATTEMPT_UNCONFIRMED_EVENT_TYPE,
+      requireValidAttemptUnconfirmedPayload({ reason: 'timeout' }),
+      requireValidAttemptUnconfirmedRefs({ attemptEventId: attemptEventId })
+    );
+  }
+
+  function noteDispatchStarted(attemptEventId) {
+    if (typeof attemptEventId !== 'string') {
+      throw new TypeError('noteDispatchStarted attemptEventId must be a string');
+    }
+    if (!isActive()) {
+      return null;
+    }
+    var dispatchEventId = eventIdOf(emitEvent(
+      BS.MOVE_DISPATCH_STARTED_EVENT_TYPE,
+      {},
+      requireValidDispatchStartedRefs({ attemptEventId: attemptEventId })
+    ));
+    return { dispatchEventId: dispatchEventId };
+  }
+
+  function noteDispatchFailed(attemptEventId, dispatchEventId, failureReason) {
+    if (typeof attemptEventId !== 'string') {
+      throw new TypeError('noteDispatchFailed attemptEventId must be a string');
+    }
+    if (BS.DISPATCH_FAILURE_REASONS.indexOf(failureReason) === -1) {
+      throw new RangeError('noteDispatchFailed failureReason must be a member of DISPATCH_FAILURE_REASONS');
+    }
+    // Terminal: the attempt leaves pending (3.2.6) — the failure is the
+    // known outcome, not an unconfirmed limbo.
+    dropPending(attemptEventId);
+    if (!isActive()) {
+      return null;
+    }
+    var failedEventId = eventIdOf(emitEvent(
+      BS.MOVE_DISPATCH_FAILED_EVENT_TYPE,
+      requireValidDispatchFailedPayload({ failureReason: failureReason }),
+      requireValidDispatchFailedRefs({
+        attemptEventId: attemptEventId,
+        dispatchStartedEventId: dispatchEventId === undefined ? null : dispatchEventId
+      })
+    ));
+    return { eventId: failedEventId };
+  }
+
+  function noteConfirmedMoves(confirmedEntries) {
+    if (!Array.isArray(confirmedEntries)) {
+      throw new TypeError('noteConfirmedMoves confirmedEntries must be an array');
+    }
+    var matched = [];
+    if (!isActive()) {
+      return matched;
+    }
+    for (var i = 0; i < confirmedEntries.length; i++) {
+      var entry = confirmedEntries[i];
+      if (!entry || typeof entry !== 'object') {
+        continue;
+      }
+      // Null eventId: cannot link honestly (3.2.5) — skip.
+      if (entry.eventId === null || entry.eventId === undefined) {
+        continue;
+      }
+      for (var j = 0; j < pending.length; j++) {
+        var p = pending[j];
+        if (p.from === entry.from && p.to === entry.to &&
+            p.promotion === entry.promotion) {
+          dropPending(p.attemptEventId);
+          emitEvent(
+            BS.MOVE_ATTEMPT_MATCHED_EVENT_TYPE,
+            {},
+            requireValidAttemptMatchedRefs({
+              attemptEventId: p.attemptEventId,
+              confirmedMoveEventId: entry.eventId
+            })
+          );
+          matched.push({
+            attemptEventId: p.attemptEventId,
+            confirmedMoveEventId: entry.eventId
+          });
+          break;
+        }
+      }
+    }
+    return matched;
+  }
+
+  function markPendingUnconfirmed(reason) {
+    var marked = [];
+    while (pending.length > 0) {
+      var p = pending.shift();
+      try {
+        clearTimeoutFn(p.timerId);
+      } catch (e) {
+        // Best-effort.
+      }
+      marked.push(p.attemptEventId);
+      if (isActive()) {
+        try {
+          emitEvent(
+            BS.MOVE_ATTEMPT_UNCONFIRMED_EVENT_TYPE,
+            requireValidAttemptUnconfirmedPayload({ reason: reason }),
+            requireValidAttemptUnconfirmedRefs({ attemptEventId: p.attemptEventId })
+          );
+        } catch (e) {
+          // 3.2 review SF-1 (NOTE-5): an emit throw must not abort the
+          // loop — remaining pending attempts still get marked.
+        }
+      }
+    }
+    return marked;
+  }
+
+  function handleGameReset() {
+    return markPendingUnconfirmed('game_reset');
+  }
+
+  function handlePageHide() {
+    // Best-effort (2.7 philosophy): never throws into page code.
+    try {
+      return markPendingUnconfirmed('pagehide');
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function pendingCount() {
+    return pending.length;
+  }
+
+  return {
+    submitAttempt: submitAttempt,
+    noteDispatchStarted: noteDispatchStarted,
+    noteDispatchFailed: noteDispatchFailed,
+    noteConfirmedMoves: noteConfirmedMoves,
+    handleGameReset: handleGameReset,
+    handlePageHide: handlePageHide,
+    pendingCount: pendingCount
+  };
+}
+
+BlindfoldSession.createAttemptTracker = createAttemptTracker;
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = BlindfoldSession;

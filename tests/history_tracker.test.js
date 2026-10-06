@@ -504,15 +504,13 @@ describe('AC12 — malformed observations', () => {
 // ------------------------------------------------------------------
 describe('AC13 — diff discipline', () => {
   it('chess_utils.js: tracker added, observeMoves content-compare, updateGame removed', () => {
-    const diff = execSync('git diff HEAD -- chess_utils.js', { cwd: ROOT }).toString();
-    assert.ok(diff.includes('createHistoryTracker'), 'tracker added');
-    assert.ok(diff.includes('halfMovesEqual'), 'content comparison added');
-    assert.ok(!/function updateGame/.test(
-      fs.readFileSync(path.join(ROOT, 'chess_utils.js'), 'utf8')),
-      'updateGame removed');
-    // Untouched helpers byte-identical in the working tree vs the diff:
-    // check normalizeMove/isMoveLegal/board-click/piece-set bodies survive.
+    // Durable content assertions (converted from the transient
+    // `git diff HEAD` form after the 3.1 commit — 2.8 precedent).
     const src = fs.readFileSync(path.join(ROOT, 'chess_utils.js'), 'utf8');
+    assert.ok(src.includes('createHistoryTracker'), 'tracker added');
+    assert.ok(src.includes('halfMovesEqual'), 'content comparison added');
+    assert.ok(!/function updateGame/.test(src), 'updateGame removed');
+    // Untouched helpers survive: normalizeMove/isMoveLegal/board-click/piece-set.
     assert.ok(src.includes('function normalizeMove'), 'normalizeMove present');
     assert.ok(src.includes('function isMoveLegal'), 'isMoveLegal present');
     assert.ok(src.includes('function makeMoveOnBoard'), 'makeMoveOnBoard present');
@@ -520,14 +518,11 @@ describe('AC13 — diff discipline', () => {
   });
 
   it('content.js wiring is the §2.9 block only', () => {
-    const diff = execSync('git diff HEAD -- content.js', { cwd: ROOT }).toString();
-    const added = diff.split('\n').filter((l) => l.startsWith('+') && !l.startsWith('+++'));
-    const removed = diff.split('\n').filter((l) => l.startsWith('-') && !l.startsWith('---'));
-    assert.ok(added.some((l) => l.includes('createHistoryTracker')), 'tracker wiring added');
-    assert.ok(removed.some((l) => l.includes('game_half_move_count')), 'counter removed');
-    assert.ok(removed.some((l) => l.includes('updateGame')), 'updateGame call removed');
-    assert.ok(!/updateGame\(/.test(fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8')),
-      'no updateGame references remain');
+    // Durable content assertions (converted from the transient
+    // `git diff HEAD` form after the 3.1 commit — 2.8 precedent).
+    const src = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
+    assert.ok(src.includes('createHistoryTracker'), 'tracker wiring present');
+    assert.ok(!/updateGame\(/.test(src), 'no updateGame references remain');
   });
 
   it('no other product files modified (git status allowlist)', () => {
@@ -556,7 +551,16 @@ describe('AC13 — diff discipline', () => {
       // behavioral verification evidence land after the builder
       // evolved these pins (2.x precedent).
       '.autodev/evidence/3.1.review.md',
-      '.autodev/evidence/3.1.behavior.md'
+      '.autodev/evidence/3.1.behavior.md',
+      // Honest cumulative evolution: 3.2's planner contract lands
+      // before this task's pins evolve (3.1 precedent).
+      '.autodev/evidence/3.2.contract.md',
+      '.autodev/evidence/3.2.build.md',
+      // Honest cumulative evolution: 3.2's review/behavior evidence
+      // lands after the pins were evolved (2.x/3.1 precedent).
+      '.autodev/evidence/3.2.review.md',
+      '.autodev/evidence/3.2.behavior.md',
+      'tests/attempt_tracker.test.js',
     ]);
     for (const f of changed) {
       assert.ok(allowed.has(f), `unexpected modified file: ${f}`);

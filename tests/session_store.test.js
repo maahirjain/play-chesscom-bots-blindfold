@@ -655,6 +655,15 @@ describe('AC9 — diff discipline', () => {
       // evolved these pins (2.x precedent).
       '.autodev/evidence/3.1.review.md',
       '.autodev/evidence/3.1.behavior.md',
+      // Honest cumulative evolution: 3.2's planner contract lands
+      // before this task's pins evolve (3.1 precedent).
+      '.autodev/evidence/3.2.contract.md',
+      '.autodev/evidence/3.2.build.md',
+      // Honest cumulative evolution: 3.2's review/behavior evidence
+      // lands after the pins were evolved (2.x/3.1 precedent).
+      '.autodev/evidence/3.2.review.md',
+      '.autodev/evidence/3.2.behavior.md',
+      'tests/attempt_tracker.test.js',
       'tests/db.test.js',
       'tests/manifest_sw.test.js',
       'tests/sender.test.js',

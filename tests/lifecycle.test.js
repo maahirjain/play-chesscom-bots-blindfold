@@ -1034,6 +1034,15 @@ describe('AC15 — diff discipline', () => {
       // evolved these pins (2.x precedent).
       '.autodev/evidence/3.1.review.md',
       '.autodev/evidence/3.1.behavior.md',
+      // Honest cumulative evolution: 3.2's planner contract lands
+      // before this task's pins evolve (3.1 precedent).
+      '.autodev/evidence/3.2.contract.md',
+      '.autodev/evidence/3.2.build.md',
+      // Honest cumulative evolution: 3.2's review/behavior evidence
+      // lands after the pins were evolved (2.x/3.1 precedent).
+      '.autodev/evidence/3.2.review.md',
+      '.autodev/evidence/3.2.behavior.md',
+      'tests/attempt_tracker.test.js',
       // Honest cumulative evolution (2.2–2.6 precedent): earlier tasks'
       // suites pin files 2.7 legitimately touches, so their pins evolve
       // in this task's commit.
