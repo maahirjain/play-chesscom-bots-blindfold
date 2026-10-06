@@ -249,8 +249,12 @@
       ]
     },
     "2.6": {
-      "commit": null,
-      "status": "PENDING"
+      "status": "complete",
+      "sha": "e47b5c3",
+      "suite": "352/352",
+      "harnesses": "sw-restart/sw-writer/sw-retry/sw-load/sw-db/sw-sender PASS",
+      "review": "APPROVE_WITH_DEFECTS -> SF-1 repaired -> re-review APPROVE",
+      "behavior": "BEHAVIOR_VERIFIED"
     },
     "2.7": {
       "commit": null,
@@ -469,5 +473,7 @@
       "status": "PENDING"
     }
   },
-  "working_branch": "autodev/logging-instrumentation"
+  "working_branch": "autodev/logging-instrumentation",
+  "current_task": "2.7",
+  "last_updated": "2026-10-06T10:38:00Z"
 }
