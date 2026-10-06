@@ -85,7 +85,7 @@
   "tasks": {
     "1.1": {
       "status": "DONE",
-      "commit": null,
+      "commit": "4ea52c7",
       "verification": "V1 PASS (30/30 node --test, 2 independent reviews); V2/V3/V4 N/A",
       "deferred": [
         "AC4 -> 5.1/5.5",
