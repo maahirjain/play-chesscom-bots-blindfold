@@ -1,7 +1,9 @@
 <!DOCTYPE html>
-<!-- recorder.html — task 4.1 (PLAN.md §4.1).
+<!-- recorder.html — task 4.1 (PLAN.md §4.1) + task 4.2 (PLAN.md §4.2).
      MV3 offscreen document: the extension's dedicated recording context.
-     Loads recorder.js only. Created by the service worker via
+     Loads event_envelope.js (envelope construction for the 4.2 events),
+     device_selection.js (4.2 microphone selection/permission), then
+     recorder.js. Created by the service worker via
      chrome.offscreen.createDocument(); never opened by the user. -->
 <html>
 <head>
@@ -9,6 +11,8 @@
   <title>Blindfold Session Recorder</title>
 </head>
 <body>
+  <script src="event_envelope.js"></script>
+  <script src="device_selection.js"></script>
   <script src="recorder.js"></script>
 </body>
 </html>

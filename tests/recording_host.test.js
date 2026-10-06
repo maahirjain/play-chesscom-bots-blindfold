@@ -468,11 +468,20 @@ describe('AC2 — manifest permission change', () => {
   });
 
   it('no other permission change vs the 4.1 parent commit', () => {
-    const headRaw = execSync('git show HEAD:manifest.json', { cwd: REPO }).toString();
-    const head = JSON.parse(headRaw);
-    assert.ok(!('permissions' in head), 'parent had no permissions key');
+    // Honest cumulative evolution (4.2): the 4.1-era "vs parent commit"
+    // comparison is stale now that HEAD is the 4.1 commit itself (which
+    // legitimately added "offscreen"). The durable 4.2 assertion is
+    // simpler and stronger: 4.2 makes NO manifest changes — permissions
+    // remain exactly ["offscreen"], no host_permissions. (Chrome needs no
+    // manifest permission for extension getUserMedia audio; the runtime
+    // prompt is the permission. The persisted mic selection lives in the
+    // offscreen document's localStorage — offscreen documents expose only
+    // chrome.runtime, so chrome.storage is unavailable there regardless
+    // of the manifest; see 4.2.build.md.)
+    assert.deepStrictEqual(manifest.permissions, ['offscreen']);
     assert.ok(!('host_permissions' in manifest), 'no host_permissions');
-    assert.ok(!('host_permissions' in head), 'parent had none either');
+    const diff = execSync('git diff HEAD -- manifest.json', { cwd: REPO }).toString().trim();
+    assert.strictEqual(diff, '', '4.2 must not touch manifest.json');
   });
 });
 
@@ -508,6 +517,18 @@ describe('AC6 — diff discipline', () => {
       // evidence lands after the pins were evolved (2.x/3.x precedent).
       '.autodev/evidence/4.1.review.md',
       '.autodev/evidence/4.1.behavior.md',
+      // Honest cumulative evolution: 4.2 (microphone selection and
+      // permission handling) legitimately adds device_selection.js, routes
+      // the five mic commands through recorder.js/recorder.html, and adds
+      // its test + evidence; its files join the allowlists.
+      'device_selection.js',
+      'tests/device_selection.test.js',
+      '.autodev/evidence/4.2.contract.md',
+      '.autodev/evidence/4.2.build.md',
+      // Honest cumulative evolution: 4.2's review/behavior evidence lands
+      // after the pins were evolved (2.x/3.x/4.1 precedent).
+      '.autodev/evidence/4.2.review.md',
+      '.autodev/evidence/4.2.behavior.md',
       '.autodev/DECISIONS.md',
       // Cumulative evolution: earlier suites' diff-discipline allowlists are
       // evolved by this task with justification comments.

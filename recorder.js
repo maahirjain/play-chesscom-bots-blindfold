@@ -13,6 +13,16 @@
 // logging, 4.10 segment IDs, 4.11 sync marker, 4.12 timecode, 4.13 Stop
 // finalization, 4.14 per-stream status are later tasks; 5.1 owns the UI).
 //
+// 4.2 (PLAN.md §4.2): microphone selection and permission handling. The
+// recorder instantiates device_selection.js's createDeviceSelector
+// (kind 'audioinput'; 4.4 will add 'videoinput') and routes five new
+// recorder-channel messages to it. The selector is purely reactive — §5's
+// UI drives it; recording_host.js gains no 4.2 behavior. The recorder
+// also owns the session seam (recorder-set-session) and the session-gated
+// event emitter that carries the 4.2 events to the existing writer intake
+// ({kind:'event', event} direct from this document — no relay, no new
+// pipeline, per 4.1 §3).
+//
 // Dependency-free classic script → guarded BlindfoldSession global → IIFE
 // 'use strict' → Node module.exports shim (repo house convention).
 //
@@ -21,12 +31,27 @@
 //   offscreen → SW : 'recorder-ready' { bootId, bootTime }
 //   SW → offscreen : 'recorder-ping'  {}
 //   offscreen → SW : 'recorder-pong'  { ok, bootId, state, nowMonotonicMs }
+//   SW → offscreen : 'recorder-set-session' { sessionId, gameId }
+//                    → { ok } (both null clears; re-arms inertness)
+//   SW → offscreen : 'mic-list-devices' {}
+//                    → { ok, devices: [{ deviceId, label, kind }] }
+//   SW → offscreen : 'mic-select' { deviceId }
+//                    → { ok, selection } | { ok:false, error }
+//   SW → offscreen : 'mic-request-permission' {}
+//                    → { ok, permissionState, errorName }
+//   SW → offscreen : 'mic-get-state' {}
+//                    → { ok, selection, permissionState, devicesEnumeratedAt }
+// Command responses are plain {ok,...} objects (no envelope) — the
+// request's sendMessage promise correlates them.
 // 'recorder-pong'.nowMonotonicMs is a performance.now() reading — the hook
 // later tasks (4.10/4.12) use for clock-anchor alignment.
 //
 // Error conventions (AGENTS.md): TypeError = wrong type/shape;
 // RangeError = bad domain value; plain Error = unavailable platform
 // capability (e.g. no crypto.randomUUID — never a weak fallback).
+// Channel handlers are failure-isolated (3.2 SF-1 precedent): a throwing
+// selector never breaks the message listener and never drops a liveness
+// pong — every command answers {ok:false, error} instead of throwing.
 
 var BlindfoldSession = BlindfoldSession || {};
 
@@ -45,6 +70,20 @@ var BlindfoldSession = BlindfoldSession || {};
   var MSG_READY = 'recorder-ready';
   var MSG_PING = 'recorder-ping';
   var MSG_PONG = 'recorder-pong';
+
+  // 4.2 command names (PLAN.md §4.2). 4.4 will add the camera_* set.
+  var MSG_SET_SESSION = 'recorder-set-session';
+  var MSG_MIC_LIST = 'mic-list-devices';
+  var MSG_MIC_SELECT = 'mic-select';
+  var MSG_MIC_PERMISSION = 'mic-request-permission';
+  var MSG_MIC_STATE = 'mic-get-state';
+
+  // Source context stamped on every event this document emits (1.3's
+  // SOURCE_CONTEXTS already includes 'recording_context').
+  var RECORDER_SOURCE_CONTEXT = 'recording_context';
+
+  // Writer-intake message kind (2.3/2.4 contract): { kind:'event', event }.
+  var WRITER_MESSAGE_KIND = 'event';
 
   var UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -118,6 +157,17 @@ var BlindfoldSession = BlindfoldSession || {};
   //                new Date().toISOString())
   //   announce   — default true: send recorder-ready on construction.
   //                Node tests pass false and drive announceReady() manually.
+  //   deviceSelector — optional injected microphone selector (4.2). When
+  //                absent, the real createDeviceSelector({kind:'audioinput'})
+  //                is constructed (Node tests inject a fake to test
+  //                routing in isolation).
+  //   mediaDevices / storage / permissions — optional pass-throughs for
+  //                the internally constructed selector (4.2 testability;
+  //                the selector's own read*() fallbacks apply when
+  //                absent).
+  //   selectorClock — optional () => UTC ISO string for the selector's
+  //                devicesEnumeratedAt (testability; defaults to the real
+  //                clock like nowUtcIso).
   function createOffscreenRecorder(opts) {
     var o = opts || {};
     var chromeNs = o.chromeNs === undefined ? readChromeNs() : o.chromeNs;
@@ -127,6 +177,21 @@ var BlindfoldSession = BlindfoldSession || {};
 
     var bootId = newUuidV4();
     var bootTime = nowUtcIso();
+
+    // 4.2 session seam. Set by 'recorder-set-session' (§5 drives it at
+    // Start/Stop); both null clears and re-arms inertness. Until a session
+    // is set, the 4.2 event emitter is inert (2.x/3.x pre-§5 precedent).
+    var sessionId = null;
+    var gameId = null;
+
+    // Per-document event emission state: one clock anchor (lazy), one
+    // sourceSeq counter, and the set of sessionIds already anchored —
+    // the sender.js (2.3) lazy-anchor pattern, minus the queue/retry
+    // (4.2's volume is a handful of events per session; sends are
+    // ack-observed, never silently dropped).
+    var anchor = null;
+    var nextSourceSeq = 0;
+    var anchoredSessions = {};
 
     function readChromeNs() {
       var g = (typeof globalThis !== 'undefined') ? globalThis : null;
@@ -201,6 +266,18 @@ var BlindfoldSession = BlindfoldSession || {};
         } catch (e) { /* channel closed; nothing more to do */ }
         return false; // response already sent synchronously
       }
+      // 4.2 commands. Each handler is failure-isolated: a throwing
+      // selector becomes {ok:false} data, never a broken listener and
+      // never a dropped liveness pong (3.2 SF-1 precedent).
+      if (message.msg === MSG_SET_SESSION) {
+        return handleSetSession(message, sendResponse);
+      }
+      if (message.msg === MSG_MIC_LIST ||
+          message.msg === MSG_MIC_SELECT ||
+          message.msg === MSG_MIC_PERMISSION ||
+          message.msg === MSG_MIC_STATE) {
+        return handleMicCommand(message, sendResponse);
+      }
       return false; // unknown msg: ignore, no response
     }
 
@@ -214,6 +291,301 @@ var BlindfoldSession = BlindfoldSession || {};
       return true;
     }
 
+    // ----------------------------------------------------------------
+    // 4.2: session-gated event emission to the existing writer intake.
+    // ----------------------------------------------------------------
+
+    function isSessionActive() {
+      return typeof sessionId === 'string' && sessionId !== '' &&
+             typeof gameId === 'string' && gameId !== '';
+    }
+
+    // The clock anchor is captured lazily at first emission (not at
+    // construction) so a recorder that never emits never needs the clock
+    // — and so 4.1's boot/ping paths stay clock-independent.
+    function ensureAnchor() {
+      if (anchor === null) {
+        var BS = shared();
+        if (typeof BS.captureClockAnchor !== 'function') {
+          throw new Error('recorder: captureClockAnchor is unavailable');
+        }
+        anchor = BS.captureClockAnchor();
+      }
+      return anchor;
+    }
+
+    // Send one envelope to the SW's transactional writer intake
+    // ({kind:'event', event}, the 2.3/2.4 contract). Ack-observed: a
+    // missing or negative ack is console.warned, never thrown and never
+    // silently dropped (4.2 has no retry queue — 2.5's lives in the
+    // content-script sender; the warn is the observable trace).
+    function sendEventMessage(envelope) {
+      var runtime = runtimeOf();
+      if (!runtime || typeof runtime.sendMessage !== 'function') {
+        return false;
+      }
+      try {
+        var sent = runtime.sendMessage({ kind: WRITER_MESSAGE_KIND, event: envelope });
+        if (sent && typeof sent.then === 'function') {
+          sent.then(function (ack) {
+            if (!ack || ack.ok !== true || ack.eventId !== envelope.eventId) {
+              try {
+                console.warn('[recorder] event not acknowledged by writer',
+                  envelope.eventId, ack);
+              } catch (w) { /* ignore */ }
+            }
+          }, function () {
+            try {
+              console.warn('[recorder] event send to writer failed', envelope.eventId);
+            } catch (w) { /* ignore */ }
+          });
+        }
+        return true;
+      } catch (e) {
+        return false;
+      }
+    }
+
+    // The emitter the device selector calls: (eventType, payload, refs).
+    // Returns the built envelope, or null when inert (no session). Throws
+    // on envelope-build failure (e.g. a non-uuid sessionId) — the channel
+    // handler converts it to {ok:false}, so the failure is observable,
+    // never silent. §5 must mint uuid-v4 session/game ids (3.x
+    // carry-forward).
+    function emitRecorderEvent(eventType, payload, refs) {
+      if (!isSessionActive()) {
+        return null;
+      }
+      var BS = shared();
+      var monotonicMs = perfNowMs();
+      var a = ensureAnchor();
+      if (!anchoredSessions[sessionId]) {
+        var anchorEvent = BS.createAnchorEvent({
+          sessionId: sessionId,
+          sourceContext: RECORDER_SOURCE_CONTEXT,
+          sourceSeq: nextSourceSeq++,
+          anchor: a
+        });
+        anchoredSessions[sessionId] = true;
+        sendEventMessage(anchorEvent);
+      }
+      var envelope = BS.createEvent({
+        eventType: eventType,
+        sessionId: sessionId,
+        gameId: gameId,
+        sourceContext: RECORDER_SOURCE_CONTEXT,
+        sourceSeq: nextSourceSeq++,
+        clockSegmentId: a.segmentId,
+        monotonicMs: monotonicMs,
+        payload: payload,
+        refs: (refs === undefined) ? null : refs
+      });
+      sendEventMessage(envelope);
+      return envelope;
+    }
+
+    // ----------------------------------------------------------------
+    // 4.2: the microphone selector (purely reactive; §5 drives it).
+    // ----------------------------------------------------------------
+
+    // Production storage for the selector: the offscreen document's own
+    // localStorage, adapted to the chrome.storage.local-shaped
+    // {get,set,remove} promise interface the selector injects. Rationale
+    // (V2 finding): offscreen documents expose only chrome.runtime —
+    // chrome.storage is undefined there even with the "storage" manifest
+    // permission — so the persisted selection lives in document
+    // localStorage under the same 'blindfold.micDeviceId.v1' key. Same
+    // extension origin, survives document kill/recreate; §5's popup
+    // (same origin) reads the same store. No manifest change, no DB
+    // schema change. Returns null when localStorage is unavailable (the
+    // selector then reports the honest plain-Error capability failure).
+    function createLocalStorageAdapter() {
+      var g = (typeof globalThis !== 'undefined') ? globalThis : null;
+      var ls = null;
+      try {
+        ls = g ? g.localStorage : null;
+      } catch (e) {
+        ls = null;
+      }
+      if (!ls) {
+        return null;
+      }
+      function wrap(fn) {
+        return function () {
+          var args = arguments;
+          return new Promise(function (resolve, reject) {
+            try {
+              resolve(fn.apply(null, args));
+            } catch (e) {
+              reject(e);
+            }
+          });
+        };
+      }
+      return {
+        get: wrap(function (k) {
+          var kv = {};
+          var v = ls.getItem(k);
+          kv[k] = (v === null) ? undefined : v;
+          return kv;
+        }),
+        set: wrap(function (kv) {
+          for (var k in kv) {
+            if (!Object.prototype.hasOwnProperty.call(kv, k)) {
+              continue;
+            }
+            if (kv[k] === undefined || kv[k] === null) {
+              ls.removeItem(k);
+            } else {
+              ls.setItem(k, String(kv[k]));
+            }
+          }
+        }),
+        remove: wrap(function (k) {
+          ls.removeItem(k);
+        })
+      };
+    }
+
+    var micSelector = null;
+    function getMicSelector() {
+      if (micSelector === null) {
+        var BS = shared();
+        if (typeof BS.createDeviceSelector !== 'function') {
+          throw new Error('recorder: createDeviceSelector is unavailable');
+        }
+        if (o.deviceSelector !== undefined && o.deviceSelector !== null) {
+          micSelector = o.deviceSelector;
+        } else {
+          micSelector = BS.createDeviceSelector({
+            kind: 'audioinput',
+            mediaDevices: o.mediaDevices,
+            storage: o.storage !== undefined ? o.storage : createLocalStorageAdapter(),
+            permissions: o.permissions,
+            nowUtcIso: o.selectorClock,
+            emitEvent: emitRecorderEvent,
+            getSessionId: function () { return sessionId; },
+            getGameId: function () { return gameId; }
+          });
+        }
+      }
+      return micSelector;
+    }
+
+    // Best-effort boot restore of the persisted mic selection (silent
+    // when inert — no session exists yet at boot). Never throws; the
+    // recorder's liveness must not depend on storage.
+    function restoreDevices() {
+      try {
+        var sel = getMicSelector();
+        var p = sel.restoreOnBoot();
+        if (p && typeof p.catch === 'function') {
+          p.catch(function () { /* boot restore is best-effort */ });
+        }
+        return p;
+      } catch (e) {
+        return null;
+      }
+    }
+
+    // Map a handler failure to channel data (3.2 SF-1: never throw
+    // across the channel). RangeError here means an unknown deviceId
+    // (the contract-pinned 'unknown-device'); TypeError means a malformed
+    // request.
+    function toChannelError(err) {
+      if (err instanceof RangeError) {
+        return { ok: false, error: 'unknown-device' };
+      }
+      if (err instanceof TypeError) {
+        return { ok: false, error: 'invalid-request' };
+      }
+      return { ok: false, error: 'internal-error' };
+    }
+
+    // Drive a promise-returning handler and answer asynchronously.
+    // Returns true (async sendResponse); every rejection becomes data.
+    function respondAsync(promise, sendResponse) {
+      Promise.resolve(promise).then(function (result) {
+        try {
+          sendResponse(isPlainObject(result) ? result : { ok: true, result: result });
+        } catch (e) { /* channel closed; nothing more to do */ }
+      }, function (err) {
+        try {
+          sendResponse(toChannelError(err));
+        } catch (e) { /* channel closed; nothing more to do */ }
+      });
+      return true;
+    }
+
+    function handleSetSession(message, sendResponse) {
+      var sid = message.sessionId;
+      var gid = message.gameId;
+      if (!((typeof sid === 'string' && sid !== '') || sid === null) ||
+          !((typeof gid === 'string' && gid !== '') || gid === null)) {
+        try {
+          sendResponse({ ok: false, error: 'invalid-request' });
+        } catch (e) { /* ignore */ }
+        return false;
+      }
+      sessionId = sid;
+      gameId = gid;
+      // A newly activated session announces the current selection once,
+      // so the session's event stream carries the selection state (the
+      // boot-time restore and any pre-session user selection were inert
+      // by design). The announced source is the selection's actual source.
+      if (isSessionActive()) {
+        try {
+          getMicSelector().announceSelectionForSession();
+        } catch (e) {
+          try {
+            sendResponse({ ok: false, error: 'internal-error' });
+          } catch (w) { /* ignore */ }
+          return false;
+        }
+      }
+      try {
+        sendResponse({ ok: true });
+      } catch (e) { /* ignore */ }
+      return false;
+    }
+
+    function handleMicCommand(message, sendResponse) {
+      var sel;
+      try {
+        sel = getMicSelector();
+      } catch (e) {
+        try {
+          sendResponse(toChannelError(e));
+        } catch (w) { /* ignore */ }
+        return false;
+      }
+      // Deferred inside the promise: a synchronously-throwing selector
+      // (e.g. unavailable mediaDevices) becomes a rejection, which
+      // respondAsync converts to {ok:false} — the listener never throws.
+      function deferred(fn) {
+        return respondAsync(Promise.resolve().then(fn), sendResponse);
+      }
+      if (message.msg === MSG_MIC_LIST) {
+        return deferred(function () { return sel.listDevices(); });
+      }
+      if (message.msg === MSG_MIC_SELECT) {
+        if (typeof message.deviceId !== 'string' || message.deviceId === '') {
+          try {
+            sendResponse({ ok: false, error: 'invalid-request' });
+          } catch (e) { /* ignore */ }
+          return false;
+        }
+        return deferred(function () { return sel.select(message.deviceId); });
+      }
+      if (message.msg === MSG_MIC_PERMISSION) {
+        return deferred(function () { return sel.requestPermission(); });
+      }
+      if (message.msg === MSG_MIC_STATE) {
+        return deferred(function () { return sel.getState(); });
+      }
+      return false; // unknown msg: ignore, no response (4.1 behavior)
+    }
+
     if (announce) {
       announceReady();
     }
@@ -223,7 +595,11 @@ var BlindfoldSession = BlindfoldSession || {};
       bootTime: function () { return bootTime; },
       announceReady: announceReady,
       installListener: installListener,
-      onRuntimeMessage: onRuntimeMessage
+      onRuntimeMessage: onRuntimeMessage,
+      // 4.2 surface (Node tests drive these directly).
+      getMicSelector: getMicSelector,
+      restoreDevices: restoreDevices,
+      getSession: function () { return { sessionId: sessionId, gameId: gameId }; }
     };
   }
 
@@ -237,6 +613,12 @@ var BlindfoldSession = BlindfoldSession || {};
   BlindfoldSession.RECORDER_MSG_READY = MSG_READY;
   BlindfoldSession.RECORDER_MSG_PING = MSG_PING;
   BlindfoldSession.RECORDER_MSG_PONG = MSG_PONG;
+  BlindfoldSession.RECORDER_MSG_SET_SESSION = MSG_SET_SESSION;
+  BlindfoldSession.RECORDER_MSG_MIC_LIST = MSG_MIC_LIST;
+  BlindfoldSession.RECORDER_MSG_MIC_SELECT = MSG_MIC_SELECT;
+  BlindfoldSession.RECORDER_MSG_MIC_PERMISSION = MSG_MIC_PERMISSION;
+  BlindfoldSession.RECORDER_MSG_MIC_STATE = MSG_MIC_STATE;
+  BlindfoldSession.RECORDER_SOURCE_CONTEXT = RECORDER_SOURCE_CONTEXT;
   BlindfoldSession.isRecorderMessage = isRecorderMessage;
   BlindfoldSession.createOffscreenRecorder = createOffscreenRecorder;
 })();
@@ -260,6 +642,9 @@ if ((typeof module === 'undefined' || !module.exports) &&
     try {
       var recorder = BS.createOffscreenRecorder({ chromeNs: g.chrome });
       recorder.installListener();
+      // 4.2: best-effort boot restore of the persisted mic selection.
+      // Silent when inert (no session yet); never throws.
+      recorder.restoreDevices();
     } catch (e) {
       // A recorder that cannot boot must not take the document down with
       // an uncaught error; the SW re-discovers via hasDocument() + ping.

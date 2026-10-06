@@ -485,3 +485,40 @@ Consequential engineering decisions with reasoning and evidence. Newest first.
   duplicate `createDocument` calls. The restart path executes the identical
   `start()` → `ensure()` code; a natural restart on the owner device (§7)
   will exercise the true process boundary.
+
+## 4.2 microphone selection and permission handling
+
+- **4.2 delivers a selected, permitted microphone — not a recording.**
+  `device_selection.js` (`createDeviceSelector`, `audioinput` for 4.2,
+  reusable for 4.4 `videoinput`) handles enumeration, user selection,
+  persisted selection, the permission probe, and queryable state. Every
+  probe stream's tracks are stopped before `requestPermission` resolves;
+  4.6 re-acquires at Start and owns stream lifetime.
+- **Persistence: the offscreen document's `localStorage`, not
+  `chrome.storage.local`.** V2 proved offscreen documents expose only
+  `chrome.runtime` — `chrome.storage` is undefined there even with the
+  `"storage"` manifest permission — so the contract's chrome.storage
+  plan could not work. The selection persists under the same
+  `blindfold.micDeviceId.v1` key in document localStorage (same extension
+  origin; §5's popup reads the same store). No manifest change, no
+  event-DB schema change; the selector's injected storage interface is
+  unchanged. (A brief `"storage"` permission addition was reverted.)
+- **Permission honesty.** `permissions.query` is advisory;
+  `getUserMedia` outcome is ground truth. Denial is a persisted *state*,
+  not an exception; a probe-observed `'denied'` persists until a later
+  probe succeeds (an advisory query never clears it). Stale selections
+  are invalidated on `OverconstrainedError`. Labels are `null`
+  pre-permission (never fabricated). 4.2 never silently defaults.
+- **Events** (`microphone_permission_changed`,
+  `microphone_device_selected`) travel the existing writer intake
+  directly from the offscreen document (`{kind:'event', event}`,
+  `sourceContext:'recording_context'`, lazy per-session `clock_anchor`);
+  pre-session inertness follows the 3.x precedent. Session-activation
+  announces the current selection once per session with its ACTUAL
+  source (`'user'` vs `'restored'`, never relabeled); the
+  restore/set-session race is closed by announcing on whichever
+  completes last (idempotent dedup).
+- **No UI in 4.2** (§5 owns it). Five channel messages
+  (`recorder-set-session`, `mic-list-devices`, `mic-select`,
+  `mic-request-permission`, `mic-get-state`); all failure-isolated.
+  `recording_host.js` gained no 4.2 behavior.

@@ -236,6 +236,18 @@ describe('AC4 — diff discipline', () => {
       // evidence lands after the pins were evolved (2.x/3.x precedent).
       '.autodev/evidence/4.1.review.md',
       '.autodev/evidence/4.1.behavior.md',
+      // Honest cumulative evolution: 4.2 (microphone selection and
+      // permission handling) legitimately adds device_selection.js, routes
+      // the five mic commands through recorder.js/recorder.html, and adds
+      // its test + evidence; its files join the allowlists.
+      'device_selection.js',
+      'tests/device_selection.test.js',
+      '.autodev/evidence/4.2.contract.md',
+      '.autodev/evidence/4.2.build.md',
+      // Honest cumulative evolution: 4.2's review/behavior evidence lands
+      // after the pins were evolved (2.x/3.x/4.1 precedent).
+      '.autodev/evidence/4.2.review.md',
+      '.autodev/evidence/4.2.behavior.md',
       'tests/retention.test.js',
       '.autodev/evidence/2.9.contract.md',
       '.autodev/evidence/2.9.build.md',
