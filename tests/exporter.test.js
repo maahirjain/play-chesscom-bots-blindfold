@@ -299,20 +299,16 @@ describe('AC6 — diff discipline', () => {
       .map((l) => l.slice(3).trim())
       .filter((f) => f !== '' && !/^\.autodev\/evidence\/5\.\d/.test(f));
     assert.deepEqual(changed.sort(), [
-      // 6.1–6.5 were committed (7a23b3a, f3bb3dd, 27ef7a5); this pin now
-      // covers 6.6's working tree. 6.6 (ZIP packaging) adds the ZIP
-      // writer + exportSession orchestration to exporter.js, the
-      // export-request listener to sw.js, the downloads permission to
-      // manifest.json, and the Download affordance to
-      // session_controls.js. The 6.6 review/behavior evidence lands
-      // after the pins are evolved (2.x-6.5 precedent).
+      // 6.1–6.6 were committed (7a23b3a, f3bb3dd, 27ef7a5, 4b2c6a1);
+      // this pin now covers 6.7/6.8's working tree. 6.7 (repeatable
+      // export) is verification-only (tests + docs, no product-code
+      // changes); 6.8 (export documentation) adds EXPORT.md.
       '.autodev/DECISIONS.md',
-      '.autodev/evidence/6.6.contract.md',
-      '.autodev/evidence/6.6.build.md',
-      'exporter.js',
-      'manifest.json',
-      'session_controls.js',
-      'sw.js',
+      '.autodev/evidence/6.7.contract.md',
+      '.autodev/evidence/6.7.build.md',
+      '.autodev/evidence/6.8.contract.md',
+      '.autodev/evidence/6.8.build.md',
+      'EXPORT.md',
       'tests/exporter.test.js',
       ...[
         'tests/attempt_tracker.test.js',
@@ -328,12 +324,10 @@ describe('AC6 — diff discipline', () => {
         'tests/game_lifecycle.test.js',
         'tests/history_tracker.test.js',
         'tests/lifecycle.test.js',
-        // 6.6: manifest_sw.test.js and recording_host.test.js pins evolved
-        // for the downloads permission (6.6's legitimate manifest delta).
-        'tests/manifest_sw.test.js',
-        // 6.6: sw.js pins in db/session_store/writer evolved for the
+        // 6.6's manifest_sw.test.js and db.test.js pin evolutions are
+        // committed (4b2c6a1); they drop from the working-tree allowlist.
+        // 6.6: sw.js pins in session_store/writer evolved for the
         // export-request listener IIFE (6.6's legitimate sw.js delta).
-        'tests/db.test.js',
         'tests/session_store.test.js',
         'tests/writer.test.js',
         'tests/recording_host.test.js',
@@ -1908,5 +1902,218 @@ describe('6.6 AC8 — diff discipline and readonly', () => {
     assert.ok(sw.includes('export-request'), 'sw.js handles export-request');
     assert.ok(sw.includes("importScripts(") && sw.includes('exporter.js'),
       'sw.js imports exporter.js');
+  });
+});
+
+// ------------------------------------------------------------------
+// 6.7 — repeatable export from retained local data
+// ------------------------------------------------------------------
+describe('6.7 AC1 — re-export is byte-identical except exportedAtUtc', () => {
+  // Reuse the 6.6 AC4 fakes via closure: we redefine them here to keep
+  // the 6.7 block self-contained (the 6.6 block's helpers are scoped to
+  // its describe).
+  const SID67 = '11111111-1111-4111-8111-111111111111';
+  const GID67 = '22222222-2222-4222-8222-222222222222';
+
+  function fakeDb67(seed) {
+    return {
+      get: (store, key) => {
+        if (store === 'session_metadata') {
+          return Promise.resolve(seed.metadata || undefined);
+        }
+        if (store === 'conditions') {
+          return Promise.resolve(seed.conditions || undefined);
+        }
+        return Promise.resolve(undefined);
+      },
+      getAll: (store, opts) => {
+        if (store === 'events') {
+          const sid = opts && opts.lower;
+          return Promise.resolve(
+            (seed.events || []).filter((e) => e.sessionId === sid));
+        }
+        if (store === 'recording_manifest') {
+          const sid = opts && opts.lower;
+          return Promise.resolve(
+            (seed.manifest || []).filter((m) => m.sessionId === sid));
+        }
+        if (store === 'media_chunks') {
+          const seg = opts && opts.lower && opts.lower[0];
+          return Promise.resolve((seed.chunksBySegment || {})[seg] || []);
+        }
+        return Promise.resolve([]);
+      }
+    };
+  }
+
+  function seed67() {
+    const segId = 'seg-67';
+    const meta = {
+      sessionId: SID67,
+      gameIds: [GID67],
+      schemaVersion: '1.0.0',
+      extensionVersion: '1.0.0',
+      protocolVersion: null,
+      sessionCategory: 'training'
+    };
+    const manifestRec = {
+      segmentId: segId,
+      sessionId: SID67,
+      streamKind: 'microphone',
+      segmentNumber: 1,
+      actualMimeType: 'audio/webm',
+      fileExtension: '.webm',
+      finalized: true,
+      finalizedAtUtc: '2026-10-06T12:01:00.000Z',
+      createdAtUtc: '2026-10-06T12:00:00.000Z',
+      streamStartedAtUtc: '2026-10-06T12:00:00.000Z',
+      streamStartedAtMonotonicMs: 1000,
+      clockSegmentId: 'clk-67'
+    };
+    const anchorEvent = {
+      eventId: 'e-67-anchor',
+      eventType: 'clock_anchor',
+      sessionId: SID67,
+      gameId: null,
+      sourceContext: 'sw',
+      sourceSeq: 0,
+      clockSegmentId: 'clk-67',
+      monotonicMs: 1000,
+      appendSeq: 0,
+      refs: null,
+      payload: { segmentId: 'clk-67', utcEpochMs: 1728216000000, monotonicMs: 1000 }
+    };
+    const chunkBytes = new Uint8Array([10, 20, 30, 40, 50, 60]);
+    return {
+      metadata: meta,
+      conditions: null,
+      events: [anchorEvent],
+      manifest: [manifestRec],
+      chunksBySegment: {
+        [segId]: [{
+          segmentId: segId,
+          chunkIndex: 0,
+          createdAtUtc: '2026-10-06T12:00:30.000Z',
+          data: new Blob([chunkBytes])
+        }]
+      }
+    };
+  }
+
+  // Run exportSession and capture the ZIP Blob bytes.
+  async function exportBytes(seed, nowIso) {
+    let captured = null;
+    const deps = {
+      db: fakeDb67(seed),
+      downloads: {
+        download: () => Promise.resolve(1)
+      },
+      createObjectURL: (blob) => { captured = blob; return 'blob:fake'; },
+      revokeObjectURL: () => {},
+      nowUtcIso: () => nowIso
+    };
+    const res = await BS.exportSession({
+      sessionId: SID67,
+      stopVerdict: { verdict: 'complete', warnings: [] },
+      deps
+    });
+    assert.ok(res.ok, 'export must succeed, got: ' + JSON.stringify(res));
+    assert.ok(captured, 'createObjectURL must receive the ZIP blob');
+    const buf = Buffer.from(await captured.arrayBuffer());
+    return buf;
+  }
+
+  it('two exports with different clocks differ only in exportedAtUtc', async () => {
+    const seed = seed67();
+    const a = await exportBytes(seed, '2026-10-06T14:00:00.000Z');
+    const b = await exportBytes(seed, '2026-10-06T15:00:00.000Z');
+    // Parse both ZIPs with buildZipParts' inverse: use the central
+    // directory to extract file entries, then compare per-file bytes.
+    // Simpler honest check: the ZIPs must have equal length and differ
+    // only where exportedAtUtc appears. We verify by unzipping via the
+    // system unzip binary (6.6 AC1 precedent) and diffing contents.
+    const fs = require('node:fs');
+    const os = require('node:os');
+    const path = require('node:path');
+    const { execSync } = require('node:child_process');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'exp67-'));
+    try {
+      const za = path.join(dir, 'a.zip');
+      const zb = path.join(dir, 'b.zip');
+      fs.writeFileSync(za, a);
+      fs.writeFileSync(zb, b);
+      execSync(`unzip -q -o ${za} -d ${dir}/a`);
+      execSync(`unzip -q -o ${zb} -d ${dir}/b`);
+      const listA = execSync(`cd ${dir}/a && find . -type f | sort`).toString().trim().split('\n');
+      const listB = execSync(`cd ${dir}/b && find . -type f | sort`).toString().trim().split('\n');
+      assert.deepEqual(listA, listB, 'same file list in both exports');
+      for (const f of listA) {
+        const pa = path.join(dir, 'a', f);
+        const pb = path.join(dir, 'b', f);
+        const ca = fs.readFileSync(pa, 'utf8');
+        const cb = fs.readFileSync(pb, 'utf8');
+        if (f.endsWith('metadata.json') || f.endsWith('media-sync.json')) {
+          // Only exportedAtUtc may differ.
+          const ja = JSON.parse(ca);
+          const jb = JSON.parse(cb);
+          assert.ok(ja.exportedAtUtc === '2026-10-06T14:00:00.000Z', 'a has its clock');
+          assert.ok(jb.exportedAtUtc === '2026-10-06T15:00:00.000Z', 'b has its clock');
+          delete ja.exportedAtUtc;
+          delete jb.exportedAtUtc;
+          assert.deepEqual(ja, jb, f + ' identical except exportedAtUtc');
+        } else {
+          assert.ok(Buffer.from(ca, 'binary').equals(Buffer.from(cb, 'binary')),
+            f + ' byte-identical across re-exports');
+        }
+      }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('two exports with the same clock are fully byte-identical', async () => {
+    const seed = seed67();
+    const a = await exportBytes(seed, '2026-10-06T14:00:00.000Z');
+    const b = await exportBytes(seed, '2026-10-06T14:00:00.000Z');
+    assert.ok(a.equals(b), 'ZIP bytes fully identical with fixed clock');
+  });
+});
+
+describe('6.7 AC3 — Download button stays enabled for re-export', () => {
+  it('session_controls.js keeps the Download button enabled after successful export', () => {
+    const src = require('node:fs').readFileSync(
+      require('node:path').join(REPO, 'session_controls.js'), 'utf8');
+    // The 6.6 contract requires the button to stay enabled after success
+    // for 6.7 re-export. The success path explicitly says "Keep the
+    // button enabled for re-export". We assert:
+    // 1. The success-path comment is present (the documented guarantee).
+    // 2. The only setDownloadEnabled(false) is for the Start phase
+    //    (not exportable while starting), not for post-export.
+    assert.ok(src.includes('Keep the\n          // button enabled for re-export') ||
+              src.includes('Keep the button enabled for re-export'),
+      'success path documents the re-export guarantee');
+    const disables = src.split('\n').filter((l) =>
+      /setDownloadEnabled\s*\(\s*false\s*\)/.test(l));
+    for (const l of disables) {
+      assert.ok(l.includes('while starting'),
+        'setDownloadEnabled(false) only while starting, not after export: ' + l.trim());
+    }
+  });
+});
+
+describe('6.7 AC4 — diff discipline', () => {
+  it('6.7 adds no product-code changes', () => {
+    const diff = execSync('git diff HEAD --stat', { cwd: REPO }).toString();
+    const productFiles = ['exporter.js', 'sw.js', 'manifest.json',
+      'session_controls.js', 'content.js', 'recorder.js'];
+    for (const f of productFiles) {
+      const lines = diff.split('\n').filter((l) => l.includes(f + ' '));
+      assert.ok(lines.length === 0, f + ' must be untouched by 6.7');
+    }
+  });
+
+  it('PLAN.md is unmodified', () => {
+    const diff = execSync('git diff HEAD -- PLAN.md', { cwd: REPO }).toString();
+    assert.equal(diff, '');
   });
 });

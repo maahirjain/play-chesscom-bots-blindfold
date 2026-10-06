@@ -736,6 +736,14 @@ describe('AC7 — diff discipline', () => {
       // affordance to session_controls.js.
       '.autodev/evidence/6.6.contract.md',
       '.autodev/evidence/6.6.build.md',
+      // Honest cumulative evolution: 6.7 (repeatable export) is
+      // verification-only (tests + docs); 6.8 (export
+      // documentation) adds EXPORT.md.
+      '.autodev/evidence/6.7.contract.md',
+      '.autodev/evidence/6.7.build.md',
+      '.autodev/evidence/6.8.contract.md',
+      '.autodev/evidence/6.8.build.md',
+      'EXPORT.md',
       'tests/manifest_sw.test.js',
       'tests/db.test.js',
       // 6.4+6.5 review/behavior use combined naming (reviewer/verifier
