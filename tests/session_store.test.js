@@ -631,6 +631,16 @@ describe('AC9 — diff discipline', () => {
       // evolved these pins (2.6/2.7 precedent).
       '.autodev/evidence/2.8.review.md',
       '.autodev/evidence/2.8.behavior.md',
+      // Honest cumulative evolution (2.2–2.8 precedent): 2.9 adds the
+      // retention scan suite (no product code) and evolves these pins.
+      'tests/retention.test.js',
+      '.autodev/evidence/2.9.contract.md',
+      '.autodev/evidence/2.9.build.md',
+      // Honest cumulative evolution: the adversarial review and
+      // behavioral verification evidence land after the builder
+      // evolved these pins (2.6/2.7/2.8 precedent).
+      '.autodev/evidence/2.9.review.md',
+      '.autodev/evidence/2.9.behavior.md',
       'tests/db.test.js',
       'tests/manifest_sw.test.js',
       'tests/sender.test.js',
@@ -648,10 +658,9 @@ describe('AC9 — diff discipline', () => {
     for (const f of changed) {
       assert.ok(allowed.has(f), `unexpected modified file: ${f}`);
     }
-    // NOTE (2.8): the 2.7 "lifecycle.js must be new / sw.js must be
-    // modified" assertions were transient — they could only pass before
-    // the 2.7 feature commit. The durable invariant is no unexpected
-    // files (above) plus 2.8's own novelty:
-    assert.ok(changed.includes('status_indicator.js'), 'status_indicator.js must be new');
+    // NOTE (2.9): the 2.8 "status_indicator.js must be new" assertion was
+    // transient — it could only pass before the 2.8 feature commit, same as
+    // the 2.7 novelty assertions noted above. The durable invariant is the
+    // allowlist (no unexpected files); 2.9 adds no product files.
   });
 });

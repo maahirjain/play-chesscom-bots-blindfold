@@ -757,6 +757,17 @@ describe('2.5 retry policy', () => {
       // evolved these pins (2.6/2.7 precedent).
       '.autodev/evidence/2.8.review.md',
       '.autodev/evidence/2.8.behavior.md',
+      // Honest cumulative evolution (2.2–2.8 precedent): 2.9 is a
+      // negative requirement (no product code) — it adds the
+      // retention scan suite and evolves these pins.
+      'tests/retention.test.js',
+      '.autodev/evidence/2.9.contract.md',
+      '.autodev/evidence/2.9.build.md',
+      // Honest cumulative evolution: the adversarial review and
+      // behavioral verification evidence land after the builder
+      // evolved these pins (2.6/2.7/2.8 precedent).
+      '.autodev/evidence/2.9.review.md',
+      '.autodev/evidence/2.9.behavior.md',
       'sw.js',
       'session_store.js',
       'session_identity.js',

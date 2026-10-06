@@ -243,3 +243,24 @@ Consequential engineering decisions with reasoning and evidence. Newest first.
   writer bug dropping eventId would surface as transient-amber (`no-ack`)
   rather than red. Possible §5/2.9 follow-up: treat `no-ack` after N
   attempts as persistent. (2.8 build note #2.)
+
+## 2.9 retention: no deletion paths; export must not delete originals
+
+- **Survey (2026-10-06):** zero deletion paths in product code — no
+  `indexedDB.deleteDatabase`, no `objectStore.clear()`/`delete()`, no
+  TTL/expiry/pruning logic. `db.js` `closeDatabase()` closes the cached
+  connection handle only (verified callable with no indexedDB; never
+  touches data). Pinned by `tests/retention.test.js` (AC1–AC4).
+- **No deletion API added.** PLAN.md mentions deletion exactly once
+  (§2.9 itself); "until deliberate deletion" is a retention guarantee,
+  not a feature request. A deletion API would be new footgun surface
+  against the mission's data-preservation bias. "Deliberate deletion" =
+  explicit owner/developer action outside the extension (e.g. devtools
+  → Application → IndexedDB → delete; profile wipe). If the owner wants
+  in-extension deletion, that is a §7/owner decision.
+- **Binding constraint on §6 export:** export must read through readonly
+  transactions/cursors only (`db.js` `getAll`/`get`), must never call
+  `delete`/`clear`/`deleteDatabase`, and §6's tests must assert store
+  record counts are identical before and after export (the concrete,
+  testable form of "export must not delete the originals"; also implied
+  by §6.7 repeatable export). Authority: 2.9.contract.md §6.

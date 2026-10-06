@@ -342,50 +342,34 @@ describe('AC10–AC12 — diff discipline and scope', () => {
     }
   });
 
-  it('manifest.json diff: js list gains exactly status_indicator.js (deviation from contract AC10 documented in 2.8.build.md)', () => {
-    const diff = execSync('git diff HEAD -- manifest.json', { cwd: ROOT }).toString();
-    const added = diff.split('\n').filter((l) => l.startsWith('+') && !l.startsWith('+++'));
-    const removed = diff.split('\n').filter((l) => l.startsWith('-') && !l.startsWith('---'));
-    assert.equal(removed.length, 1, 'manifest: exactly one line removed (the js list)');
-    assert.equal(added.length, 1, 'manifest: exactly one line added (the js list)');
-    assert.ok(added[0].includes('"status_indicator.js"'), 'added js entry must be status_indicator.js');
-    assert.ok(added[0].indexOf('"lifecycle.js", "status_indicator.js"') !== -1,
-      'status_indicator.js loads after lifecycle.js (sender already loaded)');
+  it('manifest.json: js list carries status_indicator.js after lifecycle.js (2.8 committed)', () => {
+    // Post-commit durable form of the 2.8 diff pin (2.9 repair): the working
+    // tree now equals HEAD, so assert the contracted content instead of the
+    // diff. (The full ordered list is pinned in tests/lifecycle.test.js.)
     const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8'));
-    const headManifest = JSON.parse(
-      execSync('git show HEAD:manifest.json', { cwd: ROOT, stdio: 'pipe' }).toString());
-    headManifest.content_scripts[0].js = manifest.content_scripts[0].js;
-    assert.deepEqual(manifest, headManifest, 'manifest: nothing else changed');
+    const js = manifest.content_scripts[0].js;
+    assert.ok(js.includes('status_indicator.js'), 'js list must include status_indicator.js');
+    assert.ok(js.indexOf('lifecycle.js') < js.indexOf('status_indicator.js'),
+      'status_indicator.js loads after lifecycle.js');
+    assert.ok(js.indexOf('status_indicator.js') < js.indexOf('content.js'),
+      'status_indicator.js loads before content.js (which installs it)');
   });
 
-  it('content.js diff: exactly the install wiring (a few lines, nothing else)', () => {
-    const diff = execSync('git diff HEAD -- content.js', { cwd: ROOT }).toString();
-    const added = diff.split('\n').filter((l) => l.startsWith('+') && !l.startsWith('+++'));
-    const removed = diff.split('\n').filter((l) => l.startsWith('-') && !l.startsWith('---'));
-    assert.equal(removed.length, 0, 'content.js: no lines removed');
-    assert.ok(added.some((l) => l.includes('BlindfoldSession.installStatusIndicator(BlindfoldSession.sender);')),
-      'content.js: must call installStatusIndicator with the sender');
-    assert.ok(added.every((l) => l.includes('2.8') || l.includes('installStatusIndicator') ||
-      l === '+' || l.trim() === '' || l.trim() === '}' || l.startsWith('+//') || l.startsWith('+BlindfoldSession')),
-      'content.js: added lines are only the install wiring + comment');
+  it('content.js: the 2.8 install wiring is present exactly once (2.8 committed)', () => {
+    // Post-commit durable form of the 2.8 diff pin (2.9 repair).
+    const src = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
+    const occurrences = src.split('BlindfoldSession.installStatusIndicator(BlindfoldSession.sender);').length - 1;
+    assert.strictEqual(occurrences, 1, 'content.js: exactly one 2.8 install line');
   });
 
-  it('overlay.css diff: additive classes only', () => {
-    const diff = execSync('git diff HEAD -- overlay.css', { cwd: ROOT }).toString();
-    const added = diff.split('\n').filter((l) => l.startsWith('+') && !l.startsWith('+++'));
-    const removed = diff.split('\n').filter((l) => l.startsWith('-') && !l.startsWith('---'));
-    assert.equal(removed.length, 0, 'overlay.css: no lines removed or altered');
-    assert.ok(added.length > 0, 'overlay.css: new rules added');
-    assert.ok(added.some((l) => l.includes('.blindfold-status-indicator')),
-      'overlay.css: indicator classes present');
-    // Strip the /* … */ comment block, then every remaining added line must
-    // belong to the new indicator rule block.
-    const code = added.join('\n').replace(/\/\*[\s\S]*?\*\//g, '');
-    for (const l of code.split('\n')) {
-      if (l === '+' || l.trim() === '') continue;
-      assert.ok(l.includes('blindfold-status') || /^\+\s*[a-z-]+:/.test(l) ||
-        /^\+\s*[.}]/.test(l),
-        'overlay.css: unexpected added line: ' + JSON.stringify(l));
+  it('overlay.css: the 2.8 indicator classes are present (2.8 committed)', () => {
+    // Post-commit durable form of the 2.8 diff pin (2.9 repair): assert the
+    // additive classes exist in content rather than in the diff.
+    const css = fs.readFileSync(path.join(ROOT, 'overlay.css'), 'utf8');
+    for (const cls of ['.blindfold-status-indicator', '.blindfold-status-healthy',
+                       '.blindfold-status-degraded-retrying', '.blindfold-status-failed-persistent',
+                       '.blindfold-status-failed-storage-full']) {
+      assert.ok(css.includes(cls), `overlay.css must define ${cls}`);
     }
   });
 
@@ -434,7 +418,17 @@ describe('AC10–AC12 — diff discipline and scope', () => {
       // behavioral verification evidence land after the builder
       // evolved these pins (2.6/2.7 precedent).
       '.autodev/evidence/2.8.review.md',
-      '.autodev/evidence/2.8.behavior.md'
+      '.autodev/evidence/2.8.behavior.md',
+      // Honest cumulative evolution (2.2–2.8 precedent): 2.9 adds the
+      // retention scan suite (no product code) and evolves these pins.
+      'tests/retention.test.js',
+      '.autodev/evidence/2.9.contract.md',
+      '.autodev/evidence/2.9.build.md',
+      // Honest cumulative evolution: the adversarial review and
+      // behavioral verification evidence land after the builder
+      // evolved these pins (2.6/2.7/2.8 precedent).
+      '.autodev/evidence/2.9.review.md',
+      '.autodev/evidence/2.9.behavior.md'
     ]);
     for (const f of changed) {
       assert.ok(allowed.has(f), `unexpected modified file: ${f}`);
