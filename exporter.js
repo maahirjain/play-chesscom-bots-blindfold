@@ -971,6 +971,744 @@ var BlindfoldSession = BlindfoldSession || {};
   }
 
   BlindfoldSession.nameSegmentFiles = nameSegmentFiles;
+
+  // --- 6.6: ZIP packaging (STORE method, streaming) ---
+
+  // ZIP signatures (little-endian).
+  var ZIP_SIG_LOCAL = 0x04034b50;
+  var ZIP_SIG_CENTRAL = 0x02014b50;
+  var ZIP_SIG_END = 0x06054b50;
+  // Version-needed 2.0 (STORE needs nothing newer); version-made-by 6.3/Unix.
+  var ZIP_VERSION_NEEDED = 20;
+  var ZIP_VERSION_MADE_BY = 0x0300 | 63;
+  // Flag bit 11: filename is UTF-8. Method 0: STORE (no compression).
+  var ZIP_FLAG_UTF8 = 0x0800;
+  var ZIP_METHOD_STORE = 0;
+
+  function utf8Bytes(str) {
+    // TextEncoder is available in SW, content, and Node 18+.
+    if (typeof TextEncoder !== 'undefined') {
+      return new TextEncoder().encode(str);
+    }
+    // Fallback: manual UTF-8 encoding (ASCII-superset safe).
+    var out = [];
+    var i, c;
+    for (i = 0; i < str.length; i++) {
+      c = str.charCodeAt(i);
+      if (c < 0x80) {
+        out.push(c);
+      } else if (c < 0x800) {
+        out.push(0xC0 | (c >> 6), 0x80 | (c & 0x3F));
+      } else {
+        out.push(0xE0 | (c >> 12), 0x80 | ((c >> 6) & 0x3F), 0x80 | (c & 0x3F));
+      }
+    }
+    return new Uint8Array(out);
+  }
+
+  function writeU16LE(view, offset, value) {
+    view.setUint16(offset, value >>> 0, true);
+  }
+
+  function writeU32LE(view, offset, value) {
+    view.setUint32(offset, value >>> 0, true);
+  }
+
+  // MSDOS date/time from an ISO-8601 UTC string. Returns
+  // {dosDate, dosTime}. Unparseable input → the MSDOS epoch
+  // (1980-01-01 00:00:00); never the wall clock silently (contract §2.5).
+  function dosDateTimeFromIso(isoString) {
+    var ms = Date.parse(isoString);
+    var d;
+    if (typeof isoString !== 'string' || isNaN(ms)) {
+      d = new Date(Date.UTC(1980, 0, 1, 0, 0, 0));
+    } else {
+      d = new Date(ms);
+    }
+    var year = d.getUTCFullYear();
+    // Clamp to the DOS-representable range (1980–2107).
+    if (year < 1980) { year = 1980; }
+    if (year > 2107) { year = 2107; }
+    var dosDate = ((year - 1980) << 9) |
+      ((d.getUTCMonth() + 1) << 5) |
+      d.getUTCDate();
+    var dosTime = (d.getUTCHours() << 11) |
+      (d.getUTCMinutes() << 5) |
+      Math.floor(d.getUTCSeconds() / 2);
+    return { dosDate: dosDate >>> 0, dosTime: dosTime >>> 0 };
+  }
+
+  // Sanitize a session category for ZIP-path safety. The 5.2 categories
+  // are short controlled strings; anything outside [A-Za-z0-9_-] is a
+  // corrupt category → TypeError (fail-closed; must not produce a
+  // corrupt path or escape the directory).
+  function sanitizeCategoryForPath(category) {
+    if (typeof category !== 'string' || category === '' ||
+        !/^[A-Za-z0-9_-]+$/.test(category)) {
+      throw new TypeError(
+        'exporter: sessionCategory is not ZIP-path-safe: ' +
+        JSON.stringify(category));
+    }
+    return category;
+  }
+
+  // Validate a ZIP-internal path: non-empty, forward slashes only, no
+  // leading slash, no '..' segments. Violation → TypeError naming it.
+  function requireValidZipPath(path) {
+    if (typeof path !== 'string' || path === '') {
+      throw new TypeError('exporter: ZIP path must be a non-empty string');
+    }
+    if (path.charAt(0) === '/' || path.indexOf('\\') !== -1 ||
+        /(^|\/)\.\.(\/|$)/.test(path)) {
+      throw new TypeError('exporter: invalid ZIP path: ' + JSON.stringify(path));
+    }
+    return path;
+  }
+
+  // 6.6: build the bundle directory per PLAN §6.6 "category/date/game-ID
+  // path". Single-game: <category>/<YYYY-MM-DD>_<gameId>/; multi-game:
+  // <category>/<YYYY-MM-DD>_session-<sessionId>/ (Flow rule — media once).
+  //
+  // args: {sessionCategory, dateIso, gameIds, sessionId} where dateIso
+  // is the session-start ISO string (the orchestration resolves it from
+  // the earliest manifest createdAtUtc, or the MSDOS epoch when none
+  // exists — the 1.1 metadata record carries no timestamp).
+  function buildBundleDir(args) {
+    if (!isPlainObject(args)) {
+      throw new TypeError('exporter: args must be an object');
+    }
+    var category = sanitizeCategoryForPath(args.sessionCategory);
+    if (typeof args.dateIso !== 'string' || isNaN(Date.parse(args.dateIso))) {
+      throw new TypeError('exporter: dateIso must be a valid ISO-8601 string');
+    }
+    if (!isUuidV4(args.sessionId)) {
+      throw new TypeError('exporter: sessionId must be a uuid-v4 string');
+    }
+    if (!Array.isArray(args.gameIds) || args.gameIds.length === 0 ||
+        !args.gameIds.every(isUuidV4)) {
+      throw new TypeError('exporter: gameIds must be a non-empty array of uuid-v4 strings');
+    }
+    var datePart = args.dateIso.slice(0, 10); // YYYY-MM-DD (UTC)
+    var idPart = args.gameIds.length === 1 ?
+      args.gameIds[0] : 'session-' + args.sessionId;
+    return category + '/' + datePart + '_' + idPart + '/';
+  }
+
+  // 6.6: the download filename (outside the ZIP):
+  // <category>-<YYYY-MM-DD>-<shortId>.zip where shortId is the first 8
+  // hex chars of the gameId (single) or sessionId (multi).
+  function buildDownloadFilename(args) {
+    if (!isPlainObject(args)) {
+      throw new TypeError('exporter: args must be an object');
+    }
+    var category = sanitizeCategoryForPath(args.sessionCategory);
+    if (typeof args.dateIso !== 'string' || isNaN(Date.parse(args.dateIso))) {
+      throw new TypeError('exporter: dateIso must be a valid ISO-8601 string');
+    }
+    if (!isUuidV4(args.sessionId)) {
+      throw new TypeError('exporter: sessionId must be a uuid-v4 string');
+    }
+    if (!Array.isArray(args.gameIds) || args.gameIds.length === 0 ||
+        !args.gameIds.every(isUuidV4)) {
+      throw new TypeError('exporter: gameIds must be a non-empty array of uuid-v4 strings');
+    }
+    var datePart = args.dateIso.slice(0, 10);
+    var shortId = (args.gameIds.length === 1 ?
+      args.gameIds[0] : args.sessionId).slice(0, 8);
+    return category + '-' + datePart + '-' + shortId + '.zip';
+  }
+
+  // 6.6: hand-rolled STORE-method ZIP writer. Pure and synchronous
+  // (Blob construction is sync).
+  //
+  // args: {files: [{path, dataParts, byteLength, crc32}], dosDateTime}
+  // where each file has the ZIP-internal path, an array of Blobs (media:
+  // 6.4's chunk Blobs; JSON: single-element [new Blob([string])]),
+  // and the precomputed byteLength/crc32. dosDateTime is
+  // {dosDate, dosTime} from dosDateTimeFromIso (one timestamp for the
+  // whole bundle — the session start).
+  //
+  // Returns {parts, byteLength, fileCount} where parts is the ordered
+  // Blob array for new Blob(parts, {type:'application/zip'}).
+  //
+  // No data descriptors (flag bit 3 NOT set): all sizes/CRCs are known
+  // upfront, keeping the writer simple and maximally compatible.
+  function buildZipParts(args) {
+    if (!isPlainObject(args)) {
+      throw new TypeError('exporter: args must be an object');
+    }
+    if (!Array.isArray(args.files) || args.files.length === 0) {
+      throw new TypeError('exporter: files must be a non-empty array');
+    }
+    var dos = args.dosDateTime;
+    if (!isPlainObject(dos) || typeof dos.dosDate !== 'number' ||
+        typeof dos.dosTime !== 'number') {
+      throw new TypeError('exporter: dosDateTime must be {dosDate, dosTime}');
+    }
+
+    var files = args.files;
+    var i, f, pathBytes;
+    // Validate all files upfront (fail-closed before emitting anything).
+    for (i = 0; i < files.length; i++) {
+      f = files[i];
+      if (!isPlainObject(f)) {
+        throw new TypeError('exporter: files[' + i + '] must be an object');
+      }
+      requireValidZipPath(f.path);
+      if (!Array.isArray(f.dataParts) || f.dataParts.length === 0) {
+        throw new TypeError('exporter: files[' + i + '].dataParts must be a non-empty Blob array');
+      }
+      var j;
+      for (j = 0; j < f.dataParts.length; j++) {
+        if (!isBlobLike(f.dataParts[j])) {
+          throw new TypeError('exporter: files[' + i + '].dataParts[' + j + '] must be a Blob');
+        }
+      }
+      if (typeof f.byteLength !== 'number' || Math.floor(f.byteLength) !== f.byteLength ||
+          f.byteLength < 0) {
+        throw new TypeError('exporter: files[' + i + '].byteLength must be a non-negative integer');
+      }
+      if (typeof f.crc32 !== 'number' || Math.floor(f.crc32) !== f.crc32 ||
+          f.crc32 < 0 || f.crc32 > 0xFFFFFFFF) {
+        throw new TypeError('exporter: files[' + i + '].crc32 must be a uint32');
+      }
+    }
+
+    var parts = [];
+    var centralEntries = [];
+    var offset = 0;
+    var totalDataBytes = 0;
+
+    for (i = 0; i < files.length; i++) {
+      f = files[i];
+      pathBytes = utf8Bytes(f.path);
+
+      // Local file header: 30 bytes fixed + path.
+      var lh = new Uint8Array(30 + pathBytes.length);
+      var lv = new DataView(lh.buffer);
+      writeU32LE(lv, 0, ZIP_SIG_LOCAL);
+      writeU16LE(lv, 4, ZIP_VERSION_NEEDED);
+      writeU16LE(lv, 6, ZIP_FLAG_UTF8);
+      writeU16LE(lv, 8, ZIP_METHOD_STORE);
+      writeU16LE(lv, 10, dos.dosTime);
+      writeU16LE(lv, 12, dos.dosDate);
+      writeU32LE(lv, 14, f.crc32);
+      writeU32LE(lv, 18, f.byteLength);
+      writeU32LE(lv, 22, f.byteLength);
+      writeU16LE(lv, 26, pathBytes.length);
+      writeU16LE(lv, 28, 0); // extra length
+      lh.set(pathBytes, 30);
+      var lhBlob = new Blob([lh]);
+
+      parts.push(lhBlob);
+      var dataOffset = offset + lhBlob.size;
+      var k;
+      for (k = 0; k < f.dataParts.length; k++) {
+        parts.push(f.dataParts[k]);
+      }
+      centralEntries.push({
+        pathBytes: pathBytes,
+        crc32: f.crc32,
+        byteLength: f.byteLength,
+        localOffset: offset
+      });
+      offset = dataOffset + f.byteLength;
+      totalDataBytes += f.byteLength;
+    }
+
+    // Central directory.
+    var centralStart = offset;
+    var centralParts = [];
+    var centralSize = 0;
+    for (i = 0; i < centralEntries.length; i++) {
+      var e = centralEntries[i];
+      var ch = new Uint8Array(46 + e.pathBytes.length);
+      var cv = new DataView(ch.buffer);
+      writeU32LE(cv, 0, ZIP_SIG_CENTRAL);
+      writeU16LE(cv, 4, ZIP_VERSION_MADE_BY);
+      writeU16LE(cv, 6, ZIP_VERSION_NEEDED);
+      writeU16LE(cv, 8, ZIP_FLAG_UTF8);
+      writeU16LE(cv, 10, ZIP_METHOD_STORE);
+      writeU16LE(cv, 12, dos.dosTime);
+      writeU16LE(cv, 14, dos.dosDate);
+      writeU32LE(cv, 16, e.crc32);
+      writeU32LE(cv, 20, e.byteLength);
+      writeU32LE(cv, 24, e.byteLength);
+      writeU16LE(cv, 28, e.pathBytes.length);
+      writeU16LE(cv, 30, 0); // extra length
+      writeU16LE(cv, 32, 0); // comment length
+      writeU16LE(cv, 34, 0); // disk number start
+      writeU16LE(cv, 36, 0); // internal attributes
+      writeU32LE(cv, 38, 0); // external attributes
+      writeU32LE(cv, 42, e.localOffset);
+      ch.set(e.pathBytes, 46);
+      var chBlob = new Blob([ch]);
+      centralParts.push(chBlob);
+      centralSize += chBlob.size;
+    }
+    for (i = 0; i < centralParts.length; i++) {
+      parts.push(centralParts[i]);
+    }
+    offset = centralStart + centralSize;
+
+    // End of central directory: 22 bytes.
+    var er = new Uint8Array(22);
+    var ev = new DataView(er.buffer);
+    writeU32LE(ev, 0, ZIP_SIG_END);
+    writeU16LE(ev, 4, 0); // disk number
+    writeU16LE(ev, 6, 0); // central dir start disk
+    writeU16LE(ev, 8, centralEntries.length);
+    writeU16LE(ev, 10, centralEntries.length);
+    writeU32LE(ev, 12, centralSize);
+    writeU32LE(ev, 16, centralStart);
+    writeU16LE(ev, 20, 0); // comment length
+    parts.push(new Blob([er]));
+
+    return {
+      parts: parts,
+      byteLength: offset + 22,
+      fileCount: files.length
+    };
+  }
+
+  BlindfoldSession.buildZipParts = buildZipParts;
+  BlindfoldSession.buildBundleDir = buildBundleDir;
+  BlindfoldSession.buildDownloadFilename = buildDownloadFilename;
+  BlindfoldSession.dosDateTimeFromIso = dosDateTimeFromIso;
+
+  // --- 6.6: export orchestration ---
+
+  // Store names (mirroring db.js; the orchestration reads via deps.db).
+  var EXPORT_EVENTS_STORE = 'events';
+  var EXPORT_CHUNKS_STORE = 'media_chunks';
+  var EXPORT_MANIFEST_STORE = 'recording_manifest';
+  var EXPORT_METADATA_STORE = 'session_metadata';
+  var EXPORT_CONDITIONS_STORE = 'conditions';
+  var EXPORT_BY_SESSION_INDEX = 'bySessionId';
+
+  // The MSDOS epoch ISO string — the honest fallback when no session
+  // start time is available (the 1.1 metadata record carries no
+  // timestamp; contract §2.5).
+  var MSDOS_EPOCH_ISO = '1980-01-01T00:00:00.000Z';
+
+  function requireDeps(deps) {
+    if (!isPlainObject(deps)) {
+      throw new TypeError('exporter: deps must be an object');
+    }
+    if (!isPlainObject(deps.db) || typeof deps.db.get !== 'function' ||
+        typeof deps.db.getAll !== 'function') {
+      throw new TypeError('exporter: deps.db must have get/getAll functions');
+    }
+    // downloads/createObjectURL/revokeObjectURL are optional in deps:
+    // absent → 'downloads-unavailable' at download time (not a throw).
+    return deps;
+  }
+
+  // Extract clock_anchor payloads from the event stream (6.3's contract:
+  // 6.6 extracts these, following 6.1's gameStartingFens precedent).
+  function extractClockAnchors(events) {
+    var out = [];
+    var i, e, p;
+    for (i = 0; i < events.length; i++) {
+      e = events[i];
+      if (!isPlainObject(e) || e.eventType !== 'clock_anchor') {
+        continue;
+      }
+      p = e.payload;
+      if (isPlainObject(p) && typeof p.segmentId === 'string' &&
+          typeof p.utcEpochMs === 'number' && typeof p.monotonicMs === 'number') {
+        out.push({
+          segmentId: p.segmentId,
+          utcEpochMs: p.utcEpochMs,
+          monotonicMs: p.monotonicMs
+        });
+      }
+    }
+    return out;
+  }
+
+  // Extract gameId → fen from game_started events (6.1's contract,
+  // game_records.js denormalization rule).
+  function extractGameStartingFens(events) {
+    var out = {};
+    var i, e, p;
+    for (i = 0; i < events.length; i++) {
+      e = events[i];
+      if (!isPlainObject(e) || e.eventType !== 'game_started') {
+        continue;
+      }
+      if (typeof e.gameId === 'string' && e.gameId !== '') {
+        p = e.payload;
+        var fen = (isPlainObject(p) &&
+          (typeof p.fen === 'string' || p.fen === null)) ? p.fen : null;
+        // First game_started per gameId wins (the session's actual start).
+        if (!Object.prototype.hasOwnProperty.call(out, e.gameId)) {
+          out[e.gameId] = fen;
+        }
+      }
+    }
+    return out;
+  }
+
+  // Resolve the session-start ISO for the bundle directory and DOS
+  // timestamps: the earliest usable manifest createdAtUtc. The 1.1
+  // metadata record carries no timestamp, so this is the honest
+  // stored-data proxy. None usable → MSDOS epoch (contract §2.5).
+  function resolveSessionStartIso(manifestRecords) {
+    var earliest = null;
+    var i, r, ms;
+    for (i = 0; i < manifestRecords.length; i++) {
+      r = manifestRecords[i];
+      if (!isPlainObject(r) || typeof r.createdAtUtc !== 'string') {
+        continue;
+      }
+      ms = Date.parse(r.createdAtUtc);
+      if (isNaN(ms)) {
+        continue;
+      }
+      if (earliest === null || ms < Date.parse(earliest)) {
+        earliest = r.createdAtUtc;
+      }
+    }
+    return earliest !== null ? earliest : MSDOS_EPOCH_ISO;
+  }
+
+  // 6.6: SW-side export orchestration. Reads the session's stores
+  // (readonly), builds the bundle via 6.1–6.5, packages the ZIP, and
+  // triggers the download.
+  //
+  // args: {sessionId, stopVerdict, deps} where deps is
+  // {db, downloads?, createObjectURL?, revokeObjectURL?, nowUtcIso?}.
+  //
+  // Returns {ok:true, filename, bytes, fileCount} |
+  //          {ok:false, error} (never throws except TypeError on
+  // malformed sessionId/deps).
+  function exportSession(args) {
+    if (!isPlainObject(args)) {
+      return Promise.reject(new TypeError('exporter: args must be an object'));
+    }
+    if (!isUuidV4(args.sessionId)) {
+      return Promise.reject(new TypeError('exporter: sessionId must be a uuid-v4 string'));
+    }
+    var deps;
+    try {
+      deps = requireDeps(args.deps);
+    } catch (e) {
+      return Promise.reject(e);
+    }
+    var stopVerdict;
+    try {
+      stopVerdict = requireValidStopVerdict(
+        args.stopVerdict === undefined ? null : args.stopVerdict);
+    } catch (e) {
+      return Promise.reject(e);
+    }
+    var sessionId = args.sessionId;
+    var db = deps.db;
+    var nowUtcIso = typeof deps.nowUtcIso === 'function' ?
+      deps.nowUtcIso : defaultNowUtcIso;
+
+    function fail(error) {
+      return { ok: false, error: error };
+    }
+
+    // Step 2: snapshot counts (readonly proof). media_chunks is counted
+    // via the session's segmentIds (no bySessionId index on the
+    // compound-key store).
+    var before;
+    return db.getAll(EXPORT_EVENTS_STORE,
+      { index: EXPORT_BY_SESSION_INDEX, lower: sessionId, upper: sessionId })
+      .then(function (events) {
+        return db.getAll(EXPORT_MANIFEST_STORE,
+          { index: EXPORT_BY_SESSION_INDEX, lower: sessionId, upper: sessionId })
+          .then(function (manifest) {
+            before = { events: events.length, manifest: manifest.length, chunks: 0 };
+            return { events: events, manifest: manifest };
+          });
+      })
+      .then(function (read) {
+        var events = read.events;
+        var manifestRecords = read.manifest;
+        // Step 3: session metadata.
+        return db.get(EXPORT_METADATA_STORE, sessionId).then(function (metadata) {
+          if (metadata === undefined || metadata === null) {
+            return fail('session-not-found');
+          }
+          // Step 4: conditions (absent → null; 6.1 handles honestly).
+          return db.get(EXPORT_CONDITIONS_STORE, sessionId).then(function (conditions) {
+            return {
+              metadata: metadata,
+              conditions: (conditions === undefined) ? null : conditions,
+              events: events,
+              manifestRecords: manifestRecords
+            };
+          });
+        });
+      })
+      .then(function (ctx) {
+        if (ctx.ok === false) { return ctx; } // session-not-found
+        // Steps 6–7: extract anchors and FENs from the event stream.
+        var clockAnchors = extractClockAnchors(ctx.events);
+        var gameStartingFens = extractGameStartingFens(ctx.events);
+        // Step 8: name the segment files (6.5). Throws TypeError on
+        // corrupt manifest → mapped to corrupt-record below.
+        var naming;
+        try {
+          naming = nameSegmentFiles({ manifestRecords: ctx.manifestRecords });
+        } catch (e) {
+          return fail('corrupt-recording_manifest-record:' + e.message);
+        }
+        ctx.clockAnchors = clockAnchors;
+        ctx.gameStartingFens = gameStartingFens;
+        ctx.naming = naming;
+        return ctx;
+      })
+      .then(function (ctx) {
+        if (ctx.ok === false) { return ctx; }
+        // Step 9: per segment (6.5's files order = 6.3's deterministic
+        // order), read chunks via the 4.13 compound-key-range precedent
+        // and assemble (6.4). Accumulate chunkStats for 6.3.
+        var chunkStats = {};
+        var segmentBlobs = {}; // segmentId → {parts, byteLength, crc32}
+        var chain = Promise.resolve();
+        var countChunks = 0;
+        ctx.naming.files.forEach(function (nf) {
+          chain = chain.then(function () {
+            return db.getAll(EXPORT_CHUNKS_STORE, {
+              lower: [nf.segmentId, -1],
+              upper: [nf.segmentId, Number.MAX_SAFE_INTEGER]
+            });
+          }).then(function (chunks) {
+            countChunks += chunks.length;
+            return assembleSegmentChunks({ chunks: chunks }).then(function (asm) {
+              segmentBlobs[nf.segmentId] = asm;
+              // chunksAfterFinalize: chunks whose createdAtUtc is after
+              // the manifest record's finalizedAtUtc (append-only store;
+              // §6 reads the store, not the finalize tally).
+              var manifestRec = null;
+              var i;
+              for (i = 0; i < ctx.manifestRecords.length; i++) {
+                if (ctx.manifestRecords[i] &&
+                    ctx.manifestRecords[i].segmentId === nf.segmentId) {
+                  manifestRec = ctx.manifestRecords[i];
+                  break;
+                }
+              }
+              var finalizedMs = (manifestRec !== null &&
+                typeof manifestRec.finalizedAtUtc === 'string') ?
+                Date.parse(manifestRec.finalizedAtUtc) : NaN;
+              var after = 0;
+              if (!isNaN(finalizedMs)) {
+                for (i = 0; i < chunks.length; i++) {
+                  var c = chunks[i];
+                  if (isPlainObject(c) && typeof c.createdAtUtc === 'string') {
+                    var cms = Date.parse(c.createdAtUtc);
+                    if (!isNaN(cms) && cms > finalizedMs) { after++; }
+                  }
+                }
+              }
+              chunkStats[nf.segmentId] = {
+                chunkCount: asm.chunkCount,
+                chunksAfterFinalize: after
+              };
+            }, function (e) {
+              // 6.4's TypeError → honest corrupt-record error.
+              throw { exportError: 'corrupt-media_chunks-record:' + e.message };
+            });
+          });
+        });
+        return chain.then(function () {
+          before.chunks = countChunks;
+          ctx.chunkStats = chunkStats;
+          ctx.segmentBlobs = segmentBlobs;
+          return ctx;
+        }, function (e) {
+          if (e && e.exportError) { return fail(e.exportError); }
+          throw e;
+        });
+      })
+      .then(function (ctx) {
+        if (ctx.ok === false) { return ctx; }
+        // Steps 10–11: build the three JSON files and the paths.
+        var jsonFiles;
+        try {
+          var metadataJson = buildMetadataJson({
+            metadata: ctx.metadata,
+            conditions: ctx.conditions,
+            manifestRecords: ctx.manifestRecords,
+            stopVerdict: stopVerdict,
+            eventCount: ctx.events.length,
+            gameStartingFens: ctx.gameStartingFens,
+            nowUtcIso: nowUtcIso
+          });
+          var eventsJsonl = buildEventsJsonl({ events: ctx.events });
+          var segmentFiles = ctx.naming.bySegmentId;
+          var mediaSyncJson = buildMediaSyncJson({
+            manifestRecords: ctx.manifestRecords,
+            clockAnchors: ctx.clockAnchors,
+            stopVerdict: stopVerdict,
+            segmentFiles: segmentFiles,
+            chunkStats: ctx.chunkStats,
+            nowUtcIso: nowUtcIso
+          });
+          var dateIso = resolveSessionStartIso(ctx.manifestRecords);
+          var dirArgs = {
+            sessionCategory: ctx.metadata.sessionCategory,
+            dateIso: dateIso,
+            gameIds: ctx.metadata.gameIds,
+            sessionId: ctx.metadata.sessionId
+          };
+          var dir = buildBundleDir(dirArgs);
+          var downloadFilename = buildDownloadFilename(dirArgs);
+          var dosDateTime = dosDateTimeFromIso(dateIso);
+          jsonFiles = [
+            { name: 'metadata.json', text: metadataJson },
+            { name: 'events.jsonl', text: eventsJsonl },
+            { name: 'media-sync.json', text: mediaSyncJson }
+          ];
+          ctx.dir = dir;
+          ctx.downloadFilename = downloadFilename;
+          ctx.dosDateTime = dosDateTime;
+          ctx.jsonFiles = jsonFiles;
+        } catch (e) {
+          // 6.1/6.2/6.3/6.5 builders throw TypeError on corrupt input;
+          // 'failed' verdict → plain Error → session-not-complete
+          // (reviewer N1 from 6.1).
+          if (e instanceof Error && !(e instanceof TypeError) &&
+              /session-not-complete/.test(e.message)) {
+            return fail('session-not-complete');
+          }
+          return fail('corrupt-record:' + e.message);
+        }
+        return ctx;
+      })
+      .then(function (ctx) {
+        if (ctx.ok === false) { return ctx; }
+        // Step 12: assemble the ZIP parts (JSON first, then media in
+        // 6.5's files order).
+        var zipFiles = [];
+        var i;
+        try {
+          for (i = 0; i < ctx.jsonFiles.length; i++) {
+            var jf = ctx.jsonFiles[i];
+            var jbytes = utf8Bytes(jf.text);
+            var state = 0xFFFFFFFF;
+            state = crc32Update(state, jbytes);
+            zipFiles.push({
+              path: ctx.dir + jf.name,
+              dataParts: [new Blob([jbytes])],
+              byteLength: jbytes.length,
+              crc32: crc32Finalize(state)
+            });
+          }
+          for (i = 0; i < ctx.naming.files.length; i++) {
+            var nf = ctx.naming.files[i];
+            var asm = ctx.segmentBlobs[nf.segmentId];
+            zipFiles.push({
+              path: ctx.dir + nf.filename,
+              dataParts: asm.parts,
+              byteLength: asm.byteLength,
+              crc32: asm.crc32
+            });
+          }
+          var zip = buildZipParts({ files: zipFiles, dosDateTime: ctx.dosDateTime });
+          ctx.zip = zip;
+        } catch (e) {
+          return fail('corrupt-record:' + e.message);
+        }
+        return ctx;
+      })
+      .then(function (ctx) {
+        if (ctx.ok === false) { return ctx; }
+        // Step 13: re-count stores (the after-proof). Mismatch → honest
+        // error, NO download (never deliver a possibly-inconsistent bundle).
+        return db.getAll(EXPORT_EVENTS_STORE,
+          { index: EXPORT_BY_SESSION_INDEX, lower: sessionId, upper: sessionId })
+          .then(function (events) {
+            return db.getAll(EXPORT_MANIFEST_STORE,
+              { index: EXPORT_BY_SESSION_INDEX, lower: sessionId, upper: sessionId })
+              .then(function (manifest) {
+                if (events.length !== before.events || manifest.length !== before.manifest) {
+                  return fail('store-changed-during-export');
+                }
+                // Chunk count: recount via the same per-segment reads.
+                // (A chunk-count change without a manifest change is
+                // still a change — recount cheaply.)
+                var recount = Promise.resolve(0);
+                ctx.naming.files.forEach(function (nf) {
+                  recount = recount.then(function (n) {
+                    return db.getAll(EXPORT_CHUNKS_STORE, {
+                      lower: [nf.segmentId, -1],
+                      upper: [nf.segmentId, Number.MAX_SAFE_INTEGER]
+                    }).then(function (chunks) { return n + chunks.length; });
+                  });
+                });
+                return recount.then(function (chunkCount) {
+                  if (chunkCount !== before.chunks) {
+                    return fail('store-changed-during-export');
+                  }
+                  return ctx;
+                });
+              });
+          });
+      })
+      .then(function (ctx) {
+        if (ctx.ok === false) { return ctx; }
+        // Steps 14–16: download. downloads/createObjectURL absent →
+        // 'downloads-unavailable' (not a throw — expected on some surfaces).
+        if (!deps.downloads || typeof deps.downloads.download !== 'function' ||
+            typeof deps.createObjectURL !== 'function') {
+          return fail('downloads-unavailable');
+        }
+        var blob;
+        try {
+          blob = new Blob(ctx.zip.parts, { type: 'application/zip' });
+        } catch (e) {
+          return fail('download-failed:blob-construction:' + e.message);
+        }
+        var url;
+        try {
+          url = deps.createObjectURL(blob);
+        } catch (e) {
+          return fail('download-failed:object-url:' + e.message);
+        }
+        var done = function (result) {
+          try {
+            if (typeof deps.revokeObjectURL === 'function') {
+              deps.revokeObjectURL(url);
+            }
+          } catch (e) { /* revoke is best-effort */ }
+          return result;
+        };
+        var downloadResult;
+        try {
+          downloadResult = deps.downloads.download({
+            url: url,
+            filename: ctx.downloadFilename,
+            saveAs: false
+          });
+        } catch (e) {
+          return done(fail('download-failed:' + e.message));
+        }
+        return Promise.resolve(downloadResult).then(function () {
+          return done({
+            ok: true,
+            filename: ctx.downloadFilename,
+            bytes: ctx.zip.byteLength,
+            fileCount: ctx.zip.fileCount
+          });
+        }, function (e) {
+          return done(fail('download-failed:' + (e && e.message ? e.message : e)));
+        });
+      })
+      .catch(function (e) {
+        // Unmapped DB/IDB errors → honest failure (stores untouched).
+        if (e && e.exportError) { return fail(e.exportError); }
+        return fail('export-failed:' + (e && e.message ? e.message : String(e)));
+      });
+  }
+
+  BlindfoldSession.exportSession = exportSession;
 })();
 
 // Node test shim. importScripts() consumers use the BlindfoldSession

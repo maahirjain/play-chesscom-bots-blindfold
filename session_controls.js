@@ -761,6 +761,19 @@ var BlindfoldSession = BlindfoldSession || {};
     markerButton.disabled = true;
     cluster.appendChild(markerButton);
 
+    // 6.6: Download affordance (PLAN.md §6.6). Exports the last completed
+    // session's bundle as a ZIP via the SW-side export-request channel.
+    // Enabled ONLY when idle AND a stop verdict is retained (5.10's
+    // lastStopResponse) — never during ACTIVE/STARTING/STOPPING.
+    // Presentation-only: never touches the phase machine.
+    var downloadButton = doc.createElement('button');
+    downloadButton.type = 'button';
+    downloadButton.className = 'blindfold-session-download';
+    downloadButton.textContent = 'Download';
+    downloadButton.setAttribute('aria-label', 'Download session export ZIP');
+    downloadButton.disabled = true;
+    cluster.appendChild(downloadButton);
+
     // Anchor: the extension's own move-input UI (2.8 precedent), so the
     // cluster reads [Start][mic][screen][webcam] ahead of 2.8's saving
     // light — four lights total, PLAN §(c) step 4. Fixed-corner fallback
@@ -832,6 +845,84 @@ var BlindfoldSession = BlindfoldSession || {};
         markerButton.removeAttribute('title');
       }
     }
+
+    // 6.6: download affordance enable/disable. Enabled only when the
+    // control is idle AND a stop verdict is retained (the session to
+    // export). Disabled during any active phase and while an export is
+    // in flight.
+    function setDownloadEnabled(enabled) {
+      downloadButton.disabled = !enabled;
+      if (!enabled) {
+        downloadButton.removeAttribute('title');
+      }
+    }
+
+    function refreshDownloadButton() {
+      // The button exports lastStopResponse's session; it is meaningful
+      // only when idle with a retained verdict.
+      var usable = (phase === CONTROL_PHASE_IDLE && lastStopResponse !== null);
+      setDownloadEnabled(usable);
+      if (usable && downloadButton.textContent !== 'Download') {
+        downloadButton.textContent = 'Download';
+      }
+    }
+
+    // 6.6: Download click. Sends export-request {sessionId, stopVerdict}
+    // to the SW; the sessionId comes from the retained verdict (never
+    // guessed). Failure-isolated: a messaging failure surfaces as
+    // button detail, never breaks the control.
+    function onDownloadClick() {
+      var verdict = lastStopResponse;
+      if (verdict === null || phase !== CONTROL_PHASE_IDLE) {
+        return; // not in an exportable state; the button is disabled.
+      }
+      var sessionId = verdict.sessionId;
+      if (typeof sessionId !== 'string' || sessionId === '') {
+        downloadButton.setAttribute('title', 'export-failed:missing-session');
+        return;
+      }
+      downloadButton.textContent = 'Exporting…';
+      downloadButton.disabled = true;
+      downloadButton.setAttribute('aria-label', 'Exporting session ZIP');
+      var envelope = {
+        kind: 'export',
+        v: 1,
+        msg: 'export-request',
+        sessionId: sessionId,
+        stopVerdict: verdict
+      };
+      var sendResult;
+      try {
+        sendResult = opts.sendRecorderMessage(envelope);
+      } catch (e) {
+        sendResult = Promise.reject(e);
+      }
+      Promise.resolve(sendResult).then(function (resp) {
+        downloadButton.textContent = 'Download';
+        downloadButton.setAttribute('aria-label', 'Download session export ZIP');
+        if (resp !== null && typeof resp === 'object' && resp.ok === true) {
+          // Download started (the shelf shows native progress). Keep the
+          // button enabled for re-export (6.7: repeatable from retained data).
+          downloadButton.removeAttribute('title');
+        } else {
+          var err = (resp !== null && typeof resp === 'object' &&
+            typeof resp.error === 'string') ? resp.error : 'no-response';
+          downloadButton.setAttribute('title', 'export-failed:' + err);
+        }
+        refreshDownloadButton();
+      }, function (e) {
+        downloadButton.textContent = 'Download';
+        downloadButton.setAttribute('aria-label', 'Download session export ZIP');
+        var name = (e && typeof e.message === 'string' && e.message) ?
+          e.message : 'send-failed';
+        downloadButton.setAttribute('title', 'export-failed:' + name);
+        refreshDownloadButton();
+      });
+    }
+
+    try {
+      downloadButton.addEventListener('click', onDownloadClick);
+    } catch (e) { /* non-DOM stub */ }
 
     function markerFailureLabel(e) {
       var name = (e && typeof e.name === 'string' && e.name) ?
@@ -1196,6 +1287,7 @@ var BlindfoldSession = BlindfoldSession || {};
       }
       phase = CONTROL_PHASE_STARTING;
       setButton('Starting…', false, null, 'Starting recording session');
+      setDownloadEnabled(false); // 6.6: not exportable while starting.
       // 5.6: reset readiness latch; show "waiting" immediately — the
       // poll refines it once the session is active. (Aborts hide the
       // badge via resetReadiness.)
@@ -1696,7 +1788,11 @@ var BlindfoldSession = BlindfoldSession || {};
             // 5.10: enriched retention for §6's media-sync.json "known
             // gaps" and export completeness reporting. Still null
             // before any Stop (existing seam, extended shape).
+            // 6.6: sessionId is captured here (before setSlots clears it)
+            // so the Download affordance exports the verdict's session —
+            // never a guessed ID.
             var enriched = {
+              sessionId: activeSessionId,
               stopResp: stopResp,
               flushResult: isPlainObject(flushResult) ? flushResult : null,
               verdict: completion.verdict,
@@ -1717,6 +1813,7 @@ var BlindfoldSession = BlindfoldSession || {};
             var detail = (completion.warnings.length > 0) ?
               'finalize-warnings:' + completion.warnings.join(';') : null;
             setButton('Start', true, detail, 'Start recording session');
+            refreshDownloadButton(); // 6.6: verdict retained → exportable.
             // 5.2: the form is re-enabled for the next game. The
             // user's last selection stays in place (5.3 will formalize
             // remembered defaults); an adopted-unknown label is reset
@@ -1823,6 +1920,9 @@ var BlindfoldSession = BlindfoldSession || {};
         return { sessionId: activeSessionId, gameId: activeGameId };
       },
       getLastStopResponse: function () { return lastStopResponse; },
+      // 6.6: download affordance (test seam).
+      downloadButton: downloadButton,
+      refreshDownloadButton: refreshDownloadButton,
       // 5.9: mid-session game transition entry point (content.js's
       // onGameReset calls this when the history tracker detects a
       // genuine reset during an ACTIVE session).

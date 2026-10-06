@@ -464,7 +464,7 @@ describe('AC7 — diff discipline (static)', () => {
     headManifest.permissions = manifest.permissions;
     headManifest.host_permissions = manifest.host_permissions;
     assert.deepEqual(manifest, headManifest);
-    assert.deepStrictEqual(manifest.permissions, ['offscreen', 'tabCapture', 'storage']);
+    assert.deepStrictEqual(manifest.permissions, ['offscreen', 'tabCapture', 'storage', 'downloads']);
     assert.deepStrictEqual(manifest.host_permissions, ['https://www.chess.com/*']);
   });
 
@@ -1451,6 +1451,12 @@ describe('2.5 retry policy', () => {
       '.autodev/evidence/6.4.build.md',
       '.autodev/evidence/6.5.contract.md',
       '.autodev/evidence/6.5.build.md',
+      // 6.6 (ZIP packaging) adds the ZIP writer + exportSession to
+      // exporter.js, the export-request listener to sw.js, the
+      // downloads permission to manifest.json, and the Download
+      // affordance to session_controls.js.
+      '.autodev/evidence/6.6.contract.md',
+      '.autodev/evidence/6.6.build.md',
       // 6.4+6.5 review/behavior use combined naming (reviewer/verifier
       // wrote single files for the pair, 6.2+6.3 precedent).
       '.autodev/evidence/6.4+6.5.review.md',

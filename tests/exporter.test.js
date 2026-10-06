@@ -299,20 +299,20 @@ describe('AC6 — diff discipline', () => {
       .map((l) => l.slice(3).trim())
       .filter((f) => f !== '' && !/^\.autodev\/evidence\/5\.\d/.test(f));
     assert.deepEqual(changed.sort(), [
-      // 6.1–6.3 were committed (7a23b3a, f3bb3dd); this pin now covers
-      // 6.4/6.5's working tree. 6.4 (assemble chunks) and 6.5 (numbered
-      // files) extend the exporter.js module; their evidence and
-      // DECISIONS.md entries join the allowlists. The 6.4/6.5
-      // review/behavior evidence lands after the pins are evolved
-      // (2.x-6.3 precedent); combined 6.4+6.5 naming.
+      // 6.1–6.5 were committed (7a23b3a, f3bb3dd, 27ef7a5); this pin now
+      // covers 6.6's working tree. 6.6 (ZIP packaging) adds the ZIP
+      // writer + exportSession orchestration to exporter.js, the
+      // export-request listener to sw.js, the downloads permission to
+      // manifest.json, and the Download affordance to
+      // session_controls.js. The 6.6 review/behavior evidence lands
+      // after the pins are evolved (2.x-6.5 precedent).
       '.autodev/DECISIONS.md',
-      '.autodev/evidence/6.4.build.md',
-      '.autodev/evidence/6.4.contract.md',
-      '.autodev/evidence/6.4+6.5.review.md',
-      '.autodev/evidence/6.4+6.5.behavior.md',
-      '.autodev/evidence/6.5.build.md',
-      '.autodev/evidence/6.5.contract.md',
+      '.autodev/evidence/6.6.contract.md',
+      '.autodev/evidence/6.6.build.md',
       'exporter.js',
+      'manifest.json',
+      'session_controls.js',
+      'sw.js',
       'tests/exporter.test.js',
       ...[
         'tests/attempt_tracker.test.js',
@@ -328,13 +328,20 @@ describe('AC6 — diff discipline', () => {
         'tests/game_lifecycle.test.js',
         'tests/history_tracker.test.js',
         'tests/lifecycle.test.js',
+        // 6.6: manifest_sw.test.js and recording_host.test.js pins evolved
+        // for the downloads permission (6.6's legitimate manifest delta).
+        'tests/manifest_sw.test.js',
+        // 6.6: sw.js pins in db/session_store/writer evolved for the
+        // export-request listener IIFE (6.6's legitimate sw.js delta).
+        'tests/db.test.js',
+        'tests/session_store.test.js',
+        'tests/writer.test.js',
         'tests/recording_host.test.js',
         'tests/retention.test.js',
         'tests/selection_memory.test.js',
         'tests/sender.test.js',
         'tests/session_controls.test.js',
         'tests/session_fields.test.js',
-        'tests/session_store.test.js',
         'tests/speech.test.js',
         'tests/status_indicator.test.js',
         'tests/stream_starter.test.js',
@@ -342,8 +349,7 @@ describe('AC6 — diff discipline', () => {
         'tests/sync_marker.test.js',
         'tests/timecode.test.js',
         'tests/track_monitor.test.js',
-        'tests/visibility.test.js',
-        'tests/writer.test.js'
+        'tests/visibility.test.js'
       ]
     ].sort());
   });
@@ -1358,5 +1364,549 @@ describe('6.5 AC8 — determinism', () => {
       manifestRecords: [recs[2], recs[0], recs[1]]
     });
     assert.deepEqual(r1, r2);
+  });
+});
+
+// ------------------------------------------------------------------
+// 6.6 — ZIP packaging (PLAN.md §6.6) per .autodev/evidence/6.6.contract.md.
+// ------------------------------------------------------------------
+
+// AC1: buildZipParts byte-exactness — a real unzip reads back correct
+// filenames, CRCs, sizes, and data.
+describe('6.6 AC1 — ZIP byte-exactness', () => {
+  const { execFileSync } = require('node:child_process');
+  const fs = require('node:fs');
+  const os = require('node:os');
+
+  async function writeZipToTemp(zipParts) {
+    const blob = new Blob(zipParts, { type: 'application/zip' });
+    const ab = await blob.arrayBuffer();
+    const p = require('node:path').join(fs.mkdtempSync(require('node:path').join(os.tmpdir(), 'ziptest-')), 'out.zip');
+    fs.writeFileSync(p, Buffer.from(ab));
+    return p;
+  }
+
+  it('single-file ZIP round-trips through the system unzip', async () => {
+    const text = '{"hello":"world"}';
+    const data = new TextEncoder().encode(text);
+    // CRC via the module's own assembler (ground truth).
+    const asm = await BS.assembleSegmentChunks({
+      chunks: [{ chunkIndex: 0, data: new Blob([data]) }]
+    });
+    const zip = BS.buildZipParts({
+      files: [{
+        path: 'training/2026-10-06_x/metadata.json',
+        dataParts: asm.parts,
+        byteLength: asm.byteLength,
+        crc32: asm.crc32
+      }],
+      dosDateTime: BS.dosDateTimeFromIso('2026-10-06T12:00:00.000Z')
+    });
+    const zp = await writeZipToTemp(zip.parts);
+    // unzip -t validates structure + CRCs.
+    execFileSync('unzip', ['-t', zp]);
+    const out = execFileSync('unzip', ['-p', zp,
+      'training/2026-10-06_x/metadata.json']).toString();
+    assert.equal(out, text);
+  });
+
+  it('multi-file ZIP with binary data round-trips', async () => {
+    const bin = new Uint8Array([0x00, 0xFF, 0x80, 0x7F, 1, 2, 3]);
+    const asm = await BS.assembleSegmentChunks({
+      chunks: [
+        { chunkIndex: 0, data: new Blob([bin.slice(0, 3)]) },
+        { chunkIndex: 1, data: new Blob([bin.slice(3)]) }
+      ]
+    });
+    const txt = new TextEncoder().encode('abc');
+    const tstate = (() => {
+      // CRC-32 via the module's exported table (independent path).
+      const T = BS.EXPORTER_CRC32_TABLE;
+      let c = 0xFFFFFFFF;
+      for (let i = 0; i < txt.length; i++) {
+        c = T[(c ^ txt[i]) & 0xFF] ^ (c >>> 8);
+      }
+      return ((c ^ 0xFFFFFFFF) >>> 0);
+    })();
+    const zip = BS.buildZipParts({
+      files: [
+        {
+          path: 'd/f1.bin',
+          dataParts: asm.parts,
+          byteLength: asm.byteLength,
+          crc32: asm.crc32
+        },
+        {
+          path: 'd/f2.txt',
+          dataParts: [new Blob([txt])],
+          byteLength: txt.length,
+          crc32: tstate
+        }
+      ],
+      dosDateTime: BS.dosDateTimeFromIso('2026-01-02T03:04:05.000Z')
+    });
+    assert.equal(zip.fileCount, 2);
+    const zp = await writeZipToTemp(zip.parts);
+    execFileSync('unzip', ['-t', zp]);
+    const listing = execFileSync('unzip', ['-l', zp]).toString();
+    assert.ok(listing.includes('d/f1.bin'));
+    assert.ok(listing.includes('d/f2.txt'));
+    const back = execFileSync('unzip', ['-p', zp, 'd/f1.bin']);
+    assert.deepEqual(new Uint8Array(back), bin);
+  });
+
+  it('empty files array throws TypeError', () => {
+    assert.throws(() => BS.buildZipParts({
+      files: [],
+      dosDateTime: BS.dosDateTimeFromIso('2026-10-06T00:00:00.000Z')
+    }), TypeError);
+  });
+
+  it('invalid ZIP path throws TypeError', () => {
+    const mk = (path) => () => BS.buildZipParts({
+      files: [{
+        path: path,
+        dataParts: [new Blob(['x'])],
+        byteLength: 1,
+        crc32: 0
+      }],
+      dosDateTime: BS.dosDateTimeFromIso('2026-10-06T00:00:00.000Z')
+    });
+    assert.throws(mk('/absolute'), TypeError);
+    assert.throws(mk('../escape'), TypeError);
+    assert.throws(mk('a/../../escape'), TypeError);
+    assert.throws(mk('a\\backslash'), TypeError);
+    assert.throws(mk(''), TypeError);
+  });
+});
+
+// AC2: STORE-only — every header has method 0; no compression code path.
+describe('6.6 AC2 — STORE-only', () => {
+  it('all local and central headers declare method 0', async () => {
+    const data = new TextEncoder().encode('x'.repeat(1000));
+    const asm = await BS.assembleSegmentChunks({
+      chunks: [{ chunkIndex: 0, data: new Blob([data]) }]
+    });
+    const zip = BS.buildZipParts({
+      files: [{
+        path: 'd/f.bin',
+        dataParts: asm.parts,
+        byteLength: asm.byteLength,
+        crc32: asm.crc32
+      }],
+      dosDateTime: BS.dosDateTimeFromIso('2026-10-06T00:00:00.000Z')
+    });
+    const blob = new Blob(zip.parts, { type: 'application/zip' });
+    const ab = await blob.arrayBuffer();
+    const v = new DataView(ab);
+    // Local header method at offset 8.
+    assert.equal(v.getUint16(8, true), 0);
+    // Central directory: find 0x02014b50 signature, method at +10.
+    let centralOff = -1;
+    for (let i = 0; i < ab.byteLength - 4; i++) {
+      if (v.getUint32(i, true) === 0x02014b50) { centralOff = i; break; }
+    }
+    assert.ok(centralOff >= 0, 'central header found');
+    assert.equal(v.getUint16(centralOff + 10, true), 0);
+  });
+
+  it('exporter.js contains no deflate/compress code path', () => {
+    const src = require('node:fs').readFileSync(
+      require('node:path').join(REPO, 'exporter.js'), 'utf8');
+    assert.ok(!/deflate|inflate|compress\(/i.test(src),
+      'no compression code in exporter.js');
+  });
+});
+
+// AC3: path helpers.
+describe('6.6 AC3 — path helpers', () => {
+  const dirArgs = (over = {}) => Object.assign({
+    sessionCategory: 'training',
+    dateIso: '2026-10-06T12:34:56.000Z',
+    gameIds: [GID1],
+    sessionId: SID
+  }, over);
+
+  it('single-game directory: <category>/<date>_<gameId>/', () => {
+    assert.equal(BS.buildBundleDir(dirArgs()),
+      'training/2026-10-06_' + GID1 + '/');
+  });
+
+  it('multi-game directory: <category>/<date>_session-<sessionId>/', () => {
+    assert.equal(BS.buildBundleDir(dirArgs({ gameIds: [GID1, GID2] })),
+      'training/2026-10-06_session-' + SID + '/');
+  });
+
+  it('download filename: <category>-<date>-<shortId>.zip', () => {
+    assert.equal(BS.buildDownloadFilename(dirArgs()),
+      'training-2026-10-06-' + GID1.slice(0, 8) + '.zip');
+    assert.equal(
+      BS.buildDownloadFilename(dirArgs({ gameIds: [GID1, GID2] })),
+      'training-2026-10-06-' + SID.slice(0, 8) + '.zip');
+  });
+
+  it('corrupt category throws TypeError', () => {
+    assert.throws(() => BS.buildBundleDir(dirArgs({ sessionCategory: '../evil' })), TypeError);
+    assert.throws(() => BS.buildBundleDir(dirArgs({ sessionCategory: 'a/b' })), TypeError);
+    assert.throws(() => BS.buildBundleDir(dirArgs({ sessionCategory: '' })), TypeError);
+    assert.throws(() => BS.buildDownloadFilename(dirArgs({ sessionCategory: 'x;y' })), TypeError);
+  });
+
+  it('bad dateIso throws TypeError', () => {
+    assert.throws(() => BS.buildBundleDir(dirArgs({ dateIso: 'not-a-date' })), TypeError);
+    assert.throws(() => BS.buildDownloadFilename(dirArgs({ dateIso: null })), TypeError);
+  });
+
+  it('dosDateTimeFromIso: valid date encodes; garbage → MSDOS epoch', () => {
+    const d = BS.dosDateTimeFromIso('2026-10-06T12:00:00.000Z');
+    // 2026-10-06 → ((2026-1980)<<9)|(10<<5)|6 ; 12:00 → (12<<11)
+    assert.equal(d.dosDate, ((46) << 9) | (10 << 5) | 6);
+    assert.equal(d.dosTime, (12 << 11));
+    const e = BS.dosDateTimeFromIso('garbage');
+    assert.equal(e.dosDate, (0 << 9) | (1 << 5) | 1); // 1980-01-01
+    assert.equal(e.dosTime, 0);
+  });
+});
+
+// AC4–AC6: exportSession orchestration with fake deps.
+describe('6.6 AC4 — exportSession with fake deps', () => {
+  function fakeDb(seed) {
+    // seed: {metadata, conditions, events, manifest, chunksBySegment}
+    return {
+      get: (store, key) => {
+        if (store === 'session_metadata') {
+          return Promise.resolve(seed.metadata || undefined);
+        }
+        if (store === 'conditions') {
+          return Promise.resolve(seed.conditions || undefined);
+        }
+        return Promise.resolve(undefined);
+      },
+      getAll: (store, opts) => {
+        if (store === 'events') {
+          const sid = opts && opts.lower;
+          return Promise.resolve(
+            (seed.events || []).filter((e) => e.sessionId === sid));
+        }
+        if (store === 'recording_manifest') {
+          const sid = opts && opts.lower;
+          return Promise.resolve(
+            (seed.manifest || []).filter((m) => m.sessionId === sid));
+        }
+        if (store === 'media_chunks') {
+          const seg = opts && opts.lower && opts.lower[0];
+          return Promise.resolve((seed.chunksBySegment || {})[seg] || []);
+        }
+        return Promise.resolve([]);
+      }
+    };
+  }
+
+  function seedSession() {
+    const segId = 'seg-1';
+    const meta = {
+      sessionId: SID,
+      gameIds: [GID1],
+      schemaVersion: '1.0.0',
+      extensionVersion: '1.0.0',
+      protocolVersion: null,
+      sessionCategory: 'training'
+    };
+    const manifestRec = {
+      segmentId: segId,
+      sessionId: SID,
+      streamKind: 'microphone',
+      segmentNumber: 1,
+      actualMimeType: 'audio/webm',
+      fileExtension: '.webm',
+      finalized: true,
+      finalizedAtUtc: '2026-10-06T12:01:00.000Z',
+      createdAtUtc: '2026-10-06T12:00:00.000Z',
+      streamStartedAtUtc: '2026-10-06T12:00:00.000Z',
+      streamStartedAtMonotonicMs: 1000,
+      clockSegmentId: 'clk-1'
+    };
+    const anchorEvent = {
+      eventId: 'e-anchor-1',
+      eventType: 'clock_anchor',
+      sessionId: SID,
+      gameId: null,
+      sourceContext: 'sw',
+      sourceSeq: 0,
+      clockSegmentId: 'clk-1',
+      monotonicMs: 1000,
+      appendSeq: 0,
+      refs: null,
+      payload: { segmentId: 'clk-1', utcEpochMs: 1728216000000, monotonicMs: 1000 }
+    };
+    const startedEvent = {
+      eventId: 'e-gs-1',
+      eventType: 'game_started',
+      sessionId: SID,
+      gameId: GID1,
+      sourceContext: 'content',
+      sourceSeq: 1,
+      clockSegmentId: 'clk-1',
+      monotonicMs: 1100,
+      appendSeq: 1,
+      refs: null,
+      payload: { fen: FEN1 }
+    };
+    const chunkBytes = new Uint8Array([1, 2, 3, 4, 5]);
+    return {
+      meta, manifestRec,
+      seed: {
+        metadata: meta,
+        conditions: null,
+        events: [anchorEvent, startedEvent],
+        manifest: [manifestRec],
+        chunksBySegment: {
+          [segId]: [{
+            segmentId: segId,
+            chunkIndex: 0,
+            createdAtUtc: '2026-10-06T12:00:30.000Z',
+            data: new Blob([chunkBytes])
+          }]
+        }
+      }
+    };
+  }
+
+  function fakeDeps(db, over = {}) {
+    const calls = { downloads: [] };
+    return {
+      calls,
+      deps: Object.assign({
+        db,
+        downloads: {
+          download: (opts) => {
+            calls.downloads.push(opts);
+            return Promise.resolve(42);
+          }
+        },
+        createObjectURL: (blob) => 'blob:fake-url',
+        revokeObjectURL: (url) => {},
+        nowUtcIso: () => '2026-10-06T13:00:00.000Z'
+      }, over)
+    };
+  }
+
+  it('exports a session end-to-end with fake deps', async () => {
+    const { seed } = seedSession();
+    const { deps, calls } = fakeDeps(fakeDb(seed));
+    const res = await BS.exportSession({
+      sessionId: SID,
+      stopVerdict: {
+        verdict: 'complete',
+        warnings: [],
+        stopResp: { ok: true, finalizedAtUtc: '2026-10-06T12:01:00.000Z', streams: {} },
+        flushResult: { delivered: 2, pending: 0 }
+      },
+      deps
+    });
+    assert.equal(res.ok, true);
+    assert.ok(res.filename.endsWith('.zip'));
+    assert.ok(res.bytes > 0);
+    // 3 JSON + 1 media = 4 files.
+    assert.equal(res.fileCount, 4);
+    assert.equal(calls.downloads.length, 1);
+    assert.equal(calls.downloads[0].filename, res.filename);
+    assert.equal(calls.downloads[0].saveAs, false);
+    assert.equal(calls.downloads[0].url, 'blob:fake-url');
+  });
+
+  it('session-not-found when metadata absent', async () => {
+    const { deps } = fakeDeps(fakeDb({}));
+    const res = await BS.exportSession({ sessionId: SID, stopVerdict: null, deps });
+    assert.deepEqual(res, { ok: false, error: 'session-not-found' });
+  });
+
+  it('session-not-complete on failed verdict', async () => {
+    const { seed } = seedSession();
+    const { deps } = fakeDeps(fakeDb(seed));
+    const res = await BS.exportSession({
+      sessionId: SID,
+      stopVerdict: { verdict: 'failed', warnings: [] },
+      deps
+    });
+    assert.deepEqual(res, { ok: false, error: 'session-not-complete' });
+  });
+
+  it('malformed sessionId rejects with TypeError', async () => {
+    const { deps } = fakeDeps(fakeDb({}));
+    await assert.rejects(
+      BS.exportSession({ sessionId: 'not-a-uuid', stopVerdict: null, deps }),
+      TypeError);
+  });
+
+  it('downloads-unavailable when deps lack downloads', async () => {
+    const { seed } = seedSession();
+    const { deps } = fakeDeps(fakeDb(seed), {
+      downloads: undefined, createObjectURL: undefined
+    });
+    const res = await BS.exportSession({ sessionId: SID, stopVerdict: null, deps });
+    assert.deepEqual(res, { ok: false, error: 'downloads-unavailable' });
+  });
+
+  it('download-failed when downloads.download rejects', async () => {
+    const { seed } = seedSession();
+    const { deps, calls } = fakeDeps(fakeDb(seed), {
+      downloads: { download: () => Promise.reject(new Error('disk full')) }
+    });
+    const res = await BS.exportSession({ sessionId: SID, stopVerdict: null, deps });
+    assert.equal(res.ok, false);
+    assert.ok(res.error.startsWith('download-failed:'));
+  });
+});
+
+// AC5: readonly proof — mid-export mutation → store-changed-during-export,
+// no download.
+describe('6.6 AC5 — readonly proof', () => {
+  it('mutating events mid-export aborts with no download', async () => {
+    const segId = 'seg-1';
+    const meta = {
+      sessionId: SID, gameIds: [GID1], schemaVersion: '1.0.0',
+      extensionVersion: '1.0.0', protocolVersion: null,
+      sessionCategory: 'training'
+    };
+    let events = [{
+      eventId: 'e1', eventType: 'clock_anchor', sessionId: SID, gameId: null,
+      sourceContext: 'sw', sourceSeq: 0, clockSegmentId: 'c', monotonicMs: 1,
+      appendSeq: 0, refs: null,
+      payload: { segmentId: 'c', utcEpochMs: 1, monotonicMs: 1 }
+    }];
+    const db = {
+      get: (s, k) => Promise.resolve(s === 'session_metadata' ? meta : undefined),
+      getAll: (s, o) => {
+        if (s === 'events') { return Promise.resolve(events.slice()); }
+        if (s === 'recording_manifest') { return Promise.resolve([]); }
+        return Promise.resolve([]);
+      }
+    };
+    const calls = [];
+    const deps = {
+      db,
+      downloads: { download: (x) => { calls.push(x); return Promise.resolve(1); } },
+      createObjectURL: () => 'blob:x',
+      revokeObjectURL: () => {},
+      nowUtcIso: () => '2026-10-06T13:00:00.000Z'
+    };
+    // Mutate between the before-snapshot and the after-proof: the
+    // after-proof recounts, so push a new event after the first read.
+    const origGetAll = db.getAll;
+    let reads = 0;
+    db.getAll = (s, o) => {
+      reads++;
+      if (s === 'events' && reads === 3) {
+        // Third events read = the after-proof recount → inject a row.
+        events = events.concat([Object.assign({}, events[0], {
+          eventId: 'e2', appendSeq: 1
+        })]);
+      }
+      return origGetAll(s, o);
+    };
+    const res = await BS.exportSession({ sessionId: SID, stopVerdict: null, deps });
+    assert.deepEqual(res, { ok: false, error: 'store-changed-during-export' });
+    assert.equal(calls.length, 0, 'no download on store change');
+  });
+});
+
+// AC6: failure mapping — corrupt records.
+describe('6.6 AC6 — corrupt record mapping', () => {
+  it('corrupt manifest record → corrupt-recording_manifest-record', async () => {
+    const meta = {
+      sessionId: SID, gameIds: [GID1], schemaVersion: '1.0.0',
+      extensionVersion: '1.0.0', protocolVersion: null,
+      sessionCategory: 'training'
+    };
+    const db = {
+      get: (s) => Promise.resolve(s === 'session_metadata' ? meta : undefined),
+      getAll: (s) => {
+        if (s === 'events') { return Promise.resolve([]); }
+        if (s === 'recording_manifest') {
+          // Missing streamKind → nameSegmentFiles TypeError.
+          return Promise.resolve([{ segmentId: 'x', sessionId: SID }]);
+        }
+        return Promise.resolve([]);
+      }
+    };
+    const deps = {
+      db,
+      downloads: { download: () => Promise.resolve(1) },
+      createObjectURL: () => 'blob:x',
+      revokeObjectURL: () => {},
+      nowUtcIso: () => '2026-10-06T13:00:00.000Z'
+    };
+    const res = await BS.exportSession({ sessionId: SID, stopVerdict: null, deps });
+    assert.equal(res.ok, false);
+    assert.ok(res.error.startsWith('corrupt-recording_manifest-record:'),
+      'got: ' + res.error);
+  });
+});
+
+// AC7: streaming shape — one Blob per chunk, no full-file buffering.
+describe('6.6 AC7 — streaming shape', () => {
+  it('ZIP parts reference chunk Blobs without concatenating', async () => {
+    const c1 = new Blob([new Uint8Array([1, 2])]);
+    const c2 = new Blob([new Uint8Array([3, 4, 5])]);
+    const asm = await BS.assembleSegmentChunks({
+      chunks: [
+        { chunkIndex: 0, data: c1 },
+        { chunkIndex: 1, data: c2 }
+      ]
+    });
+    // 6.4 pushes the ORIGINAL Blob references.
+    assert.equal(asm.parts[0], c1);
+    assert.equal(asm.parts[1], c2);
+    const zip = BS.buildZipParts({
+      files: [{
+        path: 'd/microphone-001.webm',
+        dataParts: asm.parts,
+        byteLength: asm.byteLength,
+        crc32: asm.crc32
+      }],
+      dosDateTime: BS.dosDateTimeFromIso('2026-10-06T00:00:00.000Z')
+    });
+    // The media's chunk Blobs appear verbatim in the parts array
+    // (header, c1, c2, central dir, end record).
+    assert.ok(zip.parts.includes(c1), 'chunk Blob 1 in ZIP parts');
+    assert.ok(zip.parts.includes(c2), 'chunk Blob 2 in ZIP parts');
+    assert.equal(zip.byteLength,
+      zip.parts.reduce((n, p) => n + p.size, 0));
+  });
+});
+
+// AC8: diff discipline + readonly static pins.
+describe('6.6 AC8 — diff discipline and readonly', () => {
+  it('exporter.js orchestration performs no writes', () => {
+    const src = require('node:fs').readFileSync(
+      require('node:path').join(REPO, 'exporter.js'), 'utf8');
+    assert.ok(!/\.put\(|\.delete\(|deleteObjectStore/.test(src),
+      'no IDB writes in exporter.js');
+    assert.ok(!/sendMessage/.test(src), 'no messaging in exporter.js');
+  });
+
+  it('manifest.json gains exactly the downloads permission', () => {
+    const m = JSON.parse(require('node:fs').readFileSync(
+      require('node:path').join(REPO, 'manifest.json'), 'utf8'));
+    assert.deepEqual(m.permissions,
+      ['offscreen', 'tabCapture', 'storage', 'downloads']);
+  });
+
+  it('PLAN.md is unmodified', () => {
+    const diff = execSync('git diff HEAD -- PLAN.md', { cwd: REPO }).toString();
+    assert.equal(diff, '');
+  });
+
+  it('no new event types, stores, or offscreen messages', () => {
+    const src = require('node:fs').readFileSync(
+      require('node:path').join(REPO, 'exporter.js'), 'utf8');
+    // The export-request envelope is SW-side (chrome.runtime), not offscreen.
+    assert.ok(!/MSG_[A-Z_]+ *=/.test(src), 'no offscreen MSG_* in exporter.js');
+    const sw = require('node:fs').readFileSync(
+      require('node:path').join(REPO, 'sw.js'), 'utf8');
+    assert.ok(sw.includes('export-request'), 'sw.js handles export-request');
+    assert.ok(sw.includes("importScripts(") && sw.includes('exporter.js'),
+      'sw.js imports exporter.js');
   });
 });

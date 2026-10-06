@@ -685,7 +685,7 @@ describe('AC11 — diff discipline', () => {
     // exactly one installWriterListener call, and the completed tasks
     // removed from the absent list.
     const sw = fs.readFileSync(path.join(ROOT, 'sw.js'), 'utf8');
-    assert.ok(sw.includes("importScripts('db.js', 'event_envelope.js', 'writer.js', 'session_identity.js', 'session_conditions.js', 'session_store.js', 'lifecycle.js', 'capture_broker.js', 'recording_host.js');"),
+    assert.ok(sw.includes("importScripts('db.js', 'event_envelope.js', 'writer.js', 'session_identity.js', 'session_conditions.js', 'session_store.js', 'lifecycle.js', 'capture_broker.js', 'recording_host.js', 'exporter.js');"),
       'importScripts line');
     assert.ok(sw.includes('BlindfoldSession.writerListener = BlindfoldSession.installWriterListener();'),
       'install call with lifecycle handle');
@@ -712,16 +712,18 @@ describe('AC11 — diff discipline', () => {
     // extends it with "tabCapture" and adds host_permissions per its
     // contract. Honest cumulative evolution: 5.3 legitimately appends
     // "storage" per its contract (the selection_memory.js
-    // chrome.storage.local adapter for remembered defaults). The
-    // cumulative invariant is that nothing else in the manifest
-    // changed.
+    // chrome.storage.local adapter for remembered defaults). Honest
+    // cumulative evolution: 6.6 legitimately appends "downloads" per its
+    // contract (SW-side export ZIP download). The cumulative invariant is
+    // that nothing else in the manifest changed.
     const headManifest = JSON.parse(execSync('git show HEAD:manifest.json', { cwd: ROOT }).toString());
     const current = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8'));
     headManifest.content_scripts[0].js = current.content_scripts[0].js;
     headManifest.permissions = current.permissions;
     headManifest.host_permissions = current.host_permissions;
     assert.deepEqual(current, headManifest, 'manifest changed beyond the js list + permissions');
-    assert.deepStrictEqual(current.permissions, ['offscreen', 'tabCapture', 'storage']);
+    assert.deepStrictEqual(current.permissions,
+      ['offscreen', 'tabCapture', 'storage', 'downloads']);
     assert.deepStrictEqual(current.host_permissions, ['https://www.chess.com/*']);
   });
 
@@ -1418,6 +1420,12 @@ describe('AC11 — diff discipline', () => {
       '.autodev/evidence/6.4.build.md',
       '.autodev/evidence/6.5.contract.md',
       '.autodev/evidence/6.5.build.md',
+      // 6.6 (ZIP packaging) adds the ZIP writer + exportSession to
+      // exporter.js, the export-request listener to sw.js, the
+      // downloads permission to manifest.json, and the Download
+      // affordance to session_controls.js.
+      '.autodev/evidence/6.6.contract.md',
+      '.autodev/evidence/6.6.build.md',
       // 6.4+6.5 review/behavior use combined naming (reviewer/verifier
       // wrote single files for the pair, 6.2+6.3 precedent).
       '.autodev/evidence/6.4+6.5.review.md',

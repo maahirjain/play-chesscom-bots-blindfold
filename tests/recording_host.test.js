@@ -565,8 +565,12 @@ describe('AC2 — manifest permission change', () => {
     // the "tabCapture" permission for programmatic game-tab capture (see
     // 4.3.contract.md §2). Honest cumulative evolution (5.3): PLAN.md
     // §5.3 legitimately adds "storage" for the selection_memory.js
-    // chrome.storage.local adapter (remembered defaults). Nothing else.
-    assert.deepStrictEqual(manifest.permissions, ['offscreen', 'tabCapture', 'storage']);
+    // chrome.storage.local adapter (remembered defaults). Honest
+    // cumulative evolution (6.6): PLAN.md §6.6 legitimately adds
+    // "downloads" for the SW-side export ZIP download (the only MV3 API
+    // for service-worker-triggered file delivery). Nothing else.
+    assert.deepStrictEqual(manifest.permissions,
+      ['offscreen', 'tabCapture', 'storage', 'downloads']);
   });
 
   it('the 4.3 manifest delta vs HEAD is exactly the contract-pinned change', () => {
@@ -635,8 +639,12 @@ describe('AC2 — manifest permission change', () => {
     const workPerms = workManifest.permissions || [];
     const addedPerms = workPerms.filter((p) => headPerms.indexOf(p) === -1);
     const removedPerms = headPerms.filter((p) => workPerms.indexOf(p) === -1);
-    assert.deepEqual(addedPerms, [],
-      'manifest permissions delta must be empty (5.4 adds no permissions)');
+    // Honest cumulative evolution: 6.6 (export ZIP download) legitimately
+    // adds the "downloads" permission (the only MV3 API for SW-triggered
+    // file delivery) per its contract.
+    assert.ok(addedPerms.every((p) => p === 'downloads'),
+      'manifest permissions delta must be only 6.6\'s "downloads" (got: ' +
+      JSON.stringify(addedPerms) + ')');
     assert.deepEqual(removedPerms, [], 'no permission removals permitted');
     headManifest.permissions = workPerms;
     assert.deepEqual(workManifest, headManifest,
@@ -1206,6 +1214,12 @@ describe('AC6 — diff discipline', () => {
       '.autodev/evidence/6.4.build.md',
       '.autodev/evidence/6.5.contract.md',
       '.autodev/evidence/6.5.build.md',
+      // 6.6 (ZIP packaging) adds the ZIP writer + exportSession to
+      // exporter.js, the export-request listener to sw.js, the
+      // downloads permission to manifest.json, and the Download
+      // affordance to session_controls.js.
+      '.autodev/evidence/6.6.contract.md',
+      '.autodev/evidence/6.6.build.md',
       // 6.4+6.5 review/behavior use combined naming (reviewer/verifier
       // wrote single files for the pair, 6.2+6.3 precedent).
       '.autodev/evidence/6.4+6.5.review.md',

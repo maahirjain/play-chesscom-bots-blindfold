@@ -526,10 +526,14 @@ describe('AC9 — diff discipline', () => {
     // its contract (SW-side discontinuity detection); 4.1 legitimately
     // appends recording_host.js plus the two recordingHost startup lines
     // per its contract (recording-context supervision); 4.3 legitimately
-    // appends capture_broker.js per its contract (SW-side capture broker).
-    assert.deepEqual(lines, [
+    // appends capture_broker.js per its contract (SW-side capture broker);
+    // 6.6 legitimately appends exporter.js and the export-request listener
+    // IIFE per its contract (PLAN.md §6.6).
+    const iifeIdx = lines.findIndex((l) => l.includes('installExportListener'));
+    assert.ok(iifeIdx > 0, '6.6 export listener IIFE present');
+    assert.deepEqual(lines.slice(0, iifeIdx), [
       "'use strict';",
-      "importScripts('db.js', 'event_envelope.js', 'writer.js', 'session_identity.js', 'session_conditions.js', 'session_store.js', 'lifecycle.js', 'capture_broker.js', 'recording_host.js');",
+      "importScripts('db.js', 'event_envelope.js', 'writer.js', 'session_identity.js', 'session_conditions.js', 'session_store.js', 'lifecycle.js', 'capture_broker.js', 'recording_host.js', 'exporter.js');",
       'BlindfoldSession.writerListener = BlindfoldSession.installWriterListener();',
       'BlindfoldSession.recordingHost = BlindfoldSession.createRecordingHost(globalThis.chrome || {});',
       'BlindfoldSession.recordingHost.start();'
@@ -1277,6 +1281,12 @@ describe('AC9 — diff discipline', () => {
       '.autodev/evidence/6.4.build.md',
       '.autodev/evidence/6.5.contract.md',
       '.autodev/evidence/6.5.build.md',
+      // 6.6 (ZIP packaging) adds the ZIP writer + exportSession to
+      // exporter.js, the export-request listener to sw.js, the
+      // downloads permission to manifest.json, and the Download
+      // affordance to session_controls.js.
+      '.autodev/evidence/6.6.contract.md',
+      '.autodev/evidence/6.6.build.md',
       // 6.4+6.5 review/behavior use combined naming (reviewer/verifier
       // wrote single files for the pair, 6.2+6.3 precedent).
       '.autodev/evidence/6.4+6.5.review.md',

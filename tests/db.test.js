@@ -210,9 +210,13 @@ describe('Static guards (AC2/AC4)', () => {
       .split('\n')
       .map((l) => l.replace(/\/\/.*$/, '').trim())
       .filter((l) => l.length > 0);
-    assert.deepEqual(codeLines, [
+    // 6.6 adds the export-request listener IIFE; assert the pre-IIFE
+    // lines match and the IIFE exists separately.
+    const iifeIdx = codeLines.findIndex((l) => l.includes('installExportListener'));
+    assert.ok(iifeIdx > 0, '6.6 export listener IIFE present');
+    assert.deepEqual(codeLines.slice(0, iifeIdx), [
       "'use strict';",
-      "importScripts('db.js', 'event_envelope.js', 'writer.js', 'session_identity.js', 'session_conditions.js', 'session_store.js', 'lifecycle.js', 'capture_broker.js', 'recording_host.js');",
+      "importScripts('db.js', 'event_envelope.js', 'writer.js', 'session_identity.js', 'session_conditions.js', 'session_store.js', 'lifecycle.js', 'capture_broker.js', 'recording_host.js', 'exporter.js');",
       'BlindfoldSession.writerListener = BlindfoldSession.installWriterListener();',
       'BlindfoldSession.recordingHost = BlindfoldSession.createRecordingHost(globalThis.chrome || {});',
       'BlindfoldSession.recordingHost.start();'
@@ -247,7 +251,7 @@ describe('Static guards (AC2/AC4)', () => {
     atHead.permissions = onDisk.permissions;
     atHead.host_permissions = onDisk.host_permissions;
     assert.deepEqual(onDisk, atHead);
-    assert.deepStrictEqual(onDisk.permissions, ['offscreen', 'tabCapture', 'storage']);
+    assert.deepStrictEqual(onDisk.permissions, ['offscreen', 'tabCapture', 'storage', 'downloads']);
     assert.deepStrictEqual(onDisk.host_permissions, ['https://www.chess.com/*']);
   });
 });

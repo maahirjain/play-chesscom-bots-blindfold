@@ -5,7 +5,7 @@
     "background": {
         "service_worker": "sw.js"
     },
-    "permissions": ["offscreen", "tabCapture", "storage"],
+    "permissions": ["offscreen", "tabCapture", "storage", "downloads"],
     "content_scripts": [
         {
             "matches": ["https://www.chess.com/play/computer*"],

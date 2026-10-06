@@ -1583,6 +1583,9 @@ describe('diff-discipline pins (4.6 evolution)', () => {
       // pins; section-6.architecture.md, the §6 planner's) are
       // allowlisted here to repair the stale pins.
       'exporter.js',
+      'sw.js',
+      'manifest.json',
+      'session_controls.js',
       'tests/exporter.test.js',
       '.autodev/evidence/6.1.contract.md',
       '.autodev/evidence/6.1.build.md',
@@ -1606,6 +1609,12 @@ describe('diff-discipline pins (4.6 evolution)', () => {
       '.autodev/evidence/6.4.build.md',
       '.autodev/evidence/6.5.contract.md',
       '.autodev/evidence/6.5.build.md',
+      // 6.6 (ZIP packaging) adds the ZIP writer + exportSession to
+      // exporter.js, the export-request listener to sw.js, the
+      // downloads permission to manifest.json, and the Download
+      // affordance to session_controls.js.
+      '.autodev/evidence/6.6.contract.md',
+      '.autodev/evidence/6.6.build.md',
       // 6.4+6.5 review/behavior use combined naming (reviewer/verifier
       // wrote single files for the pair, 6.2+6.3 precedent).
       '.autodev/evidence/6.4+6.5.review.md',

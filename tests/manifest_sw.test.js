@@ -53,8 +53,11 @@ describe('AC1 — manifest entry', () => {
     // "tabCapture" plus host_permissions for the chess.com game tab
     // (PLAN.md §4.3). Honest cumulative evolution: 5.3 adds "storage"
     // per its contract (the selection_memory.js chrome.storage.local
-    // adapter for remembered defaults). Nothing else.
-    assert.deepStrictEqual(manifest.permissions, ['offscreen', 'tabCapture', 'storage']);
+    // adapter for remembered defaults). Honest cumulative evolution: 6.6
+    // adds "downloads" per its contract (SW-side export ZIP download).
+    // Nothing else.
+    assert.deepStrictEqual(manifest.permissions,
+      ['offscreen', 'tabCapture', 'storage', 'downloads']);
     assert.deepStrictEqual(manifest.host_permissions, ['https://www.chess.com/*']);
     assert.ok(!('content_security_policy' in manifest));
     assert.strictEqual(manifest.version, '1.0.0');
@@ -100,28 +103,45 @@ describe('AC3 — sw.js functional code is exactly the db.js import', () => {
     // (recording_host.js) plus its two startup lines per its contract;
     // 4.3 legitimately adds the SW-side capture broker (capture_broker.js)
     // per its contract (the chrome.* split: the offscreen document cannot
-    // call chrome.tabCapture). Cumulative invariant: exactly these five
-    // functional lines.
+    // call chrome.tabCapture). 6.6 legitimately adds exporter.js to the
+    // importScripts and the export-request onMessage listener per its
+    // contract (PLAN.md §6.6). Cumulative invariant: the pinned lines
+    // below plus the 6.6 export listener IIFE.
     const lines = codeOnly.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-    assert.deepStrictEqual(lines, [
+    // 6.6's export listener is an IIFE starting at '(function
+    // installExportListener() {'. We assert the pre-IIFE lines match
+    // exactly, and the IIFE's presence separately.
+    const iifeStart = lines.findIndex(l => l.includes('installExportListener'));
+    assert.ok(iifeStart > 0, '6.6 export listener IIFE present');
+    const preIife = lines.slice(0, iifeStart);
+    assert.deepStrictEqual(preIife, [
       "'use strict';",
-      "importScripts('db.js', 'event_envelope.js', 'writer.js', 'session_identity.js', 'session_conditions.js', 'session_store.js', 'lifecycle.js', 'capture_broker.js', 'recording_host.js');",
+      "importScripts('db.js', 'event_envelope.js', 'writer.js', 'session_identity.js', 'session_conditions.js', 'session_store.js', 'lifecycle.js', 'capture_broker.js', 'recording_host.js', 'exporter.js');",
       'BlindfoldSession.writerListener = BlindfoldSession.installWriterListener();',
       'BlindfoldSession.recordingHost = BlindfoldSession.createRecordingHost(globalThis.chrome || {});',
       'BlindfoldSession.recordingHost.start();'
     ]);
+    // 6.6's export-request listener is present (the only onMessage in sw.js).
+    assert.ok(codeOnly.includes('installExportListener'),
+      '6.6 export listener IIFE present');
+    assert.ok(codeOnly.includes("msg.msg !== 'export-request'"),
+      '6.6 listener filters for export-request');
   });
 
   it('exactly one importScripts call, importing the 4.3 module set', () => {
     const calls = codeOnly.match(/importScripts\s*\(/g) || [];
     assert.strictEqual(calls.length, 1, 'expected exactly one importScripts call');
-    assert.ok(codeOnly.includes("importScripts('db.js', 'event_envelope.js', 'writer.js', 'session_identity.js', 'session_conditions.js', 'session_store.js', 'lifecycle.js', 'capture_broker.js', 'recording_host.js')"),
-      'must import the storage layer, the event contract, the writer, the session-state modules, the lifecycle detector, the SW capture broker, and the recording-context supervisor');
+    // Honest cumulative evolution (6.6): exporter.js added per the 6.6
+    // contract (PLAN.md §6.6 export orchestration).
+    assert.ok(codeOnly.includes("importScripts('db.js', 'event_envelope.js', 'writer.js', 'session_identity.js', 'session_conditions.js', 'session_store.js', 'lifecycle.js', 'capture_broker.js', 'recording_host.js', 'exporter.js')"),
+      'must import the storage layer, the event contract, the writer, the session-state modules, the lifecycle detector, the SW capture broker, the recording-context supervisor, and the 6.6 exporter');
   });
 
   const forbidden = [
     'indexedDB',
-    'onMessage',
+    // 'onMessage' removed from the forbidden list by 6.6: the
+    // export-request listener is the sole, contract-pinned onMessage in
+    // sw.js (see the assertion above). Other messaging remains forbidden.
     'onConnect',
     'onStartup',
     'onInstalled',
@@ -172,7 +192,8 @@ describe('AC4/AC6 — diff is exactly the background block', () => {
     // appended at the tail, pinned separately); 5.3 legitimately extends
     // it to ["offscreen", "tabCapture", "storage"] per its contract (the
     // selection_memory.js chrome.storage.local adapter for remembered
-    // defaults). The cumulative invariant:
+    // defaults); 6.6 legitimately extends it to include "downloads" per
+    // its contract (SW-side export ZIP download). The cumulative invariant:
     // the head is exactly these five keys, so no other permissions/CSP/
     // version changes can sneak in.
     const head = manifestRaw.slice(0, newContentIdx);
@@ -185,7 +206,7 @@ describe('AC4/AC6 — diff is exactly the background block', () => {
       '    "background": {\n' +
       '        "service_worker": "sw.js"\n' +
       '    },\n' +
-      '    "permissions": ["offscreen", "tabCapture", "storage"],\n' +
+      '    "permissions": ["offscreen", "tabCapture", "storage", "downloads"],\n' +
       '    ',
       'manifest head changed beyond the background + permissions blocks'
     );

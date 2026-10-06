@@ -109,6 +109,9 @@ describe('AC1 — no auto-deletion exists', () => {
     // the manifest content_scripts js list per its contract (the 5.4
     // detected-conditions panel) — it joins the load surface and the
     // scan.
+    // Honest cumulative evolution: 6.1 adds exporter.js (the SW-side
+    // export bundle builders) to sw.js importScripts per its contract —
+    // it joins the load surface and the scan.
     assert.deepEqual(PRODUCT_FILES, [
       'capture_broker.js',
       'chess_utils.js',
@@ -116,6 +119,7 @@ describe('AC1 — no auto-deletion exists', () => {
       'db.js',
       'detected_conditions.js',
       'event_envelope.js',
+      'exporter.js',
       'game_records.js',
       'lifecycle.js',
       'recording_host.js',
@@ -882,6 +886,12 @@ describe('AC4 — diff discipline', () => {
       '.autodev/evidence/6.4.build.md',
       '.autodev/evidence/6.5.contract.md',
       '.autodev/evidence/6.5.build.md',
+      // 6.6 (ZIP packaging) adds the ZIP writer + exportSession to
+      // exporter.js, the export-request listener to sw.js, the
+      // downloads permission to manifest.json, and the Download
+      // affordance to session_controls.js.
+      '.autodev/evidence/6.6.contract.md',
+      '.autodev/evidence/6.6.build.md',
       // 6.4+6.5 review/behavior use combined naming (reviewer/verifier
       // wrote single files for the pair, 6.2+6.3 precedent).
       '.autodev/evidence/6.4+6.5.review.md',
@@ -942,6 +952,10 @@ describe('AC4 — diff discipline', () => {
     // new file (same skip rule — no HEAD content to differ from);
     // 5.4's modifications to content.js, manifest.json, and
     // overlay.css are already covered by the set.
+    // Honest cumulative evolution (6.1): exporter.js is a new file
+    // (same skip rule — no HEAD content to differ from); 6.6's
+    // modifications to exporter.js, sw.js, manifest.json, and
+    // session_controls.js are already covered by the set.
     const changedByTasks = new Set(['chess_utils.js', 'content.js',
                                     'manifest.json', 'sounds.js', 'sw.js',
                                     'recording_host.js', 'recorder.js',
@@ -954,7 +968,8 @@ describe('AC4 — diff discipline', () => {
                                     'selection_memory.js',
                                     'detected_conditions.js',
                                     'overlay.css',
-                                    'capture_broker.js']);
+                                    'capture_broker.js',
+                                    'exporter.js']);
     for (const f of PRODUCT_FILES) {
       if (changedByTasks.has(f)) continue;
       const head = execSync(`git show HEAD:${f}`, { cwd: ROOT, stdio: 'pipe' }).toString();

@@ -1242,6 +1242,12 @@ describe('AC8 — diff discipline', () => {
       '.autodev/evidence/6.4.build.md',
       '.autodev/evidence/6.5.contract.md',
       '.autodev/evidence/6.5.build.md',
+      // 6.6 (ZIP packaging) adds the ZIP writer + exportSession to
+      // exporter.js, the export-request listener to sw.js, the
+      // downloads permission to manifest.json, and the Download
+      // affordance to session_controls.js.
+      '.autodev/evidence/6.6.contract.md',
+      '.autodev/evidence/6.6.build.md',
       // 6.4+6.5 review/behavior use combined naming (reviewer/verifier
       // wrote single files for the pair, 6.2+6.3 precedent).
       '.autodev/evidence/6.4+6.5.review.md',
@@ -1286,7 +1292,7 @@ describe('AC8 — diff discipline', () => {
     // defaults). The durable assertion pins the delta to exactly the
     // 4.3 + 5.3 changes — 4.2's contribution remains zero.
     const manifest = JSON.parse(fs.readFileSync(path.join(REPO, 'manifest.json'), 'utf8'));
-    assert.deepStrictEqual(manifest.permissions, ['offscreen', 'tabCapture', 'storage']);
+    assert.deepStrictEqual(manifest.permissions, ['offscreen', 'tabCapture', 'storage', 'downloads']);
     assert.deepStrictEqual(manifest.host_permissions, ['https://www.chess.com/*']);
     const diff = execSync('git diff HEAD -- manifest.json', { cwd: REPO }).toString();
     assert.ok(!/content_security_policy/.test(diff), 'no CSP change');

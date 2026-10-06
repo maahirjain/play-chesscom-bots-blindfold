@@ -958,14 +958,15 @@ describe('AC15 — diff discipline', () => {
     // extends the importScripts line (recording-context supervisor) and
     // adds the two recordingHost startup lines per its contract; 4.3
     // legitimately adds the SW-side capture broker (capture_broker.js)
-    // per its contract. The working tree now equals HEAD, so assert the
-    // contracted content instead of the diff.
+    // per its contract. 6.6 legitimately adds exporter.js (export bundle
+    // builders + orchestration) per its contract. The working tree now
+    // equals HEAD, so assert the contracted content instead of the diff.
     const sw = fs.readFileSync(path.join(ROOT, 'sw.js'), 'utf8');
     const calls = (sw.match(/importScripts\s*\(/g) || []).length;
     assert.strictEqual(calls, 1, 'exactly one importScripts call');
     assert.ok(sw.includes(
       "importScripts('db.js', 'event_envelope.js', 'writer.js', " +
-      "'session_identity.js', 'session_conditions.js', 'session_store.js', 'lifecycle.js', 'capture_broker.js', 'recording_host.js');"
+      "'session_identity.js', 'session_conditions.js', 'session_store.js', 'lifecycle.js', 'capture_broker.js', 'recording_host.js', 'exporter.js');"
     ));
     assert.ok(!sw.includes('2.7: page/context start'),
       '2.7 must be removed from the absent list');
@@ -1665,6 +1666,12 @@ describe('AC15 — diff discipline', () => {
       '.autodev/evidence/6.4.build.md',
       '.autodev/evidence/6.5.contract.md',
       '.autodev/evidence/6.5.build.md',
+      // 6.6 (ZIP packaging) adds the ZIP writer + exportSession to
+      // exporter.js, the export-request listener to sw.js, the
+      // downloads permission to manifest.json, and the Download
+      // affordance to session_controls.js.
+      '.autodev/evidence/6.6.contract.md',
+      '.autodev/evidence/6.6.build.md',
       // 6.4+6.5 review/behavior use combined naming (reviewer/verifier
       // wrote single files for the pair, 6.2+6.3 precedent).
       '.autodev/evidence/6.4+6.5.review.md',

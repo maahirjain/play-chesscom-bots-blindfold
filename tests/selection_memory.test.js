@@ -415,11 +415,31 @@ describe('AC5 — no-silent-change architectural pins', () => {
     // only — recorder.js and recording_host.js are untouched by 5.3.
     // Honest cumulative evolution: 5.5's duplicate-Start guard touches
     // recorder.js (the handleSetSession guard only — purely additive);
-    // recording_host.js and sw.js stay untouched.
+    // recording_host.js stays untouched. Honest cumulative evolution:
+    // 6.6 legitimately touches sw.js (the export-request listener per
+    // PLAN.md §6.6 — SW-side, kind:'export', not the offscreen recorder
+    // channel).
     const touched = diff.split('\n').filter((l) => l.includes('|'))
       .map((l) => l.split('|')[0].trim());
-    for (const f of ['recording_host.js', 'sw.js']) {
-      assert.ok(!touched.includes(f), f + ' must be untouched by 5.5');
+    for (const f of ['recording_host.js']) {
+      assert.ok(!touched.includes(f), f + ' must be untouched');
+    }
+    // sw.js: allowed for 6.6's export-request listener only (not the
+    // offscreen recorder channel).
+    if (touched.includes('sw.js')) {
+      const sdiff = execSync('git diff HEAD -- sw.js', { cwd: REPO }).toString();
+      assert.ok(sdiff.includes('export-request'),
+        'sw.js diff must be the 6.6 export-request listener');
+      // Check for actual MSG_ constant definitions/modifications, not
+      // comments mentioning the vocabulary. The 6.6 comment says
+      // "MSG_* vocabulary is untouched" — that's the assertion, not a
+      // violation.
+      const msgLines = sdiff.split('\n').filter((l) =>
+        l.startsWith('+') && /MSG_[A-Z_]+/.test(l) &&
+        !l.includes('vocabulary is untouched'));
+      assert.ok(msgLines.length === 0,
+        'sw.js diff must not touch the offscreen MSG_* vocabulary (got: ' +
+        JSON.stringify(msgLines) + ')');
     }
     if (touched.includes('recorder.js')) {
       // 5.5's guard is purely additive: the session-active refusal block
@@ -695,6 +715,9 @@ describe('AC6 — wiring and diff discipline', () => {
       // pins; section-6.architecture.md, the §6 planner's) are
       // allowlisted here to repair the stale pins.
       'exporter.js',
+      'sw.js',
+      'manifest.json',
+      'session_controls.js',
       'tests/exporter.test.js',
       '.autodev/evidence/6.1.contract.md',
       '.autodev/evidence/6.1.build.md',
@@ -718,6 +741,12 @@ describe('AC6 — wiring and diff discipline', () => {
       '.autodev/evidence/6.4.build.md',
       '.autodev/evidence/6.5.contract.md',
       '.autodev/evidence/6.5.build.md',
+      // 6.6 (ZIP packaging) adds the ZIP writer + exportSession to
+      // exporter.js, the export-request listener to sw.js, the
+      // downloads permission to manifest.json, and the Download
+      // affordance to session_controls.js.
+      '.autodev/evidence/6.6.contract.md',
+      '.autodev/evidence/6.6.build.md',
       // 6.4+6.5 review/behavior use combined naming (reviewer/verifier
       // wrote single files for the pair, 6.2+6.3 precedent).
       '.autodev/evidence/6.4+6.5.review.md',
@@ -855,6 +884,23 @@ describe('AC6 — wiring and diff discipline', () => {
       l.includes('streams') || l.includes('errDetail') ||
       l.includes('st.error') || l.includes('detail') ||
       l.includes('STOPPING') || l.includes('wasStopping');
+    // Honest cumulative evolution: 6.6's export Download button adds
+    // the downloadButton DOM + click-handler wiring + export-request
+    // channel call + "Exporting…" transitional UI. Its added lines are
+    // 6.6-keyworded or use the download/export vocabulary.
+    const kw66 = (l) =>
+      l.includes('6.6') || l.includes('downloadButton') ||
+      l.includes('download') || l.includes('Download') ||
+      l.includes('DOWNLOAD') || l.includes('export-request') ||
+      l.includes('exportRequest') || l.includes('Exporting') ||
+      l.includes('export-failed') || l.includes('getLastStopResponse') ||
+      l.includes('lastStopResponse') || l.includes('sessionId') ||
+      l.includes("kind: 'export'") || l.includes('v: 1') ||
+      l.includes('sendResult') || l.includes('sendRecorderMessage') ||
+      l.includes('envelope') || l.includes('resp') ||
+      l.includes('err') || l.includes('message') ||
+      l.includes('send-failed') || l.includes('export') ||
+      l.includes('Export');
     const removed = diff.split('\n')
       .filter((l) => l.startsWith('-') && !l.startsWith('---'))
       .map((l) => l.slice(1).trim())
@@ -862,7 +908,7 @@ describe('AC6 — wiring and diff discipline', () => {
     const bad55 = added.filter((l) =>
       !(structural(l) || l.includes('onSessionStarted') || l.includes('5.3') ||
         l.trim() === 'extensionVersion: extensionVersion,' ||
-        kw55(l) || kw56(l) || kw58(l) || kw59(l) || kw510(l) || removed.includes(l.trim())));
+        kw55(l) || kw56(l) || kw58(l) || kw59(l) || kw510(l) || kw66(l) || removed.includes(l.trim())));
     assert.deepEqual(bad55, [], 'unexpected added lines in session_controls.js:\n' + bad55.join('\n'));
     const badRemoved = removed.filter((l) =>
       !(l === 'extensionVersion: extensionVersion' ||
@@ -981,6 +1027,8 @@ describe('AC6 — wiring and diff discipline', () => {
     // 5.3's storage permission + selection_memory.js line are committed
     // (in HEAD); the uncommitted delta is 5.4's detected_conditions.js
     // content_scripts line per its contract.
+    // Honest cumulative evolution: 6.6 (export ZIP download) legitimately
+    // adds the "downloads" permission per its contract.
     const diff = execSync('git diff HEAD -- manifest.json', { cwd: REPO }).toString();
     if (!diff.trim()) return; // committed
     const added = diff.split('\n')
@@ -988,15 +1036,18 @@ describe('AC6 — wiring and diff discipline', () => {
       .map((l) => l.slice(1));
     assert.ok(added.length >= 1);
     for (const l of added) {
-      assert.ok(l.includes('detected_conditions.js'),
-        'manifest addition must be the detected_conditions.js line: ' + l);
+      assert.ok(l.includes('detected_conditions.js') || l.includes('"downloads"'),
+        'manifest addition must be the detected_conditions.js line or 6.6\'s "downloads" permission: ' + l);
     }
     const removed = diff.split('\n')
       .filter((l) => l.startsWith('-') && !l.startsWith('---'))
       .map((l) => l.slice(1));
     for (const l of removed) {
-      assert.ok(l.includes('selection_memory.js'),
-        'manifest removal must be the superseded js line: ' + l);
+      // Honest cumulative evolution: 6.6's "downloads" permission addition
+      // modifies the permissions line (old 3-permission line removed, new
+      // 4-permission line added).
+      assert.ok(l.includes('selection_memory.js') || l.includes('"permissions"'),
+        'manifest removal must be the superseded js line or 6.6\'s permissions update: ' + l);
     }
   });
 
@@ -1009,10 +1060,14 @@ describe('AC6 — wiring and diff discipline', () => {
     // Honest cumulative evolution: 5.5's duplicate-Start guard touches
     // recorder.js (the handleSetSession guard only — purely additive,
     // asserted above); recording_host.js and sw.js stay untouched.
-    for (const f of ['recording_host.js', 'sw.js']) {
+    // Honest cumulative evolution: 6.6 legitimately touches sw.js (the
+    // export-request listener per PLAN.md §6.6 — SW-side, kind:'export',
+    // not the offscreen recorder channel; asserted in the 5.3 pin above).
+    for (const f of ['recording_host.js']) {
       const diff = execSync(`git diff HEAD -- ${f}`, { cwd: REPO }).toString();
       assert.equal(diff.trim(), '', f + ' must be untouched by 5.5');
     }
+    // sw.js: 6.6's export-request listener is allowed (asserted above).
   });
 });
 
