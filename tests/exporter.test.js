@@ -298,54 +298,12 @@ describe('AC6 — diff discipline', () => {
     const changed = status.split('\n')
       .map((l) => l.slice(3).trim())
       .filter((f) => f !== '' && !/^\.autodev\/evidence\/5\.\d/.test(f));
-    assert.deepEqual(changed.sort(), [
-      // 6.1–6.6 were committed (7a23b3a, f3bb3dd, 27ef7a5, 4b2c6a1);
-      // this pin now covers 6.7/6.8's working tree. 6.7 (repeatable
-      // export) is verification-only (tests + docs, no product-code
-      // changes); 6.8 (export documentation) adds EXPORT.md.
-      '.autodev/DECISIONS.md',
-      '.autodev/evidence/6.7.contract.md',
-      '.autodev/evidence/6.7.build.md',
-      '.autodev/evidence/6.8.contract.md',
-      '.autodev/evidence/6.8.build.md',
-      'EXPORT.md',
-      'tests/exporter.test.js',
-      ...[
-        'tests/attempt_tracker.test.js',
-        'tests/audio_policy.test.js',
-        'tests/capture_selection.test.js',
-        'tests/chunk_writer.test.js',
-        'tests/clock_link.test.js',
-        'tests/detected_conditions.test.js',
-        'tests/device_selection.test.js',
-        'tests/duplicate_start.test.js',
-        'tests/finalizer.test.js',
-        'tests/format_support.test.js',
-        'tests/game_lifecycle.test.js',
-        'tests/history_tracker.test.js',
-        'tests/lifecycle.test.js',
-        // 6.6's manifest_sw.test.js and db.test.js pin evolutions are
-        // committed (4b2c6a1); they drop from the working-tree allowlist.
-        // 6.6: sw.js pins in session_store/writer evolved for the
-        // export-request listener IIFE (6.6's legitimate sw.js delta).
-        'tests/session_store.test.js',
-        'tests/writer.test.js',
-        'tests/recording_host.test.js',
-        'tests/retention.test.js',
-        'tests/selection_memory.test.js',
-        'tests/sender.test.js',
-        'tests/session_controls.test.js',
-        'tests/session_fields.test.js',
-        'tests/speech.test.js',
-        'tests/status_indicator.test.js',
-        'tests/stream_starter.test.js',
-        'tests/stream_status.test.js',
-        'tests/sync_marker.test.js',
-        'tests/timecode.test.js',
-        'tests/track_monitor.test.js',
-        'tests/visibility.test.js'
-      ]
-    ].sort());
+    // Section 6 complete (6.1-6.8 committed: 7a23b3a, f3bb3dd,
+    // 27ef7a5, 4b2c6a1, 9150f38). Working tree is clean; this pin
+    // now asserts the clean-tree invariant. (6.7/6.8 was the last
+    // task with no successor to evolve the pin — section-6 audit
+    // SHOULD_FIX 1, repaired here.)
+    assert.deepEqual(changed.sort(), []);
   });
 
   it('exporter.js defines no new channel messages, event types, stores, or permissions', () => {
