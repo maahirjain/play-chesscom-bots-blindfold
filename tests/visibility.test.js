@@ -331,10 +331,14 @@ describe('AC7/AC8 — content.js wiring (source inspection)', () => {
   });
 
   it('existing help UX unchanged (speech calls preserved)', () => {
+    // 3.4 evolution: the speech calls keep their exact text/behavior and
+    // gain only link threading (helpLink(...)) — UX is byte-identical.
     assert.ok(src.includes('speakText(turn === "w" ? "White\'s turn" : "Black\'s turn"'));
     assert.ok(src.includes('speakText(text || "Game not over."'));
-    assert.ok(src.includes('speakFullMoveList(latest_half_moves)'));
-    assert.ok(src.includes('speakPosition()'));
+    assert.ok(src.includes('speakFullMoveList(latest_half_moves, helpLink(iHelpId))'),
+      'i-shortcut still speaks the move list, now with its help link');
+    assert.ok(src.includes('speakPosition(helpLink(sHelpId))'),
+      's-shortcut still speaks the position, now with its help link');
     assert.ok(src.includes('stopAllSpeech()'), 'Escape still cancels speech');
   });
 });
@@ -349,7 +353,9 @@ describe('AC9 — diff discipline', () => {
     const allowed = new Set([
       'chess_utils.js',
       'content.js',
+      'sounds.js',
       'tests/visibility.test.js',
+      'tests/speech.test.js',
       // Honest cumulative evolution: earlier tasks' suites pin files 3.3
       // legitimately touches.
       'tests/history_tracker.test.js',
@@ -372,7 +378,15 @@ describe('AC9 — diff discipline', () => {
       // Honest cumulative evolution: 3.3's review/behavior evidence
       // lands after the pins were evolved (2.x/3.1/3.2 precedent).
       '.autodev/evidence/3.3.review.md',
-      '.autodev/evidence/3.3.behavior.md'
+      '.autodev/evidence/3.3.behavior.md',
+      // Honest cumulative evolution: 3.4 legitimately touches
+      // sounds.js + content.js and adds its evidence.
+      '.autodev/evidence/3.4.contract.md',
+      '.autodev/evidence/3.4.build.md',
+      // Honest cumulative evolution: 3.4's review/behavior evidence
+      // lands after the pins were evolved (2.x/3.1/3.2/3.3 precedent).
+      '.autodev/evidence/3.4.review.md',
+      '.autodev/evidence/3.4.behavior.md',
     ]);
     for (const f of changed) {
       assert.ok(allowed.has(f), `unexpected modified file: ${f}`);
@@ -387,25 +401,18 @@ describe('AC9 — diff discipline', () => {
     assert.ok(src.includes("BlindfoldSession.HELP_REQUESTED_EVENT_TYPE = 'help_requested'"));
   });
 
-  it('no 3.4/3.5 scope in the diff', () => {
-    // Only ADDED lines count: comments may name 3.4/3.5 to declare scope
-    // boundaries (e.g. "the utterance lifecycle is 3.4's scope").
-    const diff = execSync('git diff HEAD -- chess_utils.js content.js', { cwd: ROOT }).toString();
+  it('no 3.5 scope in the diff (3.4 is the current task — its scope is legitimate)', () => {
+    // Honest cumulative evolution: this pin asserted "no 3.4/3.5 scope"
+    // when 3.3 was current. 3.4's speech instrumentation is now the
+    // legitimate diff; only 3.5 (lifecycle) remains future scope.
+    // Only ADDED lines count: comments may name 3.5 to declare scope
+    // boundaries.
+    const diff = execSync('git diff HEAD -- chess_utils.js content.js sounds.js', { cwd: ROOT }).toString();
     const added = diff.split('\n').filter((l) => l.startsWith('+') && !l.startsWith('+++'));
-    for (const token of ['speechSynthesis', 'visibilitychange',
-                         'page_discontinuity', 'stopAllSpeech(']) {
+    for (const token of ['visibilitychange', 'page_discontinuity']) {
       assert.ok(!added.some((l) => l.includes(token)),
-        `no 3.4/3.5 token in added lines: ${token}`);
+        `no 3.5 token in added lines: ${token}`);
     }
-    // No new speech-behavior code: the diff must not add speakText/speak*
-    // calls (help handlers keep their existing ones; none are added).
-    // Comment lines excluded.
-    const addedSpeakCalls = added.filter((l) => {
-      const code = l.replace(/^\+/, '').trim();
-      return !code.startsWith('//') && !code.startsWith('*') &&
-        /speak(Text|FullMoveList|Position)\(/.test(code);
-    });
-    assert.deepEqual(addedSpeakCalls, [], 'no new speech calls added');
   });
 
   it('PLAN.md untouched', () => {

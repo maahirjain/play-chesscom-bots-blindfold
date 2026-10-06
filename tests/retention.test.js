@@ -248,6 +248,7 @@ describe('AC4 — diff discipline', () => {
       // Honest cumulative evolution: 3.3 legitimately touches
       // chess_utils.js + content.js; its files join the allowlists.
       'tests/visibility.test.js',
+      'tests/speech.test.js',
       '.autodev/evidence/3.3.contract.md',
       '.autodev/evidence/3.3.build.md',
       // Honest cumulative evolution: 3.3's review/behavior evidence
@@ -255,6 +256,15 @@ describe('AC4 — diff discipline', () => {
       '.autodev/evidence/3.3.review.md',
       '.autodev/evidence/3.3.behavior.md',
       '.autodev/evidence/3.3.domaudit.md',
+      // Honest cumulative evolution: 3.4 legitimately touches
+      // sounds.js + content.js and adds its evidence.
+      'sounds.js',
+      '.autodev/evidence/3.4.contract.md',
+      '.autodev/evidence/3.4.build.md',
+      // Honest cumulative evolution: 3.4's review/behavior evidence
+      // lands after the pins were evolved (2.x/3.1/3.2/3.3 precedent).
+      '.autodev/evidence/3.4.review.md',
+      '.autodev/evidence/3.4.behavior.md',
       'tests/attempt_tracker.test.js',
       // This task records the binding §6 export constraint in DECISIONS.md.
       '.autodev/DECISIONS.md',
@@ -275,17 +285,20 @@ describe('AC4 — diff discipline', () => {
     assert.ok(fs.existsSync(path.join(ROOT, 'tests', 'retention.test.js')));
   });
 
-  it('no product file differs from HEAD (except 3.1\'s legitimately changed files)', () => {
+  it('no product file differs from HEAD (except 3.1–3.4\'s legitimately changed files)', () => {
     // Honest cumulative evolution: 3.1 legitimately modifies
     // chess_utils.js, content.js, and manifest.json (pinned by
-    // tests/history_tracker.test.js AC13). All other product files must
+    // tests/history_tracker.test.js AC13); 3.4 legitimately modifies
+    // sounds.js (speech tracker + link threading) and content.js
+    // (link threading + tracker install). All other product files must
     // remain byte-identical — the retention guarantee.
-    const changedBy31 = new Set(['chess_utils.js', 'content.js', 'manifest.json']);
+    const changedByTasks = new Set(['chess_utils.js', 'content.js',
+                                    'manifest.json', 'sounds.js']);
     for (const f of PRODUCT_FILES) {
-      if (changedBy31.has(f)) continue;
+      if (changedByTasks.has(f)) continue;
       const head = execSync(`git show HEAD:${f}`, { cwd: ROOT, stdio: 'pipe' }).toString();
       const current = fs.readFileSync(path.join(ROOT, f), 'utf8');
-      assert.strictEqual(current, head, `${f} changed but 3.1 must not touch it`);
+      assert.strictEqual(current, head, `${f} changed but 3.1/3.4 must not touch it`);
     }
   });
 });

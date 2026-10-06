@@ -91,6 +91,27 @@ try {
   visibilityRecorder.recordInitial('init');
 } catch (e) { /* best-effort; 3.2 SF-1 precedent */ }
 
+// Task 3.4 (PLAN.md §3.4): speech utterance tracker. Instruments every
+// utterance with a uuid-v4 utteranceId linked to its move, help request,
+// or game-result event (3.4.1); records start/end callbacks (3.4.2),
+// cancellation requests vs observed completions (3.4.3), and the
+// one-time speech_settings baseline (3.4.5). Emission is gated on
+// non-empty sessionId AND gameId — pre-§5 the tracker is inert (speech
+// works, no events). Failure-isolated (3.2 SF-1 precedent).
+const speechTracker = BlindfoldSession.createSpeechTracker({
+  getSessionId: () => BlindfoldSession.activeSessionId,
+  getGameId: () => BlindfoldSession.activeGameId,
+  emitEvent: (eventType, payload, refs) =>
+    BlindfoldSession.sender.emit({
+      eventType,
+      sessionId: BlindfoldSession.activeSessionId,
+      gameId: BlindfoldSession.activeGameId,
+      payload,
+      refs: refs || null,
+    }),
+});
+BlindfoldSession.speechTracker = speechTracker;
+
 applyCurrentPieceSet();
 
 observeMoves((half_moves) => {
@@ -101,11 +122,20 @@ observeMoves((half_moves) => {
   attemptTracker.noteConfirmedMoves(result.confirmed);
   // Speak each newly confirmed move in order (interrupt keeps the latest
   // audible). preFen is the in-memory pre-move FEN — never persisted.
+  // 3.4.1: each utterance links its move_confirmed event.
   for (const m of result.confirmed) {
-    sayMove(new Chess(m.preFen), m.san);
+    sayMove(new Chess(m.preFen), m.san,
+      m.eventId ? { trigger: 'move', moveEventId: m.eventId } : null);
   }
   applyCurrentPieceSet();
-  announceResultIfOver();
+  // 3.4.1: the game-result utterance links the terminal confirmed move
+  // (3.5.3 owns result observation; 3.4 must not steal that scope).
+  const lastConfirmed = result.confirmed.length > 0
+    ? result.confirmed[result.confirmed.length - 1]
+    : null;
+  announceResultIfOver(lastConfirmed && lastConfirmed.eventId
+    ? { trigger: 'game-result', moveEventId: lastConfirmed.eventId }
+    : null);
 });
 
 observePieceRenders(() => {
@@ -230,19 +260,27 @@ document.addEventListener("keydown", (e) => {
 // throw must never break the shortcut's speech (3.2 SF-1 precedent).
 // Explicitly NOT help requests: j (navigation), v (visibility, 3.3.2),
 // Escape (3.4 speech cancellation).
+// 3.4.1: returns the help_requested eventId (null when inert) so the
+// utterance lifecycle can link to it. Failure-isolated: a recorder
+// throw must never break the shortcut's speech (3.2 SF-1 precedent).
 function recordHelpRequestSafe(shortcut, hadUsableContent) {
   try {
-    visibilityRecorder.recordHelpRequest(shortcut, hadUsableContent);
+    return visibilityRecorder.recordHelpRequest(shortcut, hadUsableContent);
   } catch (e) { /* instrumentation must never break speech */ }
+  return null;
+}
+
+function helpLink(eventId) {
+  return eventId ? { trigger: 'help-request', helpRequestEventId: eventId } : null;
 }
 
 document.addEventListener("keydown", (e) => {
   if (e.key === "w" || e.key === "W") {
     e.preventDefault();
 
-    recordHelpRequestSafe("w", true); // turn is always known
+    const wHelpId = recordHelpRequestSafe("w", true); // turn is always known
     const turn = game.turn();
-    speakText(turn === "w" ? "White's turn" : "Black's turn", { interrupt: true });
+    speakText(turn === "w" ? "White's turn" : "Black's turn", { interrupt: true, link: helpLink(wHelpId) });
   }
 });
 
@@ -251,8 +289,8 @@ document.addEventListener("keydown", (e) => {
     e.preventDefault();
 
     const text = getResultAnnouncement(game);
-    recordHelpRequestSafe("m", text !== null && text !== "");
-    speakText(text || "Game not over.", { interrupt: false });
+    const mHelpId = recordHelpRequestSafe("m", text !== null && text !== "");
+    speakText(text || "Game not over.", { interrupt: false, link: helpLink(mHelpId) });
   }
 });
 
@@ -262,9 +300,9 @@ document.addEventListener("keydown", (e) => {
 
     // A content-less request is still a request (3.2.6 precedent):
     // recorded with hadUsableContent: false.
-    recordHelpRequestSafe("z", !!last_spoken_move_text);
+    const zHelpId = recordHelpRequestSafe("z", !!last_spoken_move_text);
     if (last_spoken_move_text) {
-      speakText(`Last move: ${last_spoken_move_text}`, { interrupt: true });
+      speakText(`Last move: ${last_spoken_move_text}`, { interrupt: true, link: helpLink(zHelpId) });
     }
   }
 });
@@ -272,8 +310,8 @@ document.addEventListener("keydown", (e) => {
 document.addEventListener("keydown", (e) => {
   if (e.key === "i" || e.key === "I") {
     e.preventDefault();
-    recordHelpRequestSafe("i", latest_half_moves.length > 0);
-    speakFullMoveList(latest_half_moves);
+    const iHelpId = recordHelpRequestSafe("i", latest_half_moves.length > 0);
+    speakFullMoveList(latest_half_moves, helpLink(iHelpId));
   }
 });
 
@@ -294,8 +332,8 @@ document.addEventListener("keydown", (e) => {
     try {
       boardReadable = BlindfoldSession.getBoardElement() !== null;
     } catch (e2) { boardReadable = false; }
-    recordHelpRequestSafe("s", boardReadable);
-    speakPosition();
+    const sHelpId = recordHelpRequestSafe("s", boardReadable);
+    speakPosition(helpLink(sHelpId));
   }
 });
 

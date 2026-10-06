@@ -343,3 +343,20 @@ Consequential engineering decisions with reasoning and evidence. Newest first.
   re-render re-application emits nothing (no state change).
 - **3.2 SF-1 precedent applied:** all recorder calls in keydown handlers
   are failure-isolated; instrumentation never breaks speech/UX.
+
+## 3.4 speech instrumentation
+
+- **SPEECH_LOGIC_VERSION bump rule (3.4.4):** `BlindfoldSession.SPEECH_LOGIC_VERSION`
+  (currently `'1'`) versions the speech-text generation logic. Any change to
+  `sanToSpeech`, `getResultAnnouncement`, `positionToSpeechText`,
+  `getDisambiguation`, or the shortcut text templates REQUIRES bumping the
+  version — otherwise analysts cannot replay historical utterances from the
+  linked events. `utterance_started` records the version with every utterance.
+- **Spoken-text rule (3.4.4):** `utterance_started.text` is null unless the
+  call site opts in. The single production opt-in is `speakPosition`'s
+  `"Board not found."` DOM-failure text (not reproducible from any event).
+  Everything else is reproducible from the linked event + versioned logic.
+- **Cancel correlation (3.4.3):** requested cancellation is recorded per
+  in-flight utterance at `speechSynthesis.cancel()` time; the later
+  onend/onerror maps to `cancelled` only if a request was recorded —
+  otherwise `completed`/`error`. Never trust callback names alone.

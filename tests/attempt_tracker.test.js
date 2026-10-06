@@ -741,6 +741,7 @@ describe('AC9/AC10 — diff discipline and scope', () => {
     const allowed = new Set([
       'chess_utils.js',
       'content.js',
+      'sounds.js',
       'tests/attempt_tracker.test.js',
       // Honest cumulative evolution: earlier tasks' suites pin files 3.2
       // legitimately touches.
@@ -767,6 +768,7 @@ describe('AC9/AC10 — diff discipline and scope', () => {
       // Honest cumulative evolution: 3.3 legitimately touches
       // chess_utils.js + content.js; its files join the allowlists.
       'tests/visibility.test.js',
+      'tests/speech.test.js',
       '.autodev/evidence/3.3.contract.md',
       '.autodev/evidence/3.3.build.md',
       // Honest cumulative evolution: 3.3's review/behavior evidence
@@ -774,6 +776,14 @@ describe('AC9/AC10 — diff discipline and scope', () => {
       '.autodev/evidence/3.3.review.md',
       '.autodev/evidence/3.3.behavior.md',
       '.autodev/evidence/3.3.domaudit.md',
+      // Honest cumulative evolution: 3.4 legitimately touches
+      // sounds.js + content.js and adds its evidence.
+      '.autodev/evidence/3.4.contract.md',
+      '.autodev/evidence/3.4.build.md',
+      // Honest cumulative evolution: 3.4's review/behavior evidence
+      // lands after the pins were evolved (2.x/3.1/3.2/3.3 precedent).
+      '.autodev/evidence/3.4.review.md',
+      '.autodev/evidence/3.4.behavior.md',
     ]);
     for (const f of changed) {
       assert.ok(allowed.has(f), `unexpected modified file: ${f}`);
