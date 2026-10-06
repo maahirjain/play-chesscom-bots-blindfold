@@ -9,7 +9,7 @@
 // puppeteer harness (~/workspace/tools/ext-verify/sw-sender.js).
 
 const assert = require('node:assert/strict');
-const { describe, it } = require('node:test');
+const { describe, it, before, after, mock } = require('node:test');
 const fs = require('node:fs');
 const path = require('node:path');
 const { execSync } = require('node:child_process');
@@ -40,6 +40,21 @@ const GID1 = 'c2f3a456-7d89-4e0f-9123-456789abcdef';
 
 const MOVE_PAYLOAD = () => ({ from: 'e2', to: 'e4', promotion: null });
 const tick = () => new Promise((resolve) => setImmediate(resolve));
+
+// Task 2.5: the sender now schedules retry timers on failed attempts.
+// Mock setTimeout/clearTimeout file-wide so a failing transport can never
+// leave a real pending handle that would stall the test runner. Existing
+// (2.3) tests make no timer calls and are unaffected; the 2.5 block drives
+// time with mock.timers.tick().
+before(() => { mock.timers.enable({ apis: ['setTimeout'] }); });
+after(() => { mock.timers.reset(); });
+
+// Advance the mocked clock, then flush every microtask chain the timer
+// callbacks triggered (the pump's promise continuations).
+const advance = async (ms) => {
+  mock.timers.tick(ms);
+  await tick();
+};
 
 // Transport that acks every message positively and immediately.
 function ackAllTransport(log) {
@@ -357,7 +372,8 @@ describe('AC6 — no transport', () => {
     assert.deepEqual(s.getStatus(), {
       pendingCount: 3,
       lastError: null,
-      transportAvailable: false
+      transportAvailable: false,
+      retryScheduled: false // 2.5: no transport => no retry ever scheduled
     });
   });
 
@@ -430,5 +446,285 @@ describe('AC7 — diff discipline (static)', () => {
     // envelope functions — they arrive via the shared namespace at call time.
     assert.equal(typeof SenderExports.createEvent, 'undefined');
     assert.equal(typeof SenderExports.captureClockAnchor, 'undefined');
+  });
+});
+
+describe('2.5 retry policy', () => {
+  it('AC1: never-settling transport -> send-timeout, head queued, retry scheduled', async () => {
+    const calls = [];
+    const s = BlindfoldSession.createSender({
+      transport: (msg) => {
+        calls.push(msg);
+        // Attempts 1-2 never settle; attempt 3+ acks (lets the test drain).
+        return calls.length > 2
+          ? Promise.resolve({ ok: true, eventId: msg.event.eventId })
+          : new Promise(() => {});
+      },
+      sendTimeoutMs: 1000,
+      retryIntervalMs: 500
+    });
+    emitMove(s, SID1);
+    assert.equal(calls.length, 1);
+    assert.equal(s.getStatus().retryScheduled, false);
+    await advance(999);
+    assert.equal(s.getStatus().lastError, null, 'no timeout before sendTimeoutMs');
+    assert.equal(calls.length, 1);
+    await advance(1); // t=1000: the send timeout fires
+    assert.equal(s.getStatus().lastError, 'send-timeout');
+    assert.equal(s.pendingCount(), 2, 'anchor + observation still queued');
+    assert.equal(s.getStatus().retryScheduled, true);
+    await advance(500); // t=1500: retry timer fires -> resend
+    assert.equal(calls.length, 2, 'retry re-attempted the head');
+    assert.equal(calls[1].event.eventId, calls[0].event.eventId, 'byte-identical resend');
+    assert.equal(calls[1].event.monotonicMs, calls[0].event.monotonicMs,
+      'observation time never rewritten');
+    // Cleanup: attempt 2 also times out, then attempt 3 acks and drains.
+    await advance(1000); // t=2500: second timeout -> retry scheduled
+    assert.equal(s.getStatus().lastError, 'send-timeout');
+    await advance(500); // t=3000: retry -> attempt 3 acks -> drain
+    await tick();
+    assert.equal(s.pendingCount(), 0);
+    assert.equal(s.getStatus().retryScheduled, false);
+    assert.equal(s.getStatus().lastError, null);
+  });
+
+  it('AC2: late {ok:true} after its timeout is discarded; retry resend acks idempotently', async () => {
+    const calls = [];
+    const resolvers = [];
+    const s = BlindfoldSession.createSender({
+      transport: (msg) => {
+        calls.push(msg);
+        return new Promise((resolve) => { resolvers.push(resolve); });
+      },
+      sendTimeoutMs: 1000,
+      retryIntervalMs: 500
+    });
+    emitMove(s, SID1);
+    assert.equal(calls.length, 1);
+    await advance(1000); // timeout fires
+    assert.equal(s.getStatus().lastError, 'send-timeout');
+    assert.equal(s.pendingCount(), 2);
+    // Late ack for the timed-out attempt: the race already settled, so this
+    // is discarded — no double-dequeue, no state corruption.
+    resolvers[0]({ ok: true, eventId: calls[0].event.eventId });
+    await tick();
+    assert.equal(s.pendingCount(), 2, 'late ack must not dequeue');
+    assert.equal(s.getStatus().lastError, 'send-timeout', 'late ack must not clear the timeout');
+    assert.equal(s.getStatus().retryScheduled, true);
+    // The scheduled retry resends the identical head; ack it.
+    await advance(500);
+    assert.equal(calls.length, 2);
+    assert.equal(calls[1].event.eventId, calls[0].event.eventId);
+    resolvers[1]({ ok: true, eventId: calls[1].event.eventId });
+    await tick();
+    assert.equal(s.pendingCount(), 1, 'anchor dequeued exactly once');
+    // Pump continues to the move; ack it to drain.
+    assert.equal(calls.length, 3);
+    resolvers[2]({ ok: true, eventId: calls[2].event.eventId });
+    await tick();
+    assert.equal(s.pendingCount(), 0);
+    assert.equal(s.getStatus().retryScheduled, false);
+    assert.equal(s.getStatus().lastError, null);
+  });
+
+  it('AC3: rejecting transport retries on the fixed interval; recovery drains', async () => {
+    const calls = [];
+    let shouldFail = true;
+    const err = new Error('down');
+    err.name = 'NetError';
+    const s = BlindfoldSession.createSender({
+      transport: (msg) => {
+        calls.push(msg);
+        return shouldFail
+          ? Promise.reject(err)
+          : Promise.resolve({ ok: true, eventId: msg.event.eventId });
+      },
+      sendTimeoutMs: 10000,
+      retryIntervalMs: 500
+    });
+    emitMove(s, SID1);
+    await tick();
+    assert.equal(calls.length, 1);
+    assert.equal(s.getStatus().lastError, 'transport-error:NetError');
+    assert.equal(s.getStatus().retryScheduled, true);
+    await advance(500);
+    assert.equal(calls.length, 2, 'one re-attempt after one interval');
+    await advance(500);
+    assert.equal(calls.length, 3);
+    shouldFail = false;
+    await advance(500); // retry -> acks flow through -> drain
+    assert.equal(s.pendingCount(), 0, 'recovery drains the queue');
+    assert.equal(s.getStatus().retryScheduled, false);
+    assert.equal(s.getStatus().lastError, null);
+  });
+
+  it('AC4: repeated failures re-attempt exactly once per interval (no timer stacking)', async () => {
+    const calls = [];
+    let failuresLeft = 6;
+    const s = BlindfoldSession.createSender({
+      transport: (msg) => {
+        calls.push(msg);
+        if (failuresLeft > 0) {
+          failuresLeft -= 1;
+          return Promise.reject(new Error('x'));
+        }
+        return Promise.resolve({ ok: true, eventId: msg.event.eventId });
+      },
+      sendTimeoutMs: 10000,
+      retryIntervalMs: 500
+    });
+    emitMove(s, SID1);
+    await tick();
+    assert.equal(calls.length, 1);
+    // NOTE: mock.timers.tick() runs timer callbacks synchronously without
+    // interleaving microtasks, so each chained retry needs its own advance:
+    // a retry is scheduled in the rejection microtask *after* the tick.
+    await advance(500);
+    assert.equal(calls.length, 2);
+    await advance(500);
+    assert.equal(calls.length, 3);
+    await advance(500);
+    assert.equal(calls.length, 4);
+    await advance(500);
+    assert.equal(calls.length, 5);
+    await advance(500);
+    assert.equal(calls.length, 6, 'one attempt per interval, never stacked');
+    assert.equal(s.getStatus().retryScheduled, true);
+    // Cleanup: failures exhausted -> drain.
+    await advance(500);
+    await tick();
+    assert.equal(s.pendingCount(), 0);
+    assert.equal(s.getStatus().retryScheduled, false);
+  });
+
+  it('AC5: emit() while a retry is scheduled pumps immediately; stale timer consumed', async () => {
+    const calls = [];
+    let shouldFail = true;
+    const s = BlindfoldSession.createSender({
+      transport: (msg) => {
+        calls.push(msg);
+        return shouldFail
+          ? Promise.reject(new Error('x'))
+          : Promise.resolve({ ok: true, eventId: msg.event.eventId });
+      },
+      sendTimeoutMs: 10000,
+      retryIntervalMs: 5000
+    });
+    emitMove(s, SID1);
+    await tick();
+    assert.equal(calls.length, 1);
+    assert.equal(s.getStatus().retryScheduled, true);
+    shouldFail = false;
+    emitMove(s, SID1); // new observation kicks the pump NOW, before the 5s interval
+    await tick();
+    assert.ok(calls.length > 1, 'pump ran immediately on emit()');
+    assert.equal(s.pendingCount(), 0, 'immediate run drained everything');
+    assert.equal(s.getStatus().retryScheduled, false, 'stale retry consumed, none rescheduled');
+    await advance(5000);
+    assert.equal(calls.length, 4, 'no phantom retry after the old interval elapsed');
+  });
+
+  it('AC6: no resolvable transport never schedules a retry', async () => {
+    assert.equal(typeof globalThis.chrome, 'undefined');
+    const s = BlindfoldSession.createSender({ sendTimeoutMs: 1000, retryIntervalMs: 500 });
+    emitMove(s, SID1);
+    const summary = await s.flush();
+    assert.deepEqual(summary, { delivered: 0, pending: 2 });
+    assert.equal(s.getStatus().transportAvailable, false);
+    assert.equal(s.getStatus().retryScheduled, false);
+    await advance(10000);
+    assert.equal(s.getStatus().retryScheduled, false, 'still none after intervals elapse');
+    assert.equal(s.pendingCount(), 2);
+  });
+
+  it('AC7: sendTimeoutMs/retryIntervalMs option validation', () => {
+    for (const bad of ['x', NaN, null, {}, true]) {
+      assert.throws(() => BlindfoldSession.createSender({ sendTimeoutMs: bad }), TypeError,
+        `sendTimeoutMs=${String(bad)}`);
+      assert.throws(() => BlindfoldSession.createSender({ retryIntervalMs: bad }), TypeError,
+        `retryIntervalMs=${String(bad)}`);
+    }
+    for (const bad of [0, -1, -100, Infinity, -Infinity]) {
+      assert.throws(() => BlindfoldSession.createSender({ sendTimeoutMs: bad }), RangeError,
+        `sendTimeoutMs=${String(bad)}`);
+      assert.throws(() => BlindfoldSession.createSender({ retryIntervalMs: bad }), RangeError,
+        `retryIntervalMs=${String(bad)}`);
+    }
+    // Each option validated independently of the other.
+    assert.throws(() => BlindfoldSession.createSender({ sendTimeoutMs: 100, retryIntervalMs: 'x' }), TypeError);
+    assert.throws(() => BlindfoldSession.createSender({ sendTimeoutMs: 0, retryIntervalMs: 100 }), RangeError);
+    // Valid values accepted.
+    assert.ok(BlindfoldSession.createSender({ sendTimeoutMs: 1, retryIntervalMs: 1 }));
+    assert.ok(BlindfoldSession.createSender());
+  });
+
+  it('AC8: getStatus() includes retryScheduled; namespace constants exported', async () => {
+    assert.equal(BlindfoldSession.SENDER_SEND_TIMEOUT_MS, 10000);
+    assert.equal(BlindfoldSession.SENDER_RETRY_INTERVAL_MS, 5000);
+    const s = BlindfoldSession.createSender({ transport: ackAllTransport() });
+    assert.equal(s.getStatus().retryScheduled, false);
+    assert.ok(Object.isFrozen(s.getStatus()));
+    emitMove(s, SID1);
+    await s.flush();
+    assert.equal(s.getStatus().retryScheduled, false);
+  });
+
+  it('AC9: deterministic writer rejection schedules a retry (no classification)', async () => {
+    const calls = [];
+    let mode = 'mismatch';
+    const s = BlindfoldSession.createSender({
+      transport: (msg) => {
+        calls.push(msg);
+        return mode === 'mismatch'
+          ? Promise.resolve({ ok: false, eventId: msg.event.eventId, error: 'event-id-content-mismatch' })
+          : Promise.resolve({ ok: true, eventId: msg.event.eventId });
+      },
+      sendTimeoutMs: 10000,
+      retryIntervalMs: 500
+    });
+    emitMove(s, SID1);
+    emitMove(s, SID1); // anchor + 2 moves queued
+    await tick();
+    assert.equal(calls.length, 1);
+    assert.equal(s.getStatus().lastError, 'event-id-content-mismatch');
+    assert.equal(s.getStatus().retryScheduled, true, 'even deterministic rejections retry');
+    await advance(500);
+    assert.equal(calls.length, 2, 'head resent');
+    assert.equal(calls[1].event.eventId, calls[0].event.eventId, 'byte-identical resend');
+    assert.equal(s.pendingCount(), 3, 'head-of-line blocking preserves order');
+    // Cleanup: drain.
+    mode = 'ack';
+    await advance(500);
+    await tick();
+    assert.equal(s.pendingCount(), 0);
+    assert.equal(s.getStatus().retryScheduled, false);
+    assert.equal(s.getStatus().lastError, null);
+  });
+
+  it('AC10: diff discipline — only sender.js, tests/sender.test.js (+2.5 evidence) differ', () => {
+    const status = execSync('git status --porcelain', { cwd: ROOT }).toString();
+    const changed = status.split('\n').filter((l) => l.trim()).map((l) => l.slice(3).trim());
+    const allowed = new Set([
+      'sender.js',
+      'tests/sender.test.js',
+      '.autodev/evidence/2.5.contract.md',
+      '.autodev/evidence/2.5.build.md',
+      '.autodev/evidence/2.5.review.md',
+      '.autodev/evidence/2.5.behavior.md',
+      '.autodev/DECISIONS.md',
+      // Honest cumulative evolution (2.2/2.3/2.4 precedent): 2.4's
+      // git-status allowlist pins the file set, so 2.5's legitimate
+      // sender.js change requires extending that allowlist.
+      'tests/writer.test.js'
+    ]);
+    for (const f of changed) {
+      assert.ok(allowed.has(f), `unexpected modified file: ${f}`);
+    }
+    // "Must be modified in git status" would be transient (it can only pass
+    // pre-commit, as 2.4's suite demonstrated on committed HEAD). The durable
+    // assertions: the files exist and carry the contracted 2.5 content,
+    // verified by the content tests above.
+    assert.ok(fs.existsSync(path.join(ROOT, 'sender.js')), 'sender.js must exist');
+    assert.ok(fs.existsSync(path.join(ROOT, 'tests', 'sender.test.js')), 'tests/sender.test.js must exist');
   });
 });

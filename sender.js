@@ -28,11 +28,15 @@
 //     lastError, and stops the pump. Never dequeue without a matching ack.
 //   - flush() runs the pump to completion and reports {delivered, pending}
 //     — the primitive §2.5's retry policy will call.
+//   - 2.5 retry policy: every send attempt races a send timeout
+//     (SENDER_SEND_TIMEOUT_MS); a failed head-of-queue attempt schedules
+//     one fixed-interval retry timer (SENDER_RETRY_INTERVAL_MS) while the
+//     context lives. Uniform retry — no failure classification; resends
+//     are byte-identical and the §2.4 writer dedups by eventId.
 //
 // Intentionally absent (owned by later PLAN.md tasks):
 //   - 2.4: SW intake (onMessage), envelope validation, dedup by eventId,
 //     appendSeq assignment, ack responses, commit-awaiting semantics
-//   - 2.5: retry policy / timers / backoff (only flush() is provided)
 //   - 2.6: restore after worker restart
 //   - 2.7: page/context start and clean-end event types and emission
 //     (the clock_anchor here is 1.3's, not 2.7's)
@@ -62,6 +66,11 @@ var BlindfoldSession = BlindfoldSession || {};
 
   var SENDER_MESSAGE_KIND = 'event';
   var SOURCE_CONTEXT = 'content_script';
+
+  // Task 2.5 retry policy constants (frozen numbers on the namespace,
+  // following the SENDER_MESSAGE_KIND precedent).
+  var SENDER_SEND_TIMEOUT_MS = 10000;
+  var SENDER_RETRY_INTERVAL_MS = 5000;
 
   // Resolve the shared BlindfoldSession namespace at call time. Prefers the
   // globalThis-published namespace (Node test harness merges the separately
@@ -104,6 +113,15 @@ var BlindfoldSession = BlindfoldSession || {};
     return v !== null && typeof v === 'object' && !Array.isArray(v);
   }
 
+  function requirePositiveFiniteNumber(value, name) {
+    if (typeof value !== 'number' || Number.isNaN(value)) {
+      throw new TypeError('createSender options.' + name + ' must be a number');
+    }
+    if (!Number.isFinite(value) || value <= 0) {
+      throw new RangeError('createSender options.' + name + ' must be a finite number > 0');
+    }
+  }
+
   function createSender(options) {
     if (options !== undefined && options !== null && !isPlainObject(options)) {
       throw new TypeError('createSender options must be an object');
@@ -111,6 +129,18 @@ var BlindfoldSession = BlindfoldSession || {};
     var explicitTransport = options ? options.transport : undefined;
     if (explicitTransport !== undefined && typeof explicitTransport !== 'function') {
       throw new TypeError('createSender options.transport must be a function');
+    }
+    var sendTimeoutMs = SENDER_SEND_TIMEOUT_MS;
+    var retryIntervalMs = SENDER_RETRY_INTERVAL_MS;
+    if (options) {
+      if (options.sendTimeoutMs !== undefined) {
+        requirePositiveFiniteNumber(options.sendTimeoutMs, 'sendTimeoutMs');
+        sendTimeoutMs = options.sendTimeoutMs;
+      }
+      if (options.retryIntervalMs !== undefined) {
+        requirePositiveFiniteNumber(options.retryIntervalMs, 'retryIntervalMs');
+        retryIntervalMs = options.retryIntervalMs;
+      }
     }
 
     // Anchor captured at construction = context startup. captureClockAnchor
@@ -123,6 +153,44 @@ var BlindfoldSession = BlindfoldSession || {};
     var anchoredSessions = {};
     var lastError = null;
     var pumpPromise = null;
+    // Task 2.5: at most one pending retry timer. The timer lives in this
+    // context; page unload destroys it together with the queue — retry runs
+    // exactly "while the originating context remains available".
+    var retryTimerId = null;
+
+    // setTimeout/clearTimeout are resolved from globalThis at call time
+    // (matching the transport-lazy pattern), so node:test mock.timers works
+    // and no timer handle is cached at load.
+    function scheduleRetry() {
+      if (queue.length === 0 || retryTimerId !== null) {
+        return;
+      }
+      if (resolveTransport(explicitTransport) === null) {
+        return; // nothing to retry with (2.3 no-transport rule)
+      }
+      var g = (typeof globalThis !== 'undefined') ? globalThis : null;
+      var st = g && g.setTimeout;
+      if (typeof st !== 'function') {
+        return; // no timers: a future emit()/flush() will kick the pump
+      }
+      retryTimerId = st.call(g, onRetryTimer, retryIntervalMs);
+    }
+
+    function onRetryTimer() {
+      retryTimerId = null;
+      kickPump();
+    }
+
+    function clearRetry() {
+      if (retryTimerId !== null) {
+        var g = (typeof globalThis !== 'undefined') ? globalThis : null;
+        var ct = g && g.clearTimeout;
+        if (typeof ct === 'function') {
+          ct.call(g, retryTimerId);
+        }
+        retryTimerId = null;
+      }
+    }
 
     function isPositiveAck(response, headEventId) {
       return response !== null && typeof response === 'object' &&
@@ -158,6 +226,8 @@ var BlindfoldSession = BlindfoldSession || {};
       if (pumpPromise) {
         return pumpPromise;
       }
+      // A new explicit kick supersedes any scheduled retry (2.5).
+      clearRetry();
       var delivered = 0;
       var finished = false;
       var myPromise = new Promise(function (resolve) {
@@ -168,6 +238,22 @@ var BlindfoldSession = BlindfoldSession || {};
             pumpPromise = null;
           }
           resolve(summary);
+        }
+        // A failed send attempt: record the failure, stop the pump, and
+        // schedule one retry (2.5). Uniform retry — no classification of
+        // transport errors, timeouts, or writer {ok:false} rejections.
+        function failAttempt() {
+          finish();
+          scheduleRetry();
+        }
+        function clearSendTimeout(timeoutId) {
+          if (timeoutId !== null) {
+            var g = (typeof globalThis !== 'undefined') ? globalThis : null;
+            var ct = g && g.clearTimeout;
+            if (typeof ct === 'function') {
+              ct.call(g, timeoutId);
+            }
+          }
         }
         function step() {
           if (queue.length === 0) {
@@ -186,7 +272,7 @@ var BlindfoldSession = BlindfoldSession || {};
             result = transport(message);
           } catch (err) {
             lastError = 'transport-error:' + errName(err);
-            finish();
+            failAttempt();
             return;
           }
           var settled;
@@ -194,10 +280,29 @@ var BlindfoldSession = BlindfoldSession || {};
             settled = Promise.resolve(result);
           } catch (err) {
             lastError = 'transport-error:' + errName(err);
-            finish();
+            failAttempt();
             return;
           }
-          settled.then(function (response) {
+          // Race the transport against the per-attempt send timeout. The
+          // loser is discarded: a late ack cannot double-dequeue or corrupt
+          // pump state, and the losing promise already has handlers attached
+          // via the race, so no unhandled rejection can escape. If the late
+          // ack was {ok:true}, the event was durably written; the retry's
+          // byte-identical resend then receives the idempotent {ok:true}
+          // from the writer's eventId dedup — correct, not a bug.
+          var timeoutError = new Error('send-timeout');
+          var timeoutId = null;
+          var timeoutPromise = new Promise(function (_, reject) {
+            var g = (typeof globalThis !== 'undefined') ? globalThis : null;
+            var st = g && g.setTimeout;
+            if (typeof st === 'function') {
+              timeoutId = st.call(g, function () { reject(timeoutError); }, sendTimeoutMs);
+            } else {
+              reject(timeoutError); // no timers: fail fast, still retryable
+            }
+          });
+          Promise.race([settled, timeoutPromise]).then(function (response) {
+            clearSendTimeout(timeoutId);
             if (isPositiveAck(response, head.eventId)) {
               queue.shift();
               lastError = null;
@@ -205,11 +310,16 @@ var BlindfoldSession = BlindfoldSession || {};
               step();
             } else {
               recordAckFailure(response, head.eventId);
-              finish();
+              failAttempt();
             }
           }, function (err) {
-            lastError = 'transport-error:' + errName(err);
-            finish();
+            clearSendTimeout(timeoutId);
+            if (err === timeoutError) {
+              lastError = 'send-timeout';
+            } else {
+              lastError = 'transport-error:' + errName(err);
+            }
+            failAttempt();
           });
         }
         step();
@@ -287,7 +397,10 @@ var BlindfoldSession = BlindfoldSession || {};
       return Object.freeze({
         pendingCount: queue.length,
         lastError: lastError,
-        transportAvailable: resolveTransport(explicitTransport) !== null
+        transportAvailable: resolveTransport(explicitTransport) !== null,
+        // Task 2.5: lets 2.8 distinguish "stalled with recovery scheduled"
+        // (working as designed) from "stalled with nothing scheduled".
+        retryScheduled: retryTimerId !== null
       });
     }
 
@@ -306,6 +419,8 @@ var BlindfoldSession = BlindfoldSession || {};
 
   BlindfoldSession.createSender = createSender;
   BlindfoldSession.SENDER_MESSAGE_KIND = SENDER_MESSAGE_KIND;
+  BlindfoldSession.SENDER_SEND_TIMEOUT_MS = SENDER_SEND_TIMEOUT_MS;
+  BlindfoldSession.SENDER_RETRY_INTERVAL_MS = SENDER_RETRY_INTERVAL_MS;
 })();
 
 // Node test shim. importScripts() consumers use the BlindfoldSession global

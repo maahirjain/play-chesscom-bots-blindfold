@@ -134,3 +134,29 @@ Consequential engineering decisions with reasoning and evidence. Newest first.
     Chrome build) rather than hanging. `undefined` is never an ack —
     the 2.3 sender already treats it as unacknowledged. (Found during
     2.4 behavioral verification.)
+
+11. **Sender retry policy (§2.5): 10 s send timeout + 5 s fixed retry.**
+    Each send races the transport against a 10 s timeout (`Promise.race`,
+    loser discarded — a late ack cannot double-dequeue; if it was
+    `{ok:true}` the retry's byte-identical resend is absorbed by the
+    writer's eventId dedup). Failed head-of-queue attempts schedule one
+    fixed 5 s retry timer (at most one pending); retry is uniform — no
+    classification of transport errors, timeouts, or writer `{ok:false}`
+    rejections. Fixed interval, not backoff: one sender per context, no
+    herd; failures are transient-seconds or persistent-forever. No
+    `pagehide`/unload flush was added (considered and rejected): the ack
+    path is dead at unload so durability can't be confirmed; the honest
+    mechanism is `sourceSeq` gaps plus 2.7's discontinuity marking.
+    Background-tab timer throttling (~1 s observed) slows the cadence but
+    doesn't break it. (Built 2026-10-06.)
+    - **For 2.8:** under uniform retry, a permanently-rejected head
+      (e.g. quota exhaustion) wedges the queue loudly but indefinitely.
+      2.8's status surfacing should distinguish persistent `{ok:false}`
+      (`lastError` writer string, retrying forever) from transient
+      transport failure. `getStatus()` already provides `pendingCount`,
+      `lastError`, `retryScheduled`. (2.5 review NOTE-1.)
+    - **Refactor warning:** `err === timeoutError` identity
+      discrimination is safe only because `timeoutError` is
+      per-attempt closure-private. If the timeout mechanism is ever
+      refactored (e.g. shared error instance), this must become a
+      generation token. (2.5 review NOTE-3.)
