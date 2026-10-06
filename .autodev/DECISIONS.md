@@ -2,6 +2,25 @@
 
 Consequential engineering decisions with reasoning and evidence. Newest first.
 
+## 2026-10-06 — Task 1.2 repair decisions (from independent review)
+
+1. **`normalizePlayerColor` uses the 1.1 domain model (RangeError for all
+   out-of-domain values).** The builder had routed non-string playerColor
+   through the string normalizer's type gate (TypeError), but the contract's
+   own 1.1 anchor throws RangeError for `sessionCategory: 1`, the convention
+   table lists "bad color" under RangeError, and AC6 says "anything else →
+   RangeError". Decision: null/undefined → null; whitespace-only → null;
+   'white'/'black' (trimmed) pass; everything else including non-strings →
+   RangeError. `normalizeBotRating` keeps TypeError for floats/negatives
+   (AC7 explicitly mandates it — a deliberate, documented asymmetry).
+
+2. **`'__proto__'` assistance-setting key is rejected loudly (TypeError).**
+   Assigning `out['__proto__'] = val` hits the inherited setter and silently
+   drops the observation — the wrong failure mode for a never-silently-drop
+   contract. Only JSON.parse-style own data properties can carry this key
+   (object literals can't), but the validation function must still be
+   robust. Rejection surfaces the problem instead of corrupting the record.
+
 ## 2026-10-06 — Task 1.1 repair decisions (from independent review)
 
 1. **`addGameToSession` throws on duplicate explicit gameId.**
@@ -44,6 +63,13 @@ Consequential engineering decisions with reasoning and evidence. Newest first.
    checks (selectors, bot-game observation) — browser tasks report
    observations; they cannot run the extension. Real-DOM replay: capture
    Chess.com DOM snapshots via browser task, replay under Tier 1.
+
+   Concrete harness (2026-10-06, verified working): `~/workspace/tools/ext-verify/`
+   with puppeteer + Chrome 154 headless. `smoke.js <scripts...>` loads repo
+   scripts as classic scripts in a real renderer (file:// secure context) and
+   asserts contract behavior incl. structuredClone round-trips. Extension also
+   launches cleanly under `--load-extension`. Real content-script injection
+   tests (matching-URL pages, DOM fixtures) to be added as tasks require.
 
 4. **ZIP export: hand-rolled store-only writer, no dependency.**
    Keeps the extension dependency-free (matches current repo: zero deps) and
