@@ -990,6 +990,26 @@ describe('AC7 — changed-files discipline', () => {
       // after the pins are evolved (2.x/3.x/4.x/5.1-5.9 precedent).
       '.autodev/evidence/5.10.review.md',
       '.autodev/evidence/5.10.behavior.md',
+      // Honest cumulative evolution: 6.1 (generate metadata.json from
+      // stored context and observed completion status) legitimately adds
+      // the new SW-side exporter.js module (pure buildMetadataJson
+      // builder; 6.6 owns the orchestration/permission/message), its
+      // test file, and its evidence; its files join the allowlists.
+      // No new channel messages, event types, stores, or permissions
+      // in 6.1. The section audit/architecture evidence files
+      // (section-5.audit.md, created by the section auditor after 5.10's
+      // pins; section-6.architecture.md, the §6 planner's) are
+      // allowlisted here to repair the stale pins.
+      'exporter.js',
+      'tests/exporter.test.js',
+      '.autodev/evidence/6.1.contract.md',
+      '.autodev/evidence/6.1.build.md',
+      '.autodev/evidence/section-5.audit.md',
+      '.autodev/evidence/section-6.architecture.md',
+      // Honest cumulative evolution: 6.1's review/behavior evidence lands
+      // after the pins are evolved (2.x-5.x precedent).
+      '.autodev/evidence/6.1.review.md',
+      '.autodev/evidence/6.1.behavior.md',
     ]);
     for (const f of changed) {
       assert.ok(allowed.has(f), `unexpected modified file: ${f}`);
