@@ -277,10 +277,24 @@ describe('AC2 — visible marker correct', () => {
       // pin lives in tests/session_controls.test.js AC7; here we only
       // require the 5.2/5.4 wiring to still reference the fields
       // install and no gameplay identifiers to appear in added lines.
-      assert.ok(diff.includes('installSessionFields'),
-        'content.js delta must keep the 5.2 fields install wiring');
-      assert.ok(diff.includes('installConditionsPanel'),
-        'content.js delta must include the 5.4 panel install');
+      //
+      // Honest cumulative evolution (5.9): 5.9's delta is in the
+      // tracker section (createGameHistoryTracker factory,
+      // handleGameResetEvent, let bindings) — it does not touch the
+      // install wiring, so the installSessionFields/installConditionsPanel
+      // assertions are vacuous for a pure-5.9 delta. We assert the
+      // 5.9 keywords instead when the delta carries them.
+      const is59Delta = diff.includes('createGameHistoryTracker') ||
+        diff.includes('handleGameResetEvent');
+      if (!is59Delta) {
+        assert.ok(diff.includes('installSessionFields'),
+          'content.js delta must keep the 5.2 fields install wiring');
+        assert.ok(diff.includes('installConditionsPanel'),
+          'content.js delta must include the 5.4 panel install');
+      } else {
+        assert.ok(diff.includes('handleGameReset'),
+          'content.js 5.9 delta must wire the handleGameReset call');
+      }
       const added = diff.split('\n').filter((l) => l.startsWith('+'));
       assert.ok(!/move_input|piece_set|chess\.move/i.test(added.join('\n')),
         'content.js delta must not touch gameplay');
@@ -1122,6 +1136,20 @@ describe('AC8 — changed-files discipline', () => {
       // after the pins are evolved (2.x/3.x/4.x/5.1-5.7 precedent).
       '.autodev/evidence/5.8.review.md',
       '.autodev/evidence/5.8.behavior.md',
+      // Honest cumulative evolution: 5.9 (mid-session game transition)
+      // legitimately implements the onGameReset placeholder in content.js
+      // (mint new gameId + install fresh tracker) and adds handleGameReset
+      // + activeMetadata/activeConditions to session_controls.js (the
+      // specified deliverable; 5.7 named the placeholder as 5.9's input),
+      // adds its unit/integration tests, and records its evidence; its
+      // files join the allowlists. No new channel messages, event types,
+      // stores, or permissions.
+      '.autodev/evidence/5.9.contract.md',
+      '.autodev/evidence/5.9.build.md',
+      // Honest cumulative evolution: 5.9's review/behavior evidence lands
+      // after the pins are evolved (2.x/3.x/4.x/5.1-5.8 precedent).
+      '.autodev/evidence/5.9.review.md',
+      '.autodev/evidence/5.9.behavior.md',
     ]);
     const stray = changed.filter((f) => !allowed.has(f));
     assert.deepEqual(stray, [],

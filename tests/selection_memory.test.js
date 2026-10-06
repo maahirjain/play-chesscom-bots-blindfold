@@ -657,6 +657,20 @@ describe('AC6 — wiring and diff discipline', () => {
       // after the pins are evolved (2.x/3.x/4.x/5.1-5.7 precedent).
       '.autodev/evidence/5.8.review.md',
       '.autodev/evidence/5.8.behavior.md',
+      // Honest cumulative evolution: 5.9 (mid-session game transition)
+      // legitimately implements the onGameReset placeholder in content.js
+      // (mint new gameId + install fresh tracker) and adds handleGameReset
+      // + activeMetadata/activeConditions to session_controls.js (the
+      // specified deliverable; 5.7 named the placeholder as 5.9's input),
+      // adds its unit/integration tests, and records its evidence; its
+      // files join the allowlists. No new channel messages, event types,
+      // stores, or permissions.
+      '.autodev/evidence/5.9.contract.md',
+      '.autodev/evidence/5.9.build.md',
+      // Honest cumulative evolution: 5.9's review/behavior evidence lands
+      // after the pins are evolved (2.x/3.x/4.x/5.1-5.8 precedent).
+      '.autodev/evidence/5.9.review.md',
+      '.autodev/evidence/5.9.behavior.md',
     ]);
     const stray = changed.filter((f) => !allowed.has(f));
     assert.deepEqual(stray, [],
@@ -743,6 +757,27 @@ describe('AC6 — wiring and diff discipline', () => {
       l.includes('var trimmed') || l.includes('activeSessionId') ||
       l.includes('activeGameId') || l.includes("raw = ''") ||
       l.includes('trimmed ===') || l.includes('payload: payload');
+    // Honest cumulative evolution: 5.9's mid-session game transition
+    // adds activeMetadata/activeConditions retention, the handleGameReset
+    // method (mint → session-save → recorder re-set → slots), and the
+    // setSlots null-clearing. Its added lines are 5.9-keyworded.
+    const kw59 = (l) =>
+      l.includes('5.9') || l.includes('handleGameReset') ||
+      l.includes('activeMetadata') || l.includes('activeConditions') ||
+      l.includes('newGameId') || l.includes('addGameToSession') ||
+      l.includes('gameResetFailed') || l.includes('updatedMetadata') ||
+      l.includes('not-active') || l.includes('no-metadata') ||
+      l.includes('mint-failed') || l.includes('metadata-invalid') ||
+      l.includes('session-save-failed') || l.includes('set-session-failed') ||
+      l.includes('sessionId === null && gameId === null') ||
+      l.includes('channelCall') || l.includes('MSG_SESSION_SAVE') ||
+      l.includes('MSG_SET_SESSION') || l.includes('.then(') ||
+      l.includes('isPlainObject') || l.includes('saveResp') ||
+      l.includes('setResp') || l.includes('setExtra') ||
+      l.includes('sessionCategory') || l.includes('cat') ||
+      l.includes('CONTROL_PHASE_ACTIVE') ||
+      l.includes('Promise.resolve') || l.includes('e.error') ||
+      l.includes('internal-error');
     const removed = diff.split('\n')
       .filter((l) => l.startsWith('-') && !l.startsWith('---'))
       .map((l) => l.slice(1).trim())
@@ -750,7 +785,7 @@ describe('AC6 — wiring and diff discipline', () => {
     const bad55 = added.filter((l) =>
       !(structural(l) || l.includes('onSessionStarted') || l.includes('5.3') ||
         l.trim() === 'extensionVersion: extensionVersion,' ||
-        kw55(l) || kw56(l) || kw58(l) || removed.includes(l.trim())));
+        kw55(l) || kw56(l) || kw58(l) || kw59(l) || removed.includes(l.trim())));
     assert.deepEqual(bad55, [], 'unexpected added lines in session_controls.js:\n' + bad55.join('\n'));
     const badRemoved = removed.filter((l) =>
       !(l === 'extensionVersion: extensionVersion' ||
@@ -775,7 +810,7 @@ describe('AC6 — wiring and diff discipline', () => {
       l.trim().startsWith('}') || l.trim().startsWith('try {') ||
       l.trim().startsWith('} catch') || l.trim().startsWith('{') ||
       l.trim() === '});' || l.trim() === '},' || l.trim() === '});' ||
-      l.trim().startsWith('(');
+      l.trim().startsWith('(') || l.trim() === 'return;';
     const kw53 = (l) =>
       l.includes('5.3') || l.includes('selectionMemory') ||
       l.includes('SelectionMemory') || l.includes('onSessionStarted') ||
@@ -797,11 +832,32 @@ describe('AC6 — wiring and diff discipline', () => {
       l.includes('getDetectedConditions') || l.includes('panelErr') ||
       l.includes('rmErr') || l.includes('undefined') ||
       l.includes('sessionControlsHandle') || l.includes('beforeElement');
+    // Honest cumulative evolution: 5.9 implements the onGameReset
+    // placeholder (mint new game identity + install fresh tracker) —
+    // createGameHistoryTracker factory, handleGameResetEvent, let
+    // historyTracker/game bindings, and the handleGameReset call.
+    const kw59 = (l) =>
+      l.includes('5.9') || l.includes('createGameHistoryTracker') ||
+      l.includes('createHistoryTracker') ||
+      l.includes('handleGameResetEvent') || l.includes('handleGameReset') ||
+      l.includes('historyTracker') || l.includes('resetEnded') ||
+      l.includes('newGameId') || l.includes('onGameReset') ||
+      l.includes('gameId:') || l.includes('emitEvent') ||
+      l.includes('sender.emit') || l.includes('activeSessionId') ||
+      l.includes('activeGameId') || l.includes('payload,') ||
+      l.includes('refs:') || l.includes('eventType,') ||
+      l.includes('let historyTracker') || l.includes('let game =') ||
+      l.includes('getGame()') || l.includes('sessionControlsHandle') ||
+      l.includes('Promise.resolve') || l.includes('.then(function') ||
+      l.includes('.catch(function') || l.includes('res.ok') ||
+      l.includes('res.newGameId') || l.includes('attemptTracker') ||
+      l.includes('gameLifecycleRecorder') || l.includes('recordGameReset') ||
+      l.includes('confirmedMoveCount');
     const added = diff.split('\n')
       .filter((l) => l.startsWith('+') && !l.startsWith('+++'))
       .map((l) => l.slice(1));
     assert.ok(added.length > 0, 'expected the memory wiring as added lines');
-    const bad = added.filter((l) => !(structural(l) || kw53(l) || kw54(l)));
+    const bad = added.filter((l) => !(structural(l) || kw53(l) || kw54(l) || kw59(l)));
     assert.deepEqual(bad, [], 'unexpected added lines in content.js:\n' + bad.join('\n'));
     const removed = diff.split('\n')
       .filter((l) => l.startsWith('-') && !l.startsWith('---'))
@@ -809,15 +865,36 @@ describe('AC6 — wiring and diff discipline', () => {
       .filter((l) => l !== '');
     // 5.4 restructures the 5.2 install block (the panel installs before
     // the fields); removed lines are the superseded 5.2 wiring.
+    // 5.9 restructures the tracker creation into the
+    // createGameHistoryTracker factory (const→let); removed lines are
+    // the superseded inline creation.
     const badRemoved = removed.filter((l) =>
       !(structural(l) || l.includes('5.2') || l.includes('installSessionFields') ||
         l.includes('sessionControlsHandle') || l.includes('beforeElement') ||
         l.includes('fieldsErr') || l.includes('5.4') ||
-        l.includes('UNDETECTED_CONDITION_FIELDS')));
+        l.includes('UNDETECTED_CONDITION_FIELDS') ||
+        l.includes('historyTracker') || l.includes('createHistoryTracker') ||
+        l.includes('const game =') || l.includes('onGameReset') ||
+        l.includes('gameId:') || l.includes('emitEvent') ||
+        l.includes('sender.emit') || l.includes('activeSessionId') ||
+        l.includes('activeGameId') || l.includes('attemptTracker') ||
+        l.includes('gameLifecycleRecorder') || l.includes('recordGameReset') ||
+        l.includes('confirmedMoveCount') || l.includes('§5: mint new game') ||
+        l.includes('eventType,') || l.includes('payload,') ||
+        l.includes('refs:')));
     assert.deepEqual(badRemoved, [],
       'unexpected removed lines in content.js:\n' + badRemoved.join('\n'));
-    // No new top-level function declarations.
-    assert.ok(!/^\+function /m.test(diff), 'no new functions in content.js');
+    // No new top-level function declarations except 5.9's specified
+    // factory + reset callback (createGameHistoryTracker,
+    // handleGameResetEvent).
+    const newFns = diff.split('\n')
+      .filter((l) => /^\+function /.test(l))
+      .map((l) => l.slice(1).trim());
+    const badFns = newFns.filter((l) =>
+      !(l.startsWith('function createGameHistoryTracker') ||
+        l.startsWith('function handleGameResetEvent')));
+    assert.deepEqual(badFns, [],
+      'unexpected new functions in content.js: ' + badFns.join(', '));
   });
 
   it('manifest.json diff is only the detected_conditions.js line (5.4)', () => {

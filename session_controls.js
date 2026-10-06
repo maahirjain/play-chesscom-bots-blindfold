@@ -707,6 +707,14 @@ var BlindfoldSession = BlindfoldSession || {};
     var phase = CONTROL_PHASE_IDLE;
     var activeSessionId = null;
     var activeGameId = null;
+    // 5.9: the session metadata + conditions records the active
+    // session was built from (for mid-session game transitions).
+    // Null in the 5.1 no-fields path and for boot-adopted sessions
+    // (the SW holds the persisted record; content-side never sees
+    // it) — 5.9 fail-closes without them rather than fabricating
+    // identity.
+    var activeMetadata = null;
+    var activeConditions = null;
     var timerId = null;
     var stopped = false;
     var lastRendered = {}; // kind -> {state, detail} | null
@@ -1026,6 +1034,12 @@ var BlindfoldSession = BlindfoldSession || {};
       // reads them. Cleared at Stop.
       BS.activeSessionId = sessionId;
       BS.activeGameId = gameId;
+      if (sessionId === null && gameId === null) {
+        // 5.9: the session identity is gone — the metadata it was
+        // built on is gone with it (a later Start rebuilds both).
+        activeMetadata = null;
+        activeConditions = null;
+      }
     }
 
     function channelCall(msg, extra) {
@@ -1377,6 +1391,11 @@ var BlindfoldSession = BlindfoldSession || {};
             }
           }
           setSlots(sessionId, gameId);
+          // 5.9: retain the records this session was built from for
+          // mid-session game transitions. Null in the 5.1 no-fields
+          // path (5.9 fail-closes without them).
+          activeMetadata = metadata;
+          activeConditions = conditions;
           try {
             BS.emitPageStart(opts.sender, sessionId);
           } catch (e) {
@@ -1428,6 +1447,87 @@ var BlindfoldSession = BlindfoldSession || {};
     }
 
     // ---- Stop --------------------------------------------------------
+    // 5.9: mid-session game transition (PLAN.md §5.9). Called from
+    // content.js's onGameReset when the history tracker detects a
+    // genuine reset during an ACTIVE session. Returns a Promise
+    // resolving to {ok:true, newGameId} or {ok:false, error}.
+    //
+    // Ordered transition (contract §3): mint → metadata+session-save
+    // → recorder re-set (same sessionId, new gameId — 5.5's guard
+    // allows this) → slots. Fail-closed: any failure leaves the old
+    // gameId active; the session keeps recording under it. No stop,
+    // no stream restart, no badge change (5.7/5.6 hold throughout).
+    function handleGameReset() {
+      if (phase !== CONTROL_PHASE_ACTIVE) {
+        // Idle: 3.1 restarts the tracker in place (no session to
+        // protect). STARTING/STOPPING: the session is not established
+        // or is ending — do nothing (fail-closed).
+        return Promise.resolve({ ok: false, error: 'not-active' });
+      }
+      if (activeSessionId === null || activeGameId === null ||
+          activeMetadata === null || activeConditions === null) {
+        // No metadata to build on (5.1 no-fields path, or a
+        // boot-adopted session whose persisted record lives SW-side).
+        // A missed boundary is honest raw data; a fabricated gameId
+        // is not.
+        return Promise.resolve({ ok: false, error: 'no-metadata' });
+      }
+      var newGameId;
+      try {
+        newGameId = BS.newGameId();
+      } catch (e) {
+        return Promise.resolve({ ok: false, error: 'mint-failed' });
+      }
+      var updatedMetadata;
+      try {
+        updatedMetadata = BS.addGameToSession(activeMetadata, newGameId);
+      } catch (e) {
+        return Promise.resolve({ ok: false, error: 'metadata-invalid' });
+      }
+      var sid = activeSessionId;
+      var cat = activeMetadata.sessionCategory;
+      return channelCall(MSG_SESSION_SAVE,
+          { metadata: updatedMetadata, conditions: activeConditions })
+        .then(function (saveResp) {
+          if (!isPlainObject(saveResp) || saveResp.ok !== true) {
+            throw { gameResetFailed: true, error: 'session-save-failed' };
+          }
+          var setExtra = { sessionId: sid, gameId: newGameId };
+          if (typeof cat === 'string' && cat !== '') {
+            // 5.2: the recorder echoes this for boot adoption.
+            setExtra.sessionCategory = cat;
+          }
+          return channelCall(MSG_SET_SESSION, setExtra);
+        }, function () {
+          throw { gameResetFailed: true, error: 'session-save-failed' };
+        })
+        .then(function (setResp) {
+          if (!isPlainObject(setResp) || setResp.ok !== true) {
+            var err = (isPlainObject(setResp) &&
+              typeof setResp.error === 'string') ?
+              setResp.error : 'no-response';
+            // Includes 5.5's 'session-active' refusal (another tab's
+            // session won the TOCTOU race): old gameId stays active.
+            throw { gameResetFailed: true,
+                    error: 'set-session-failed:' + err };
+          }
+          // Success: adopt the new identity. The game_reset event
+          // (emitted under the old gameId before this ran) is the
+          // boundary; subsequent emissions read the new gameId.
+          // metadata.gameIds.length > 1 now implicitly flags the
+          // shared session (1.1 design — no extra flag).
+          activeMetadata = updatedMetadata;
+          setSlots(sid, newGameId);
+          return { ok: true, newGameId: newGameId };
+        })
+        .then(null, function (e) {
+          if (e && e.gameResetFailed === true) {
+            return { ok: false, error: e.error };
+          }
+          return { ok: false, error: 'internal-error' };
+        });
+    }
+
     function onStopClick() {
       if (phase === CONTROL_PHASE_IDLE ||
           phase === CONTROL_PHASE_STARTING) {
@@ -1597,6 +1697,10 @@ var BlindfoldSession = BlindfoldSession || {};
         return { sessionId: activeSessionId, gameId: activeGameId };
       },
       getLastStopResponse: function () { return lastStopResponse; },
+      // 5.9: mid-session game transition entry point (content.js's
+      // onGameReset calls this when the history tracker detects a
+      // genuine reset during an ACTIVE session).
+      handleGameReset: handleGameReset,
       stop: function () {
         stopped = true;
         stopPolling();

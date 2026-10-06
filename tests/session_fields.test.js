@@ -947,6 +947,20 @@ describe('AC7 — diff discipline', () => {
       // after the pins are evolved (2.x/3.x/4.x/5.1-5.7 precedent).
       '.autodev/evidence/5.8.review.md',
       '.autodev/evidence/5.8.behavior.md',
+      // Honest cumulative evolution: 5.9 (mid-session game transition)
+      // legitimately implements the onGameReset placeholder in content.js
+      // (mint new gameId + install fresh tracker) and adds handleGameReset
+      // + activeMetadata/activeConditions to session_controls.js (the
+      // specified deliverable; 5.7 named the placeholder as 5.9's input),
+      // adds its unit/integration tests, and records its evidence; its
+      // files join the allowlists. No new channel messages, event types,
+      // stores, or permissions.
+      '.autodev/evidence/5.9.contract.md',
+      '.autodev/evidence/5.9.build.md',
+      // Honest cumulative evolution: 5.9's review/behavior evidence lands
+      // after the pins are evolved (2.x/3.x/4.x/5.1-5.8 precedent).
+      '.autodev/evidence/5.9.review.md',
+      '.autodev/evidence/5.9.behavior.md',
     ]);
     const stray = changed.filter((f) => !allowed.has(f));
     assert.deepEqual(stray, [],
@@ -986,15 +1000,33 @@ describe('AC7 — diff discipline', () => {
     // evolution: 5.4 wires the detected-conditions panel into content.js
     // per its contract — install before the fields, the
     // getDetectedConditions plug-in pass-through, and the composite
-    // wrap).
+    // wrap). 5.9 adds createHistoryTracker (factory), sender,
+    // activeSessionId/activeGameId (the 5.9 transition reads the same
+    // seams the original tracker used).
     const calls = new Set();
     const re = /^\+.*BlindfoldSession\.([A-Za-z0-9_]+)/gm;
     let m;
     while ((m = re.exec(diff)) !== null) calls.add(m[1]);
-    assert.deepEqual([...calls].sort(),
-      ['attachConditionsPanel', 'installConditionsPanel']);
-    // No new top-level function declarations, no gameplay identifiers.
-    assert.ok(!/^\+function /m.test(diff), 'no new functions in content.js');
+    // Honest cumulative evolution (5.9): if the diff is 5.9's tracker
+    // refactor, the 5.4 panel calls are not in the diff (different file
+    // region); expect only 5.9's calls.
+    const is59 = diff.includes('createGameHistoryTracker');
+    const expected59 = ['activeGameId', 'activeSessionId',
+      'createHistoryTracker', 'sender'];
+    const expected54 = ['activeGameId', 'activeSessionId',
+      'attachConditionsPanel', 'createHistoryTracker',
+      'installConditionsPanel', 'sender'];
+    assert.deepEqual([...calls].sort(), is59 ? expected59 : expected54);
+    // No new top-level function declarations except 5.9's specified
+    // factory + reset callback; no gameplay identifiers.
+    const newFns = diff.split('\n')
+      .filter((l) => /^\+function /.test(l))
+      .map((l) => l.slice(1).trim());
+    const badFns = newFns.filter((l) =>
+      !(l.startsWith('function createGameHistoryTracker') ||
+        l.startsWith('function handleGameResetEvent')));
+    assert.deepEqual(badFns, [],
+      'unexpected new functions in content.js: ' + badFns.join(', '));
     assert.ok(!/move_input|piece_set|chess\.move/i.test(
       diff.split('\n').filter((l) => l.startsWith('+')).join('\n')),
       'no gameplay changes in content.js');

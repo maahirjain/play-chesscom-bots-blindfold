@@ -1660,6 +1660,20 @@ describe('AC7 — diff discipline and scope', () => {
       // after the pins are evolved (2.x/3.x/4.x/5.1-5.7 precedent).
       '.autodev/evidence/5.8.review.md',
       '.autodev/evidence/5.8.behavior.md',
+      // Honest cumulative evolution: 5.9 (mid-session game transition)
+      // legitimately implements the onGameReset placeholder in content.js
+      // (mint new gameId + install fresh tracker) and adds handleGameReset
+      // + activeMetadata/activeConditions to session_controls.js (the
+      // specified deliverable; 5.7 named the placeholder as 5.9's input),
+      // adds its unit/integration tests, and records its evidence; its
+      // files join the allowlists. No new channel messages, event types,
+      // stores, or permissions.
+      '.autodev/evidence/5.9.contract.md',
+      '.autodev/evidence/5.9.build.md',
+      // Honest cumulative evolution: 5.9's review/behavior evidence lands
+      // after the pins are evolved (2.x/3.x/4.x/5.1-5.8 precedent).
+      '.autodev/evidence/5.9.review.md',
+      '.autodev/evidence/5.9.behavior.md',
     ]);
     const stray = changed.filter((f) => !allowed.has(f));
     assert.deepEqual(stray, [],
@@ -1718,25 +1732,48 @@ describe('AC7 — diff discipline and scope', () => {
       l.includes('attachConditionsPanel') ||
       l.includes('getDetectedConditions') || l.includes('panelErr') ||
       l.includes('rmErr') || l.includes('undefined');
+    // Honest cumulative evolution: 5.9 implements the onGameReset
+    // placeholder in content.js — createGameHistoryTracker factory,
+    // handleGameResetEvent, let historyTracker/game bindings, and the
+    // handleGameReset call into the session-controls handle.
+    const kw59 = (l) =>
+      l.includes('5.9') || l.includes('createGameHistoryTracker') ||
+      l.includes('createHistoryTracker') ||
+      l.includes('handleGameResetEvent') || l.includes('handleGameReset') ||
+      l.includes('historyTracker') || l.includes('resetEnded') ||
+      l.includes('newGameId') || l.includes('onGameReset') ||
+      l.includes('gameId:') || l.includes('emitEvent') ||
+      l.includes('sender.emit') || l.includes('activeSessionId') ||
+      l.includes('activeGameId') || l.includes('payload,') ||
+      l.includes('refs:') || l.includes('eventType,') ||
+      l.includes('let historyTracker') || l.includes('let game =') ||
+      l.includes('getGame()') || l.includes('sessionControlsHandle') ||
+      l.includes('Promise.resolve') || l.includes('.then(function') ||
+      l.includes('.catch(function') || l.includes('res.ok') ||
+      l.includes('res.newGameId') || l.includes('attemptTracker') ||
+      l.includes('gameLifecycleRecorder') || l.includes('recordGameReset') ||
+      l.includes('confirmedMoveCount');
     const structural = (l) =>
       l.trim() === '' || l.trim().startsWith('//') ||
       l.trim().startsWith('/*') ||
       l.trim().startsWith('}') || l.trim().startsWith('try {') ||
       l.trim().startsWith('} catch') || l.trim().startsWith('{') ||
-      l.trim().startsWith('(') || l.trim() === '});';
+      l.trim().startsWith('(') || l.trim() === '});' ||
+      l.trim() === 'return;';
     const added = diff.split('\n')
       .filter((l) => l.startsWith('+') && !l.startsWith('+++'))
       .map((l) => l.slice(1));
     assert.ok(added.length > 0, 'expected the install wiring as added lines');
-    assert.ok(added.every((l) => kw51(l) || kw52(l) || kw53(l) || kw54(l) || structural(l)),
+    assert.ok(added.every((l) => kw51(l) || kw52(l) || kw53(l) || kw54(l) || kw59(l) || structural(l)),
       'unexpected added lines in content.js:\n' + added.join('\n'));
     const removed = diff.split('\n')
       .filter((l) => l.startsWith('-') && !l.startsWith('---'))
       .map((l) => l.slice(1));
     // 5.4 restructures the 5.2 install block (the panel installs before
     // the fields; the fields anchor before the panel) — removed lines
-    // may carry 5.2/5.4 keywords as well.
-    assert.ok(removed.every((l) => kw51(l) || kw52(l) || kw54(l) || structural(l)),
+    // may carry 5.2/5.4 keywords as well. 5.9's const→let changes are
+    // the minimal structural edit the placeholder anticipates.
+    assert.ok(removed.every((l) => kw51(l) || kw52(l) || kw54(l) || kw59(l) || structural(l)),
       'unexpected removed lines in content.js:\n' + removed.join('\n'));
   });
 
@@ -2316,5 +2353,242 @@ describe('5.8 — moment marker', () => {
         opts._sender.emit = origEmit;
       } finally { h.stop(); }
     });
+  });
+});
+
+// ------------------------------------------------------------------
+// 5.9 — mid-session game transition (PLAN.md §5.9).
+// ------------------------------------------------------------------
+describe('5.9 — mid-session game transition', () => {
+  const GID1 = 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb';
+  const GID2 = 'cccccccc-3333-4333-8333-cccccccccccc';
+  const SI = require('../session_identity.js');
+
+  function fieldsHandle() {
+    return {
+      getSelection: () => ({
+        sessionCategory: 'baseline',
+        trainingApproach: 'none',
+        verbalScaffolding: 'none',
+      }),
+      setSelection: () => {},
+      setEnabled: () => {},
+      getDetectedConditions: () => ({}),
+    };
+  }
+
+  // Install + Start with fields (so activeMetadata/activeConditions are
+  // set). Returns the handle and recorded transport calls. The
+  // transportHandler can override specific messages.
+  async function startWithFields(transportHandler) {
+    const BS = publishNS(freshModule(), {
+      createSessionMetadata: SI.createSessionMetadata,
+      addGameToSession: SI.addGameToSession,
+      isSessionCategory: SI.isSessionCategory,
+      buildInitialConditions: () => ({ _testConditions: true }),
+    });
+    const gameIds = [GID1, GID2];
+    BS.newGameId = () => gameIds.shift() ||
+      'dddddddd-4444-4444-8444-dddddddddddd';
+    BS.newSessionId = () => SID;
+    globalThis.document = makeFakeDocument(true);
+    const opts = makeOpts();
+    opts.sessionFields = fieldsHandle();
+    opts.extensionVersion = '1.0.0-test';
+    const savedMetadata = [];
+    const setSessionCalls = [];
+    const defaultHandler = (env) => {
+      if (env.msg === 'recorder-ensure') {
+        return Promise.resolve({ ok: true, bootId: 'b', created: true });
+      }
+      if (env.msg === 'session-save') {
+        savedMetadata.push(env.metadata);
+        return Promise.resolve({ ok: true });
+      }
+      if (env.msg === 'recorder-set-session') {
+        setSessionCalls.push({ sessionId: env.sessionId, gameId: env.gameId });
+        return Promise.resolve({ ok: true });
+      }
+      if (env.msg === 'recorder-start-streams') {
+        return Promise.resolve({ ok: true, streams: {} });
+      }
+      if (env.msg === 'recorder-get-status') {
+        return Promise.resolve({ ok: false, error: 'no-session' });
+      }
+      if (env.msg === 'recorder-stop-streams') {
+        return Promise.resolve({ ok: true, streams: {}, finalized: true });
+      }
+      return Promise.resolve({ ok: false, error: 'unexpected' });
+    };
+    opts._transport.handler = (env) => {
+      if (typeof transportHandler === 'function') {
+        const override = transportHandler(env, {
+          savedMetadata, setSessionCalls, defaultHandler,
+        });
+        if (override !== undefined) return override;
+      }
+      return defaultHandler(env);
+    };
+    const h = BS.installSessionControls(stripInternal(opts));
+    try {
+      await sleep(20); // boot adoption resolves idle
+      h.button.click(); // Start
+      await sleep(80); // full Start chain
+      assert.equal(h.getPhase(), 'active', 'Start reaches active');
+      // The sessionId comes from the real createSessionMetadata (random
+      // UUID); the gameId is our stubbed GID1.
+      const sess = h.getSession();
+      assert.equal(sess.gameId, GID1);
+      assert.ok(/^[0-9a-f-]{36}$/.test(sess.sessionId), 'sessionId is uuid');
+      return { BS, opts, h, savedMetadata, setSessionCalls,
+               sessionId: sess.sessionId };
+    } catch (e) {
+      try { h.stop(); } catch (ignored) {}
+      throw e;
+    }
+  }
+
+  it('AC1: handleGameReset mints a new gameId and appends it to metadata.gameIds', async () => {
+    const { h, savedMetadata, setSessionCalls, sessionId } = await startWithFields();
+    try {
+      assert.equal(savedMetadata.length, 1, 'one session-save from Start');
+      assert.deepEqual(savedMetadata[0].gameIds, [GID1]);
+      const res = await h.handleGameReset();
+      assert.equal(res.ok, true);
+      assert.equal(res.newGameId, GID2, 'new gameId minted');
+      assert.notEqual(res.newGameId, GID1, 'distinct from old gameId');
+      assert.ok(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(res.newGameId),
+        'new gameId is uuid-v4');
+      assert.equal(savedMetadata.length, 2, 'session-save called again');
+      assert.deepEqual(savedMetadata[1].gameIds, [GID1, GID2],
+        'gameIds appended, not replaced (length 1 → 2)');
+      assert.deepEqual(h.getSession(), { sessionId: sessionId, gameId: GID2 },
+        'slots updated to new gameId');
+    } finally { h.stop(); }
+  });
+
+  it('AC2/AC3: session-save precedes set-session; set-session keeps the sessionId byte-identical', async () => {
+    const { h, opts, setSessionCalls, sessionId } = await startWithFields();
+    try {
+      setSessionCalls.length = 0;
+      const saveCountBefore = opts._transport.calls.filter(
+        (c) => c.msg === 'session-save').length;
+      const res = await h.handleGameReset();
+      assert.equal(res.ok, true);
+      // Order: the second session-save must precede the second set-session.
+      const calls = opts._transport.calls;
+      const saveIdx = calls.findIndex((c, i) =>
+        c.msg === 'session-save' &&
+        calls.slice(0, i + 1).filter((x) => x.msg === 'session-save').length ===
+          saveCountBefore + 1);
+      const setIdx = calls.findIndex((c) => c.msg === 'recorder-set-session' &&
+        c.gameId === GID2);
+      assert.ok(saveIdx !== -1 && setIdx !== -1 && saveIdx < setIdx,
+        'session-save (updated metadata) precedes recorder re-set');
+      assert.equal(setSessionCalls.length, 1);
+      assert.strictEqual(setSessionCalls[0].sessionId, sessionId,
+        'sessionId byte-identical (5.5 guard allows same-session re-set)');
+      assert.strictEqual(setSessionCalls[0].gameId, GID2);
+    } finally { h.stop(); }
+  });
+
+  it('AC4: fail-closed on session-save failure — old gameId stays, no re-set sent', async () => {
+    const { h, setSessionCalls, sessionId } = await startWithFields((env) => {
+      if (env.msg === 'session-save' && env.metadata.gameIds.length === 2) {
+        return Promise.resolve({ ok: false, error: 'idb-failure' });
+      }
+      return undefined; // use default
+    });
+    try {
+      const setCallsBefore = setSessionCalls.length;
+      const res = await h.handleGameReset();
+      assert.equal(res.ok, false);
+      assert.ok(res.error.indexOf('session-save-failed') === 0,
+        'honest error, got: ' + res.error);
+      assert.deepEqual(h.getSession(), { sessionId: sessionId, gameId: GID1 },
+        'old gameId stays active');
+      assert.equal(setSessionCalls.length, setCallsBefore,
+        'no recorder re-set sent');
+      assert.equal(h.getPhase(), 'active', 'session keeps recording');
+    } finally { h.stop(); }
+  });
+
+  it('AC4b: fail-closed on recorder re-set refusal — old gameId stays', async () => {
+    const { h, setSessionCalls, sessionId } = await startWithFields((env) => {
+      if (env.msg === 'recorder-set-session' && env.gameId === GID2) {
+        // 5.5's guard refusing (another tab won the race).
+        return Promise.resolve({ ok: false, error: 'session-active' });
+      }
+      return undefined;
+    });
+    try {
+      const res = await h.handleGameReset();
+      assert.equal(res.ok, false);
+      assert.ok(res.error.indexOf('set-session-failed') === 0,
+        'honest error, got: ' + res.error);
+      assert.deepEqual(h.getSession(), { sessionId: sessionId, gameId: GID1 },
+        'old gameId stays active');
+    } finally { h.stop(); }
+  });
+
+  it('AC5: handleGameReset when idle does nothing (not-active)', async () => {
+    const BS = publishNS(freshModule());
+    globalThis.document = makeFakeDocument(true);
+    const opts = makeOpts();
+    let channelCalls = 0;
+    opts._transport.handler = () => {
+      channelCalls++;
+      return Promise.resolve({ ok: false, error: 'no-session' });
+    };
+    const h = BS.installSessionControls(stripInternal(opts));
+    try {
+      await sleep(20);
+      assert.equal(h.getPhase(), 'idle');
+      const callsBefore = channelCalls;
+      const res = await h.handleGameReset();
+      assert.deepEqual(res, { ok: false, error: 'not-active' });
+      assert.equal(channelCalls, callsBefore,
+        'no channel traffic when idle');
+      assert.deepEqual(h.getSession(), { sessionId: null, gameId: null });
+    } finally { h.stop(); }
+  });
+
+  it('AC5b: second handleGameReset appends a third gameId (shared session flag grows)', async () => {
+    const { h, savedMetadata } = await startWithFields();
+    try {
+      const r1 = await h.handleGameReset();
+      assert.equal(r1.ok, true);
+      // Point newGameId at a third UUID for the second transition.
+      const r2 = await h.handleGameReset();
+      assert.equal(r2.ok, true);
+      assert.notEqual(r2.newGameId, r1.newGameId);
+      assert.equal(savedMetadata.length, 3);
+      assert.equal(savedMetadata[2].gameIds.length, 3,
+        'gameIds.length > 1 flags the shared session (derivable, no new flag)');
+      assert.deepEqual(h.getSession().gameId, r2.newGameId);
+    } finally { h.stop(); }
+  });
+
+  it('AC6: handleGameReset returns newGameId for the caller to re-arm the tracker', async () => {
+    const { h } = await startWithFields();
+    try {
+      const res = await h.handleGameReset();
+      assert.equal(res.ok, true);
+      assert.equal(typeof res.newGameId, 'string');
+      // content.js uses res.newGameId to install the fresh tracker and
+      // call resetEnded(); the handle's contract is to provide it.
+    } finally { h.stop(); }
+  });
+
+  it('5.9 does not stop the session: phase stays active, no stop-channel message', async () => {
+    const { h, opts } = await startWithFields();
+    try {
+      const res = await h.handleGameReset();
+      assert.equal(res.ok, true);
+      assert.equal(h.getPhase(), 'active', 'phase stays ACTIVE (5.7 holds)');
+      const stopMsgs = opts._transport.calls.filter(
+        (c) => c.msg === 'recorder-stop-streams');
+      assert.equal(stopMsgs.length, 0, 'no stop-channel message (5.7 holds)');
+    } finally { h.stop(); }
   });
 });

@@ -1002,6 +1002,20 @@ describe('AC11 — diff discipline', () => {
       // after the pins are evolved (2.x/3.x/4.x/5.1-5.7 precedent).
       '.autodev/evidence/5.8.review.md',
       '.autodev/evidence/5.8.behavior.md',
+      // Honest cumulative evolution: 5.9 (mid-session game transition)
+      // legitimately implements the onGameReset placeholder in content.js
+      // (mint new gameId + install fresh tracker) and adds handleGameReset
+      // + activeMetadata/activeConditions to session_controls.js (the
+      // specified deliverable; 5.7 named the placeholder as 5.9's input),
+      // adds its unit/integration tests, and records its evidence; its
+      // files join the allowlists. No new channel messages, event types,
+      // stores, or permissions.
+      '.autodev/evidence/5.9.contract.md',
+      '.autodev/evidence/5.9.build.md',
+      // Honest cumulative evolution: 5.9's review/behavior evidence lands
+      // after the pins are evolved (2.x/3.x/4.x/5.1-5.8 precedent).
+      '.autodev/evidence/5.9.review.md',
+      '.autodev/evidence/5.9.behavior.md',
     ]);
     for (const f of changed) {
       assert.ok(allowed.has(f), `unexpected modified file: ${f}`);

@@ -5,31 +5,74 @@ BlindfoldSession.installPageEndHook(BlindfoldSession.sender);
 // Chess instance (sounds.js's bare `game` references keep working via
 // getGame()). Until §5 mints game identities, activeGameId is null →
 // track-but-don't-emit: gameplay works, recording waits for §5.
-const historyTracker = BlindfoldSession.createHistoryTracker({
-  gameId: BlindfoldSession.activeGameId || null,
-  emitEvent: (eventType, payload, refs) =>
-    BlindfoldSession.sender.emit({
-      eventType,
-      sessionId: BlindfoldSession.activeSessionId,
-      gameId: BlindfoldSession.activeGameId,
-      payload,
-      refs: refs || null,
-    }),
-  onGameReset: (info) => {
-    // 3.2.6: a game reset orphans in-flight attempts — mark them
-    // unconfirmed rather than leaving them pending forever.
-    attemptTracker.handleGameReset();
-    // 3.5.2: record the detected reset. 3.1 passes { confirmedMoveCount }
-    // (additive; captured before confirmed was cleared). Failure-isolated.
-    try {
-      gameLifecycleRecorder.recordGameReset(
-        info && Number.isInteger(info.confirmedMoveCount)
-          ? info.confirmedMoveCount : 0);
-    } catch (e) { /* instrumentation must never break the page */ }
-    /* §5: mint new game identity + install new tracker */
-  },
-});
-const game = historyTracker.getGame();
+//
+// 5.9: the tracker is created by createGameHistoryTracker so a
+// mid-session genuine reset can install a fresh tracker for the new
+// gameId (same options shape). Both bindings are `let` — reassigned
+// only by the 5.9 transition below.
+function createGameHistoryTracker(gameId) {
+  return BlindfoldSession.createHistoryTracker({
+    gameId: gameId,
+    emitEvent: (eventType, payload, refs) =>
+      BlindfoldSession.sender.emit({
+        eventType,
+        sessionId: BlindfoldSession.activeSessionId,
+        gameId: BlindfoldSession.activeGameId,
+        payload,
+        refs: refs || null,
+      }),
+    onGameReset: handleGameResetEvent,
+  });
+}
+
+// 5.9: the history tracker's genuine-reset callback (PLAN.md §5.9).
+// Steps 1–2 are the existing 3.2.6/3.5.2 handling (unchanged); steps
+// 3–6 (mint, metadata+session-save, recorder re-set, slots) run in the
+// session-controls handle; steps 7–8 (fresh tracker, lifecycle
+// re-arm) run here on success. Failure-isolated throughout:
+// instrumentation must never break the page (3.2 SF-1 precedent).
+function handleGameResetEvent(info) {
+  // 3.2.6: a game reset orphans in-flight attempts — mark them
+  // unconfirmed rather than leaving them pending forever.
+  attemptTracker.handleGameReset();
+  // 3.5.2: record the detected reset. 3.1 passes { confirmedMoveCount }
+  // (additive; captured before confirmed was cleared). Failure-isolated.
+  // The game_reset event goes out under the OLD gameId — it is the
+  // boundary marker; the new identity does not exist yet.
+  try {
+    gameLifecycleRecorder.recordGameReset(
+      info && Number.isInteger(info.confirmedMoveCount)
+        ? info.confirmedMoveCount : 0);
+  } catch (e) { /* instrumentation must never break the page */ }
+  // 5.9: mint new game identity + install new tracker — only when a
+  // session is ACTIVE (the handle fail-closes otherwise: idle keeps
+  // 3.1's restart-in-place; STARTING/STOPPING do nothing).
+  try {
+    var handle = sessionControlsHandle;
+    if (!handle || typeof handle.handleGameReset !== 'function') {
+      return;
+    }
+    Promise.resolve()
+      .then(function () { return handle.handleGameReset(); })
+      .then(function (res) {
+        if (!res || res.ok !== true ||
+            typeof res.newGameId !== 'string' || res.newGameId === '') {
+          return;
+        }
+        try {
+          historyTracker = createGameHistoryTracker(res.newGameId);
+          game = historyTracker.getGame();
+        } catch (e) { /* never break the page */ return; }
+        try {
+          gameLifecycleRecorder.resetEnded();
+        } catch (e) { /* never break the page */ }
+      })
+      .catch(function () { /* fail-closed; nothing to do */ });
+  } catch (e) { /* instrumentation must never break the page */ }
+}
+let historyTracker = createGameHistoryTracker(
+  BlindfoldSession.activeGameId || null);
+let game = historyTracker.getGame();
 let latest_half_moves = [];
 
 // Task 3.2 (PLAN.md §3.2): move-input attempt tracker. Records each
