@@ -387,6 +387,25 @@ describe('AC9 — diff discipline', () => {
       // lands after the pins were evolved (2.x/3.1/3.2/3.3 precedent).
       '.autodev/evidence/3.4.review.md',
       '.autodev/evidence/3.4.behavior.md',
+      // Honest cumulative evolution: 3.5 legitimately touches
+      // chess_utils.js (game lifecycle recorder + additive onGameReset
+      // { confirmedMoveCount } argument) + content.js (visibility/focus
+      // listeners, onGameReset recording, chess_rules game-end wiring);
+      // adds tests/game_lifecycle.test.js and its evidence; records the
+      // 3.5.3 dialog / reconnect audit in DECISIONS.md.
+      'chess_utils.js',
+      'tests/game_lifecycle.test.js',
+      '.autodev/evidence/3.5.contract.md',
+      '.autodev/evidence/3.5.build.md',
+      // Honest cumulative evolution: 3.5's rereview/behavior
+      // evidence lands after the pins were evolved (2.x/3.x precedent).
+      '.autodev/evidence/3.5.rereview.md',
+      '.autodev/evidence/3.5.behavior.md',
+      '.autodev/DECISIONS.md',
+      // Honest cumulative evolution: 3.5's review/behavior evidence
+      // lands after the pins were evolved (2.x/3.1/3.2/3.3/3.4 precedent).
+      '.autodev/evidence/3.5.review.md',
+      '.autodev/evidence/3.5.behavior.md',
     ]);
     for (const f of changed) {
       assert.ok(allowed.has(f), `unexpected modified file: ${f}`);
@@ -401,17 +420,18 @@ describe('AC9 — diff discipline', () => {
     assert.ok(src.includes("BlindfoldSession.HELP_REQUESTED_EVENT_TYPE = 'help_requested'"));
   });
 
-  it('no 3.5 scope in the diff (3.4 is the current task — its scope is legitimate)', () => {
-    // Honest cumulative evolution: this pin asserted "no 3.4/3.5 scope"
-    // when 3.3 was current. 3.4's speech instrumentation is now the
-    // legitimate diff; only 3.5 (lifecycle) remains future scope.
-    // Only ADDED lines count: comments may name 3.5 to declare scope
-    // boundaries.
+  it('no §4/§5 implementation scope in the diff (3.5 is the current task — its scope is legitimate)', () => {
+    // Honest cumulative evolution: this pin asserted "no 3.5 scope"
+    // when 3.3/3.4 were current. 3.5's game/session lifecycle (visibility
+    // listeners, game_reset, game_ended, termination vocabulary) is now
+    // the legitimate diff; the pin guards §4 recording and §5 UI tokens.
+    // Only ADDED lines count: comments may name future tasks to declare
+    // scope boundaries.
     const diff = execSync('git diff HEAD -- chess_utils.js content.js sounds.js', { cwd: ROOT }).toString();
     const added = diff.split('\n').filter((l) => l.startsWith('+') && !l.startsWith('+++'));
-    for (const token of ['visibilitychange', 'page_discontinuity']) {
+    for (const token of ['MediaRecorder', 'getUserMedia', 'getDisplayMedia']) {
       assert.ok(!added.some((l) => l.includes(token)),
-        `no 3.5 token in added lines: ${token}`);
+        `no §4/§5 token in added lines: ${token}`);
     }
   });
 

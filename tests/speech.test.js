@@ -532,7 +532,26 @@ describe('AC11 — diff discipline', () => {
       // Honest cumulative evolution: 3.4's review/behavior evidence
       // lands after the pins were evolved (2.x/3.1/3.2/3.3 precedent).
       '.autodev/evidence/3.4.review.md',
-      '.autodev/evidence/3.4.behavior.md'
+            '.autodev/evidence/3.4.behavior.md',
+      // Honest cumulative evolution: 3.5 legitimately touches
+      // chess_utils.js (game lifecycle recorder + additive onGameReset
+      // { confirmedMoveCount } argument) + content.js (visibility/focus
+      // listeners, onGameReset recording, chess_rules game-end wiring);
+      // adds tests/game_lifecycle.test.js and its evidence; records the
+      // 3.5.3 dialog / reconnect audit in DECISIONS.md.
+      'chess_utils.js',
+      'tests/game_lifecycle.test.js',
+      '.autodev/evidence/3.5.contract.md',
+      '.autodev/evidence/3.5.build.md',
+      // Honest cumulative evolution: 3.5's rereview/behavior
+      // evidence lands after the pins were evolved (2.x/3.x precedent).
+      '.autodev/evidence/3.5.rereview.md',
+      '.autodev/evidence/3.5.behavior.md',
+      '.autodev/DECISIONS.md',
+      // Honest cumulative evolution: 3.5's review/behavior evidence
+      // lands after the pins were evolved (2.x/3.1/3.2/3.3/3.4 precedent).
+      '.autodev/evidence/3.5.review.md',
+      '.autodev/evidence/3.5.behavior.md'
     ]);
     for (const f of changed) {
       assert.ok(allowed.has(f), `unexpected modified file: ${f}`);
@@ -545,9 +564,12 @@ describe('AC11 — diff discipline', () => {
     assert.strictEqual(current, head, 'PLAN.md must be byte-identical to HEAD');
   });
 
-  it('no §4 recording or 3.5 lifecycle scope in the diff', () => {
+  it('no §4 recording scope in the diff (3.5 lifecycle scope is now legitimate)', () => {
+    // Honest cumulative evolution: 3.5 legitimately wires
+    // visibilitychange/focus/blur listeners in content.js (3.5.1); the
+    // visibility token is no longer forbidden. §4 recording tokens still are.
     const diff = execSync('git diff HEAD -- sounds.js content.js', { cwd: ROOT }).toString();
-    for (const token of ['MediaRecorder', 'getUserMedia', 'getDisplayMedia', 'visibilitychange']) {
+    for (const token of ['MediaRecorder', 'getUserMedia', 'getDisplayMedia']) {
       assert.ok(!diff.includes(token), `diff must not contain ${token}`);
     }
   });

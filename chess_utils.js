@@ -60,6 +60,27 @@ BlindfoldSession.VISIBILITY_SOURCES = Object.freeze([
 // (visibility), Escape (3.4 speech cancellation) are explicitly excluded.
 BlindfoldSession.HELP_SHORTCUTS = Object.freeze(['w', 'm', 'z', 'i', 's']);
 
+// 3.5-owned event vocabulary (1.3 §2.2: each task owns its vocabulary).
+// Game/session lifecycle: document visibility + focus, game resets.
+// game_ended is 1.4-owned (PLAN §1.4.5; game_records.js) — 3.5 does NOT
+// redeclare its event type, payload schema, or termination vocabulary
+// (3.5 SF-1 repair: a same-named validator here once shadowed 1.4's on
+// the merged namespace).
+BlindfoldSession.DOCUMENT_VISIBILITY_CHANGED_EVENT_TYPE = 'document_visibility_changed';
+BlindfoldSession.GAME_RESET_EVENT_TYPE = 'game_reset';
+
+// 3.5.4: recorder-internal game_ended source keys (frozen). These are a
+// dedup vocabulary only — they are NEVER persisted in an event payload.
+// The persisted evidence source is 1.4's EVIDENCE_SOURCES
+// ('observed'/'manual'): chess_rules and chesscom_dialog both record
+// evidenceSource 'observed' (the dialog additionally carries the raw
+// display string in observedText), stop records 'manual'.
+BlindfoldSession.GAME_END_SOURCES = Object.freeze([
+  'chess_rules',    // internal board reached a terminal state
+  'chesscom_dialog',// Chess.com's game-over dialog (§7; unsupported today)
+  'stop'            // §5 Stop control with a termination reason
+]);
+
 // Cross-module access (Node test pattern): the 1.4 payload factories live
 // on the merged globalThis.BlindfoldSession in tests; in the browser the
 // module-scoped BlindfoldSession IS the global. Read at call time.
@@ -798,10 +819,14 @@ function createHistoryTracker(options) {
     suspectCount++;
     if (suspectCount >= suspectThreshold) {
       game.reset();
+      // 3.5.2: capture the count before clearing — onGameReset receives
+      // it for the game_reset record. Existing () => {...} stubs keep
+      // working (extra argument ignored).
+      var resetMoveCount = confirmed.length;
       confirmed = [];
       suspectCount = 0;
       desyncCount = 0;
-      onGameReset();
+      onGameReset({ confirmedMoveCount: resetMoveCount });
       result.reset = true;
       if (gameId !== null) {
         // A genuine reset is a session boundary once game identities
@@ -1455,6 +1480,277 @@ function createVisibilityRecorder(options) {
 }
 
 BlindfoldSession.createVisibilityRecorder = createVisibilityRecorder;
+
+// ------------------------------------------------------------------
+// 3.5 payload/refs validators (exact keys; TypeError/RangeError per
+// the AGENTS.md convention).
+// ------------------------------------------------------------------
+
+// 3.5.1: raw document state only. The honest naming (document state, not
+// a claim about the player's state of mind) is the mechanism for
+// "without treating them as proof of a cognitive pause" — see the
+// recorder docs below.
+function requireValidDocumentVisibilityChangedPayload(payload) {
+  requireExactKeys(payload, ['visibilityState', 'focused'],
+    'document_visibility_changed payload');
+  if (payload.visibilityState !== 'visible' && payload.visibilityState !== 'hidden') {
+    throw new RangeError("document_visibility_changed payload.visibilityState must be 'visible' or 'hidden'");
+  }
+  if (typeof payload.focused !== 'boolean') {
+    throw new TypeError('document_visibility_changed payload.focused must be a boolean');
+  }
+  return payload;
+}
+
+// 3.5.2: the 3.1 suspect-threshold detection, now recorded.
+function requireValidGameResetPayload(payload) {
+  requireExactKeys(payload, ['detection', 'confirmedMoveCount'],
+    'game_reset payload');
+  if (payload.detection !== 'suspect_threshold') {
+    throw new RangeError("game_reset payload.detection must be 'suspect_threshold'");
+  }
+  if (!Number.isInteger(payload.confirmedMoveCount) || payload.confirmedMoveCount < 0) {
+    throw new RangeError('game_reset payload.confirmedMoveCount must be an integer >= 0');
+  }
+  return payload;
+}
+
+// 3.5.3/3.5.4: game endings live in 1.4's game_ended schema
+// ({result, terminationReason, evidenceSource, observedText},
+// game_records.js). 3.5 must NOT define its own game_ended payload
+// validator here — a same-named requireValidGameEndedPayload once
+// shadowed 1.4's on the merged namespace (3.5 SF-1, repaired). The
+// recorder binds 1.4's factory via sharedBS() (3.1 precedent).
+
+// Sparse refs: exactly one terminalMoveEventId, or null refs when there
+// is no confirmed move to link (e.g. Stop before any move). Refs are an
+// envelope (1.3) concept, not part of 1.4's payload schema.
+function requireValidGameEndedRefs(refs) {
+  if (refs === null || refs === undefined) {
+    return null;
+  }
+  requireExactKeys(refs, ['terminalMoveEventId'], 'game_ended refs');
+  requireUuidV4(refs.terminalMoveEventId, 'game_ended refs.terminalMoveEventId');
+  return refs;
+}
+
+BlindfoldSession.requireValidDocumentVisibilityChangedPayload = requireValidDocumentVisibilityChangedPayload;
+BlindfoldSession.requireValidGameResetPayload = requireValidGameResetPayload;
+BlindfoldSession.requireValidGameEndedRefs = requireValidGameEndedRefs;
+
+// 3.5.3 (chess_rules source): map the internal board's terminal state to
+// 1.4's TERMINATION_REASONS vocabulary (game_records.js). Mirrors
+// getResultAnnouncement's conditions (sounds.js); in_draw() with
+// stalemate/threefold/insufficient excluded is the fifty-move rule by
+// elimination. Returns null when the game is not over. Covered by 3.4.4's
+// SPEECH_LOGIC_VERSION bump rule: these conditions are the same
+// derivation getResultAnnouncement versions.
+function chessRulesTermination(game) {
+  if (!game || typeof game.game_over !== 'function' || !game.game_over()) {
+    return null;
+  }
+  if (game.in_checkmate()) return 'checkmate';
+  if (game.in_stalemate()) return 'stalemate';
+  if (game.in_threefold_repetition()) return 'draw_threefold';
+  if (game.insufficient_material()) return 'draw_insufficient_material';
+  if (game.in_draw()) return 'draw_fifty_move';
+  // Defensive: chess.js enumerates its terminal states; reaching here
+  // means an unrecognized terminal state. The caller records 1.4's
+  // honest unknown record (result '*', terminationReason null).
+  return null;
+}
+
+BlindfoldSession.chessRulesTermination = chessRulesTermination;
+
+// 3.5.3 (chess_rules source): PGN result from the terminal board.
+// Mirrors getResultAnnouncement's winner logic (sounds.js): checkmate
+// with the side to move mated means the other side won.
+function chessRulesResult(game) {
+  if (game.in_checkmate()) {
+    return game.turn() === 'w' ? '0-1' : '1-0';
+  }
+  return '1/2-1/2';
+}
+
+BlindfoldSession.chessRulesResult = chessRulesResult;
+
+// ------------------------------------------------------------------
+// Task 3.5: createGameLifecycleRecorder — 3.5.1 document visibility/focus,
+// 3.5.2 game resets, 3.5.3/3.5.4 game endings in 1.4's game_ended schema
+// (game_records.js; 3.5 SF-1: this recorder does not own game_ended).
+//
+// DOM-free; content.js wires it to visibilitychange/focus/blur listeners,
+// 3.1's onGameReset, and the observeMoves callback region (chess_rules
+// source). Emission is gated on non-empty sessionId AND gameId via thunks
+// (2.7/3.1/3.2/3.3 §5-seam precedent) — pre-§5 the recorder is inert: no
+// events, no throw. All recorder calls from DOM listeners must be wrapped
+// in try/catch by the caller (3.2 SF-1 precedent): instrumentation must
+// never break the page.
+//
+// Explicitly NOT duplicated here (contract §1): page_start/page_end_clean
+// (2.7), history_revised takebacks/corrections (3.1.4), page reloads (2.7).
+//
+// 3.5.1 honesty: these events record DOCUMENT STATE ONLY. They do not
+// imply, and must not be interpreted as, a cognitive pause, attention
+// shift, or player absence.
+// ------------------------------------------------------------------
+function createGameLifecycleRecorder(options) {
+  var opts = options || {};
+  var getSessionId = opts.getSessionId;
+  var getGameId = opts.getGameId;
+  var emitEvent = opts.emitEvent;
+  var BS = BlindfoldSession;
+  if (typeof getSessionId !== 'function') {
+    throw new TypeError('createGameLifecycleRecorder getSessionId must be a function');
+  }
+  if (typeof getGameId !== 'function') {
+    throw new TypeError('createGameLifecycleRecorder getGameId must be a function');
+  }
+  if (typeof emitEvent !== 'function') {
+    throw new TypeError('createGameLifecycleRecorder emitEvent must be a function');
+  }
+
+  // 1.4 owns the game_ended schema (game_records.js): bind its factory
+  // at creation time (sharedBS, 3.1 precedent). The 3.5 recorder never
+  // redefines the schema — a same-named validator here once shadowed
+  // 1.4's on the merged namespace (3.5 SF-1, repaired).
+  var NS14 = sharedBS();
+
+  // Per-source idempotency for this recorder instance (§5 creates one
+  // recorder per session; resetEnded() re-arms for a new game). Multiple
+  // game_ended events per game are permitted ACROSS sources (1.4's
+  // consumer contract: consumers take the latest by occurrence time);
+  // each source records at most once per game.
+  var endedBySource = { chess_rules: false, chesscom_dialog: false, stop: false };
+
+  function isActive() {
+    var sid = getSessionId();
+    var gid = getGameId();
+    return typeof sid === 'string' && sid !== '' &&
+           typeof gid === 'string' && gid !== '';
+  }
+
+  function eventIdOf(result) {
+    return (result && typeof result.eventId === 'string') ? result.eventId : null;
+  }
+
+  // 3.5.1: record raw document state at emit time. No debouncing, no
+  // aggregation — raw observations only.
+  function recordVisibilityChange(visibilityState, focused) {
+    var payload = requireValidDocumentVisibilityChangedPayload({
+      visibilityState: visibilityState, focused: focused
+    });
+    if (!isActive()) {
+      return null;
+    }
+    return eventIdOf(emitEvent(BS.DOCUMENT_VISIBILITY_CHANGED_EVENT_TYPE, payload, null));
+  }
+
+  // 3.5.2: the 3.1 detection, now recorded. Called from 3.1's
+  // onGameReset (which receives { confirmedMoveCount }).
+  function recordGameReset(confirmedMoveCount) {
+    var payload = requireValidGameResetPayload({
+      detection: 'suspect_threshold', confirmedMoveCount: confirmedMoveCount
+    });
+    if (!isActive()) {
+      return null;
+    }
+    return eventIdOf(emitEvent(BS.GAME_RESET_EVENT_TYPE, payload, null));
+  }
+
+  // 3.5.3/3.5.4: record a game ending in 1.4's game_ended schema.
+  // source: recorder-internal dedup key ('chess_rules' |
+  // 'chesscom_dialog' | 'stop'; never persisted). input: 1.4's payload
+  // shape ({result, terminationReason, evidenceSource, observedText}),
+  // validated by 1.4's factory (fail-fast, 3.3 precedent — validation
+  // runs even when this source already ended the game or the recorder is
+  // inert). terminalMoveEventId links the last confirmed move (null
+  // refs when there is none).
+  function recordGameEnded(source, input, terminalMoveEventId) {
+    if (BS.GAME_END_SOURCES.indexOf(source) === -1) {
+      throw new RangeError(
+        "recordGameEnded source must be one of: 'chess_rules', 'chesscom_dialog', 'stop'");
+    }
+    var payload = NS14.createGameEndedPayload(input || {});
+    var refs = (terminalMoveEventId === null || terminalMoveEventId === undefined)
+      ? null
+      : requireValidGameEndedRefs({ terminalMoveEventId: terminalMoveEventId });
+    if (endedBySource[source]) {
+      return null;
+    }
+    if (!isActive()) {
+      return null;
+    }
+    var id = eventIdOf(emitEvent(NS14.GAME_ENDED_EVENT_TYPE, payload, refs));
+    if (id !== null) {
+      endedBySource[source] = true;
+    }
+    return id;
+  }
+
+  // 3.5.3 (chess_rules source): derive the 1.4 game_ended input from the
+  // terminal board. Returns null when the game is not over (nothing to
+  // record). An unrecognized terminal state records 1.4's honest unknown
+  // record (result '*', terminationReason null).
+  function recordChessRulesEnded(game, terminalMoveEventId) {
+    if (!game || typeof game.game_over !== 'function' || !game.game_over()) {
+      return null;
+    }
+    var termination = chessRulesTermination(game);
+    var input = termination === null
+      ? { result: '*', terminationReason: null,
+          evidenceSource: 'observed', observedText: null }
+      : { result: chessRulesResult(game), terminationReason: termination,
+          evidenceSource: 'observed', observedText: null };
+    return recordGameEnded('chess_rules', input, terminalMoveEventId);
+  }
+
+  // 3.5.3 (chesscom_dialog source, §7): Chess.com's game-over dialog.
+  // Designed but unwired — no verified selector today (3.3.4 precedent).
+  // evidenceSource is forced to 'observed'; observedText carries the raw
+  // evidence (the exact string Chess.com displayed, per 1.4.5's design).
+  function recordDialogEnded(input, terminalMoveEventId) {
+    var full = Object.assign({}, input || {}, { evidenceSource: 'observed' });
+    return recordGameEnded('chesscom_dialog', full, terminalMoveEventId);
+  }
+
+  // 3.5.4: §5 Stop seam. reason: 1.4 TERMINATION_REASONS member or null
+  // (null = unknown, 1.2's unknown convention; PLAN §7 suggests
+  // 'abandoned'/'resignation'). result: PGN result or '*' (default '*').
+  // evidenceSource is always 'manual'. Subject to per-source idempotency:
+  // a manual Stop completion is a SEPARATE game_ended from an earlier
+  // auto-detection (1.4's consumer contract: multiple permitted, latest
+  // by occurrence time wins).
+  function recordStopTermination(reason, result) {
+    return recordGameEnded('stop', {
+      result: (result === undefined || result === null) ? '*' : result,
+      terminationReason: (reason === undefined) ? null : reason,
+      evidenceSource: 'manual',
+      observedText: null
+    }, null);
+  }
+
+  // Re-arm per-source idempotency for a new game (§5 calls this when it
+  // mints a new game identity).
+  function resetEnded() {
+    endedBySource.chess_rules = false;
+    endedBySource.chesscom_dialog = false;
+    endedBySource.stop = false;
+  }
+
+  return {
+    recordVisibilityChange: recordVisibilityChange,
+    recordGameReset: recordGameReset,
+    recordGameEnded: recordGameEnded,
+    recordChessRulesEnded: recordChessRulesEnded,
+    recordDialogEnded: recordDialogEnded,
+    recordStopTermination: recordStopTermination,
+    resetEnded: resetEnded,
+    isActive: isActive
+  };
+}
+
+BlindfoldSession.createGameLifecycleRecorder = createGameLifecycleRecorder;
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = BlindfoldSession;

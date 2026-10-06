@@ -360,3 +360,71 @@ Consequential engineering decisions with reasoning and evidence. Newest first.
   in-flight utterance at `speechSynthesis.cancel()` time; the later
   onend/onerror maps to `cancelled` only if a request was recorded —
   otherwise `completed`/`error`. Never trust callback names alone.
+
+## 3.5 game/session lifecycle (PLAN.md §3.5)
+
+- **3.5.1 honesty:** `document_visibility_changed` records raw document
+  state (`visibilityState`, `focused`) only. The payload and event names
+  contain no `pause`/`attention`/`away` tokens, and the code carries an
+  explicit epistemic disclaimer: these events do not imply, and must not
+  be interpreted as, a cognitive pause, attention shift, or player
+  absence. No debouncing or aggregation — raw observations only.
+- **3.5.2:** 3.1's `onGameReset` now receives `{ confirmedMoveCount }`
+  (additive; captured before `confirmed` is cleared). Existing nullary
+  stubs keep working. Takebacks stay `history_revised` (3.1.4); reloads
+  stay `page_start` (2.7) — no duplication.
+- **3.5.3 result-dialog audit — UNSUPPORTED (explicit marking):** no
+  reliable Chess.com game-over dialog signal could be verified. The 3.3
+  domaudit §6 already placed result dialogs outside current selectors
+  [code-analysis]; public research surfaced only unverified third-party
+  candidates (e.g. `.game-over-modal`, `.board-modal-container` from
+  community userscripts — not verified against the live page, and
+  Chess.com changes its DOM frequently). Per the 3.3.4 precedent, no
+  observer is fabricated: content.js installs no dialog observer, and
+  `recordDialogEnded` is a designed-but-unwired recorder method. **Revisit
+  in §7** with live-page verification.
+- **"Reconnect" — UNSUPPORTED (explicit marking):** no reliable
+  Chess.com reconnection signal was found during the 3.5 audit; page
+  reloads are already recorded as new page contexts (`page_start`, 2.7).
+  **Revisit in §7** if a verified signal emerges.
+- **3.5 SF-1 repair — game_ended schema reconciliation (adversarial
+  review):** 3.5 initially shipped a second, incompatible `game_ended`
+  schema (`{termination, source, speechLogicVersion}`) with its own
+  `TERMINATIONS` vocabulary and a same-named
+  `requireValidGameEndedPayload` that silently shadowed 1.4's validator
+  on the merged namespace. Repaired: 1.4 owns the `game_ended` schema
+  (`{result, terminationReason, evidenceSource, observedText}`,
+  `TERMINATION_REASONS`, `EVIDENCE_SOURCES`, factory + validator in
+  game_records.js — untouched). The 3.5 recorder binds 1.4's factory via
+  `sharedBS()` (3.1 precedent) and never redefines the schema; the
+  shadowing regression is pinned in tests/game_lifecycle.test.js AC0.
+  Termination vocabulary is 1.4's 9-member `TERMINATION_REASONS`
+  (`checkmate`, `stalemate`, `resignation`, `timeout`, `draw_agreed`,
+  `draw_insufficient_material`, `draw_fifty_move`, `draw_threefold`,
+  `abandoned`) with null = unknown (1.2's unknown convention). The
+  3.5 `GAME_END_SOURCES` (`chess_rules`, `chesscom_dialog`, `stop`) is a
+  recorder-internal dedup vocabulary only — never persisted; the persisted
+  evidence source is 1.4's `EVIDENCE_SOURCES`.
+- **Dedup semantics (SF-1):** per-SOURCE idempotency — each source
+  records at most once per game — but multiple `game_ended` events per
+  game are permitted across sources, per 1.4's consumer contract
+  (consumers take the latest by occurrence time). A manual Stop
+  completion therefore supersedes an earlier auto-detection instead of
+  being suppressed. `resetEnded()` re-arms all sources for a new game.
+- **Source mapping onto 1.4's schema:** chess_rules →
+  `evidenceSource: 'observed'`, `observedText: null`, result/termination
+  derived from the board (`chessRulesTermination`/`chessRulesResult`,
+  mirroring `getResultAnnouncement`'s conditions — covered by 3.4.4's
+  `SPEECH_LOGIC_VERSION` bump rule); chesscom_dialog → `'observed'` with
+  the raw display string in `observedText` (exactly what 1.4 designed it
+  for; §7); stop → `'manual'`, result default `'*'`. `game_ended` refs
+  stay sparse (`{ terminalMoveEventId }` or null).
+- **3.5.4 §5 seam:** `recordStopTermination(reason, result)` — reason is
+  a 1.4 `TERMINATION_REASONS` member or null (null = unknown; PLAN §7
+  suggests `abandoned`/`resignation`), result is a PGN result or `'*'`
+  (default `'*'`). Exposed as `BlindfoldSession.gameLifecycleRecorder`;
+  §5 calls it from the Stop control and `resetEnded()` when minting a
+  new game identity.
+- **3.2 SF-1 precedent applied:** all 3.5 recorder calls from DOM
+  listeners/wiring are failure-isolated; instrumentation never breaks
+  the page.

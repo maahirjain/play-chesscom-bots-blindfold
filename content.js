@@ -15,10 +15,17 @@ const historyTracker = BlindfoldSession.createHistoryTracker({
       payload,
       refs: refs || null,
     }),
-  onGameReset: () => {
+  onGameReset: (info) => {
     // 3.2.6: a game reset orphans in-flight attempts — mark them
     // unconfirmed rather than leaving them pending forever.
     attemptTracker.handleGameReset();
+    // 3.5.2: record the detected reset. 3.1 passes { confirmedMoveCount }
+    // (additive; captured before confirmed was cleared). Failure-isolated.
+    try {
+      gameLifecycleRecorder.recordGameReset(
+        info && Number.isInteger(info.confirmedMoveCount)
+          ? info.confirmedMoveCount : 0);
+    } catch (e) { /* instrumentation must never break the page */ }
     /* §5: mint new game identity + install new tracker */
   },
 });
@@ -112,6 +119,48 @@ const speechTracker = BlindfoldSession.createSpeechTracker({
 });
 BlindfoldSession.speechTracker = speechTracker;
 
+// Task 3.5 (PLAN.md §3.5): game/session lifecycle recorder. Records
+// document visibility + focus changes (3.5.1; raw document state only —
+// these events do NOT imply a cognitive pause, attention shift, or
+// player absence), game resets detected by 3.1 (3.5.2), and game endings
+// in 1.4's game_ended schema (3.5.3 chess_rules source; chesscom_dialog
+// is §7 — no reliable signal today; 3.5.4 Stop reason via the §5 seam).
+// Emission is gated on non-empty sessionId AND gameId — pre-§5 the
+// recorder is inert. Failure-isolated (3.2 SF-1 precedent):
+// instrumentation must never break the page. Explicitly NOT duplicated:
+// page_start/page_end_clean (2.7), history_revised takebacks/corrections
+// (3.1.4), page reloads.
+const gameLifecycleRecorder = BlindfoldSession.createGameLifecycleRecorder({
+  getSessionId: () => BlindfoldSession.activeSessionId,
+  getGameId: () => BlindfoldSession.activeGameId,
+  emitEvent: (eventType, payload, refs) =>
+    BlindfoldSession.sender.emit({
+      eventType,
+      sessionId: BlindfoldSession.activeSessionId,
+      gameId: BlindfoldSession.activeGameId,
+      payload,
+      refs: refs || null,
+    }),
+});
+// §5 seam: §5's Stop control calls recordStopTermination(reason, result)
+// (reason: 1.4 TERMINATION_REASONS member or null; result: PGN result or
+// '*', default '*'); §5 calls resetEnded() when minting a new game
+// identity.
+BlindfoldSession.gameLifecycleRecorder = gameLifecycleRecorder;
+
+// 3.5.1: document visibility and focus changes. One event type; both
+// values captured at emit time. No debouncing, no aggregation — raw
+// observations only.
+function recordVisibilitySafe() {
+  try {
+    gameLifecycleRecorder.recordVisibilityChange(
+      document.visibilityState, document.hasFocus());
+  } catch (e) { /* instrumentation must never break the page */ }
+}
+document.addEventListener('visibilitychange', recordVisibilitySafe);
+window.addEventListener('focus', recordVisibilitySafe);
+window.addEventListener('blur', recordVisibilitySafe);
+
 applyCurrentPieceSet();
 
 observeMoves((half_moves) => {
@@ -136,6 +185,19 @@ observeMoves((half_moves) => {
   announceResultIfOver(lastConfirmed && lastConfirmed.eventId
     ? { trigger: 'game-result', moveEventId: lastConfirmed.eventId }
     : null);
+  // 3.5.3 (chess_rules source): the internal board reached a terminal
+  // state — record the game ending in 1.4's game_ended schema
+  // ({result, terminationReason, evidenceSource, observedText}).
+  // Per-source idempotency lives in the recorder; the chesscom_dialog
+  // source (§7 — no reliable signal today, explicitly unsupported) and
+  // the §5 Stop seam record separate game_ended events (1.4's consumer
+  // contract: multiple permitted, latest by occurrence time wins).
+  // Failure-isolated.
+  try {
+    gameLifecycleRecorder.recordChessRulesEnded(
+      game,
+      lastConfirmed && lastConfirmed.eventId ? lastConfirmed.eventId : null);
+  } catch (e) { /* instrumentation must never break the page */ }
 });
 
 observePieceRenders(() => {
