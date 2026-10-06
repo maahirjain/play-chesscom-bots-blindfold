@@ -2,6 +2,24 @@
 
 Consequential engineering decisions with reasoning and evidence. Newest first.
 
+## 2026-10-06 — Task 1.1 repair decisions (from independent review)
+
+1. **`addGameToSession` throws on duplicate explicit gameId.**
+   Reviewer found silent double-append of the same UUID would violate PLAN
+   §3(a) "unique IDs establish identity". Decision: throw plain `Error`
+   (not TypeError — the module's convention is TypeError = wrong type;
+   a duplicate is a logic/detection bug). A duplicate at the §3.5 detection
+   layer must surface as evidence, not silent corruption. Normal flow
+   (fresh `newGameId()` per detection) never triggers it.
+
+2. **Identity records are frozen (append-only).**
+   Reviewer found returned records were caller-mutable, risking §5/§2 call
+   sites pushing into `gameIds`. Decision: `Object.freeze` the record and
+   its `gameIds` array at creation. Verified storage-safe: structuredClone,
+   JSON, and IndexedDB do not preserve frozenness, and `addGameToSession`
+   tolerates frozen inputs (tested). If §1.2 later extends the record shape,
+   the contract needs an amendment — flagged in 1.1 evidence, not fixed now.
+
 ## 2026-10-06 — Preflight decisions (coordinator)
 
 1. **Local git is the durable engineering store; GitHub sync is batched.**
