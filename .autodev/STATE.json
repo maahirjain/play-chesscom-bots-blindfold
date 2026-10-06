@@ -240,8 +240,13 @@
       ]
     },
     "2.5": {
-      "commit": null,
-      "status": "PENDING"
+      "status": "DONE",
+      "commit": "f30be5b",
+      "verification": "V1 PASS (38/38 sender tests); V2 PASS (SW-RETRY 19/19: flaky/delayed/never-responding transports, timer-driven recovery); adversarial review APPROVE; behavioral BEHAVIOR_VERIFIED (44/44); 321/321 accumulated",
+      "deferred": [
+        "real-site retry behavior -> 7.x/owner device",
+        "restore/lifecycle/status/retention -> 2.6-2.9"
+      ]
     },
     "2.6": {
       "commit": null,
