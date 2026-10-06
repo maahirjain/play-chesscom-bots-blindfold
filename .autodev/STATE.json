@@ -200,8 +200,13 @@
       ]
     },
     "2.1": {
-      "commit": null,
-      "status": "PENDING"
+      "status": "DONE",
+      "commit": "4414fa5",
+      "verification": "V1 PASS (19/19 node --test); V2 PASS (SW-LOAD in real headless Chrome: SW target registers, no load errors, worker inert); adversarial review APPROVE; behavioral BEHAVIOR_VERIFIED; V4 deferred (owner device load)",
+      "deferred": [
+        "AC7 real-device load -> owner device",
+        "IndexedDB/message intake/writer/retry/restore/lifecycle/status/retention -> 2.2-2.9"
+      ]
     },
     "2.2": {
       "commit": null,
