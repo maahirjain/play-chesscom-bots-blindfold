@@ -196,9 +196,14 @@ describe('Static guards (AC2/AC4)', () => {
     }
   });
 
-  it('AC4: manifest.json is byte-identical to HEAD (IndexedDB is permissionless)', () => {
-    const atHead = execSync('git show HEAD:manifest.json', { cwd: ROOT });
-    const onDisk = fs.readFileSync(path.join(ROOT, 'manifest.json'));
-    assert.ok(atHead.equals(onDisk), 'manifest.json changed in task 2.2');
+  it('AC4: manifest.json differs from HEAD only in the content_scripts js list (2.3)', () => {
+    // 2.2's contract required no manifest change (IndexedDB is
+    // permissionless); 2.3 legitimately extended the content_scripts js list
+    // per its contract (exact list pinned in tests/sender.test.js). The
+    // cumulative invariant: nothing else in the manifest changed.
+    const atHead = JSON.parse(execSync('git show HEAD:manifest.json', { cwd: ROOT }).toString());
+    const onDisk = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8'));
+    atHead.content_scripts[0].js = onDisk.content_scripts[0].js;
+    assert.deepEqual(onDisk, atHead);
   });
 });

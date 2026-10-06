@@ -122,11 +122,16 @@ describe('AC4/AC6 — diff is exactly the background block', () => {
     assert.notStrictEqual(newContentIdx, -1);
   });
 
-  it('content_scripts + web_accessible_resources blocks byte-identical (AC6)', () => {
+  it('web_accessible_resources block byte-identical to HEAD (AC6, cumulative)', () => {
+    // 2.1/2.2 pinned the whole tail from "content_scripts" onward; 2.3
+    // legitimately extended the js list inside content_scripts per its
+    // contract (exact list pinned in tests/sender.test.js). The cumulative
+    // invariant: web_accessible_resources is untouched.
+    const tailMarker = '"web_accessible_resources"';
     assert.strictEqual(
-      manifestRaw.slice(newContentIdx),
-      oldRaw.slice(oldContentIdx),
-      'content_scripts/web_accessible_resources blocks changed'
+      manifestRaw.slice(manifestRaw.indexOf(tailMarker)),
+      oldRaw.slice(oldRaw.indexOf(tailMarker)),
+      'web_accessible_resources block changed'
     );
   });
 

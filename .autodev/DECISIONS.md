@@ -121,3 +121,11 @@ Consequential engineering decisions with reasoning and evidence. Newest first.
    (DataError) synchronously rather than a wrapped plain Error — the
    2.4 contract should wrap or document this surface. (Found during 2.2
    review + behavioral verification.)
+
+10. **Content-script→SW `sendMessage` with no listener REJECTS.**
+    When no `onMessage` listener is installed in the SW, a content
+    script's `chrome.runtime.sendMessage` rejects with a generic Error
+    ("Could not establish connection" / "Receiving end does not exist"),
+    it does NOT resolve `undefined`. Senders must treat rejection as
+    "unacknowledged, keep queued". (Found during 2.3 V2 verification —
+    the sender records `transport-error:Error` and stops the pump.)
