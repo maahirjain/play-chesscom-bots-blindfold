@@ -230,8 +230,14 @@
       ]
     },
     "2.4": {
-      "commit": null,
-      "status": "PENDING"
+      "status": "DONE",
+      "commit": "7dfd3a0",
+      "verification": "V1 PASS (27/27 node --test); V2 PASS (SW-WRITER 18/18: end-to-end, dedup, tamper, validation, 4-page concurrency gapless 0..23); adversarial review APPROVE_WITH_DEFECTS -> 2 mechanical fixes; behavioral BEHAVIOR_VERIFIED (34/34); 311/311 accumulated",
+      "deferred": [
+        "real chess.com end-to-end -> 7.x/owner device",
+        "retry policy/timeout -> 2.5",
+        "restore/lifecycle/status/retention -> 2.6-2.9"
+      ]
     },
     "2.5": {
       "commit": null,
