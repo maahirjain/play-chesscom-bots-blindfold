@@ -560,11 +560,13 @@ describe('AC2 — manifest permission change', () => {
   const manifestRaw = fs.readFileSync(path.join(REPO, 'manifest.json'), 'utf8');
   const manifest = JSON.parse(manifestRaw);
 
-  it('permissions is exactly ["offscreen", "tabCapture"]', () => {
+  it('permissions is exactly ["offscreen", "tabCapture", "storage"]', () => {
     // Honest cumulative evolution (4.3): PLAN.md §4.3 legitimately adds
     // the "tabCapture" permission for programmatic game-tab capture (see
-    // 4.3.contract.md §2). Nothing else.
-    assert.deepStrictEqual(manifest.permissions, ['offscreen', 'tabCapture']);
+    // 4.3.contract.md §2). Honest cumulative evolution (5.3): PLAN.md
+    // §5.3 legitimately adds "storage" for the selection_memory.js
+    // chrome.storage.local adapter (remembered defaults). Nothing else.
+    assert.deepStrictEqual(manifest.permissions, ['offscreen', 'tabCapture', 'storage']);
   });
 
   it('the 4.3 manifest delta vs HEAD is exactly the contract-pinned change', () => {
@@ -592,6 +594,13 @@ describe('AC2 — manifest permission change', () => {
     // session_fields.js (the baseline/training/evaluation selection
     // fields) to the content_scripts js list per its contract. Same
     // rule: js-list additions only.
+    //
+    // Honest cumulative evolution (5.3): 5.3 legitimately adds
+    // selection_memory.js to the js list per its contract AND appends
+    // "storage" to permissions per its contract (the
+    // chrome.storage.local adapter for remembered defaults). The
+    // permitted delta is therefore the js-list additions plus the
+    // single "storage" permission — nothing else.
     const diff = execSync('git diff HEAD -- manifest.json', { cwd: REPO }).toString();
     if (diff.trim() === '') {
       return;
@@ -607,12 +616,26 @@ describe('AC2 — manifest permission change', () => {
     assert.deepEqual(removed, [], 'manifest js list: no removals permitted');
     assert.ok(added.every((f) =>
       f === 'sync_flash.js' || f === 'session_identity.js' ||
-      f === 'session_controls.js' || f === 'session_fields.js'),
+      f === 'session_controls.js' || f === 'session_fields.js' ||
+      // Honest cumulative evolution: 5.3 adds selection_memory.js (the
+      // chrome.storage.local-backed remembered-defaults module) per its
+      // contract.
+      f === 'selection_memory.js'),
       'uncommitted manifest.json js-list delta must be exactly the ' +
-      '4.11/5.1/5.2 additions, got: ' + JSON.stringify(added));
+      '4.11/5.1/5.2/5.3 additions, got: ' + JSON.stringify(added));
     headManifest.content_scripts[0].js = workJs;
+    // 5.3's "storage" permission is the only permitted permissions
+    // delta (see the js-list + storage rule above).
+    const headPerms = headManifest.permissions || [];
+    const workPerms = workManifest.permissions || [];
+    const addedPerms = workPerms.filter((p) => headPerms.indexOf(p) === -1);
+    const removedPerms = headPerms.filter((p) => workPerms.indexOf(p) === -1);
+    assert.deepEqual(addedPerms, ['storage'],
+      'manifest permissions delta must be exactly the 5.3 "storage" addition');
+    assert.deepEqual(removedPerms, [], 'no permission removals permitted');
+    headManifest.permissions = workPerms;
     assert.deepEqual(workManifest, headManifest,
-      'manifest.json differs beyond the 4.11/5.1/5.2 js-list additions');
+      'manifest.json differs beyond the 4.11/5.1/5.2/5.3 js-list + storage additions');
   });
 });
 
@@ -952,6 +975,35 @@ describe('AC6 — diff discipline', () => {
       // lands after the pins were evolved (2.x/3.x/4.x/5.1 precedent).
       '.autodev/evidence/5.2.review.md',
       '.autodev/evidence/5.2.behavior.md',
+      // Honest cumulative evolution: 5.3 (remember previous selections
+      // without silently changing a game's recorded conditions)
+      // legitimately adds selection_memory.js (createSelectionMemory +
+      // validateRememberedSelection, chrome.storage.local-backed
+      // remembered defaults, no record-write path), adds the optional
+      // onSessionStarted hook to session_controls.js (fired once at the
+      // phase → 'active' point, guarded in try/catch), wires the memory
+      // construction + restore + onSessionStarted pass-through into
+      // content.js, adds the "storage" permission and selection_memory.js
+      // to manifest.json, records the ## 5.3 decisions, and adds its test
+      // + evidence; its files join the allowlists. (session_controls.js,
+      // content.js, manifest.json and .autodev/DECISIONS.md are already
+      // allowlisted from 5.1/5.2.)
+      'selection_memory.js',
+      'tests/selection_memory.test.js',
+      // 5.3 also evolves the exact-permissions pins in these suites
+      // (they carry no git-status allowlist of their own, so they join
+      // here).
+      'tests/db.test.js',
+      'tests/manifest_sw.test.js',
+      // 5.3 also evolves the working-tree diff pins in these suites.
+      'tests/clock_link.test.js',
+      'tests/timecode.test.js',
+      '.autodev/evidence/5.3.contract.md',
+      '.autodev/evidence/5.3.build.md',
+      // Honest cumulative evolution: 5.3's review/behavior evidence
+      // lands after the pins are evolved (2.x/3.x/4.x/5.1/5.2 precedent).
+      '.autodev/evidence/5.3.review.md',
+      '.autodev/evidence/5.3.behavior.md',
     ]);
     for (const f of changed) {
       assert.ok(allowed.has(f), `unexpected modified file: ${f}`);

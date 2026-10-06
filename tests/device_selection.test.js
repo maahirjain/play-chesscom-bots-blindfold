@@ -1010,6 +1010,35 @@ describe('AC8 — diff discipline', () => {
       // lands after the pins were evolved (2.x/3.x/4.x/5.1 precedent).
       '.autodev/evidence/5.2.review.md',
       '.autodev/evidence/5.2.behavior.md',
+      // Honest cumulative evolution: 5.3 (remember previous selections
+      // without silently changing a game's recorded conditions)
+      // legitimately adds selection_memory.js (createSelectionMemory +
+      // validateRememberedSelection, chrome.storage.local-backed
+      // remembered defaults, no record-write path), adds the optional
+      // onSessionStarted hook to session_controls.js (fired once at the
+      // phase → 'active' point, guarded in try/catch), wires the memory
+      // construction + restore + onSessionStarted pass-through into
+      // content.js, adds the "storage" permission and selection_memory.js
+      // to manifest.json, records the ## 5.3 decisions, and adds its test
+      // + evidence; its files join the allowlists. (session_controls.js,
+      // content.js, manifest.json and .autodev/DECISIONS.md are already
+      // allowlisted from 5.1/5.2.)
+      'selection_memory.js',
+      'tests/selection_memory.test.js',
+      // 5.3 also evolves the exact-permissions pins in these suites
+      // (they carry no git-status allowlist of their own, so they join
+      // here).
+      'tests/db.test.js',
+      'tests/manifest_sw.test.js',
+      // 5.3 also evolves the working-tree diff pins in these suites.
+      'tests/clock_link.test.js',
+      'tests/timecode.test.js',
+      '.autodev/evidence/5.3.contract.md',
+      '.autodev/evidence/5.3.build.md',
+      // Honest cumulative evolution: 5.3's review/behavior evidence
+      // lands after the pins are evolved (2.x/3.x/4.x/5.1/5.2 precedent).
+      '.autodev/evidence/5.3.review.md',
+      '.autodev/evidence/5.3.behavior.md',
     ]);
     for (const f of changed) {
       assert.ok(allowed.has(f), `unexpected modified file: ${f}`);
@@ -1041,10 +1070,13 @@ describe('AC8 — diff discipline', () => {
   it('manifest.json delta is exactly the 4.3 contract change (4.2 made none)', () => {
     // Honest cumulative evolution: 4.2's contract required NO manifest
     // change; 4.3's contract REQUIRES "tabCapture" + host_permissions
-    // ["https://www.chess.com/*"]. The durable assertion pins the delta
-    // to exactly 4.3's change — 4.2's contribution remains zero.
+    // ["https://www.chess.com/*"]. Honest cumulative evolution: 5.3
+    // legitimately appends "storage" per its contract (the
+    // selection_memory.js chrome.storage.local adapter for remembered
+    // defaults). The durable assertion pins the delta to exactly the
+    // 4.3 + 5.3 changes — 4.2's contribution remains zero.
     const manifest = JSON.parse(fs.readFileSync(path.join(REPO, 'manifest.json'), 'utf8'));
-    assert.deepStrictEqual(manifest.permissions, ['offscreen', 'tabCapture']);
+    assert.deepStrictEqual(manifest.permissions, ['offscreen', 'tabCapture', 'storage']);
     assert.deepStrictEqual(manifest.host_permissions, ['https://www.chess.com/*']);
     const diff = execSync('git diff HEAD -- manifest.json', { cwd: REPO }).toString();
     assert.ok(!/content_security_policy/.test(diff), 'no CSP change');

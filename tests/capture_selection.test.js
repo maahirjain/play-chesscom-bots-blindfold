@@ -889,6 +889,35 @@ describe('AC8 — diff discipline', () => {
       // lands after the pins were evolved (2.x/3.x/4.x/5.1 precedent).
       '.autodev/evidence/5.2.review.md',
       '.autodev/evidence/5.2.behavior.md',
+      // Honest cumulative evolution: 5.3 (remember previous selections
+      // without silently changing a game's recorded conditions)
+      // legitimately adds selection_memory.js (createSelectionMemory +
+      // validateRememberedSelection, chrome.storage.local-backed
+      // remembered defaults, no record-write path), adds the optional
+      // onSessionStarted hook to session_controls.js (fired once at the
+      // phase → 'active' point, guarded in try/catch), wires the memory
+      // construction + restore + onSessionStarted pass-through into
+      // content.js, adds the "storage" permission and selection_memory.js
+      // to manifest.json, records the ## 5.3 decisions, and adds its test
+      // + evidence; its files join the allowlists. (session_controls.js,
+      // content.js, manifest.json and .autodev/DECISIONS.md are already
+      // allowlisted from 5.1/5.2.)
+      'selection_memory.js',
+      'tests/selection_memory.test.js',
+      // 5.3 also evolves the exact-permissions pins in these suites
+      // (they carry no git-status allowlist of their own, so they join
+      // here).
+      'tests/db.test.js',
+      'tests/manifest_sw.test.js',
+      // 5.3 also evolves the working-tree diff pins in these suites.
+      'tests/clock_link.test.js',
+      'tests/timecode.test.js',
+      '.autodev/evidence/5.3.contract.md',
+      '.autodev/evidence/5.3.build.md',
+      // Honest cumulative evolution: 5.3's review/behavior evidence
+      // lands after the pins are evolved (2.x/3.x/4.x/5.1/5.2 precedent).
+      '.autodev/evidence/5.3.review.md',
+      '.autodev/evidence/5.3.behavior.md',
     ]);
     for (const f of changed) {
       assert.ok(allowed.has(f), `unexpected modified file: ${f}`);

@@ -755,6 +755,35 @@ describe('AC7 — diff discipline', () => {
       '.autodev/evidence/5.2.build.md',
       '.autodev/evidence/5.2.review.md',
       '.autodev/evidence/5.2.behavior.md',
+      // Honest cumulative evolution: 5.3 (remember previous selections
+      // without silently changing a game's recorded conditions)
+      // legitimately adds selection_memory.js (createSelectionMemory +
+      // validateRememberedSelection, chrome.storage.local-backed
+      // remembered defaults, no record-write path), adds the optional
+      // onSessionStarted hook to session_controls.js (fired once at the
+      // phase → 'active' point, guarded in try/catch), wires the memory
+      // construction + restore + onSessionStarted pass-through into
+      // content.js, adds the "storage" permission and selection_memory.js
+      // to manifest.json, records the ## 5.3 decisions, and adds its test
+      // + evidence; its files join the allowlists. (session_controls.js,
+      // content.js, manifest.json and .autodev/DECISIONS.md are already
+      // allowlisted from 5.1/5.2.)
+      'selection_memory.js',
+      'tests/selection_memory.test.js',
+      // 5.3 also evolves the exact-permissions pins in these suites
+      // (they carry no git-status allowlist of their own, so they join
+      // here).
+      'tests/db.test.js',
+      'tests/manifest_sw.test.js',
+      // 5.3 also evolves the working-tree diff pins in these suites.
+      'tests/clock_link.test.js',
+      'tests/timecode.test.js',
+      '.autodev/evidence/5.3.contract.md',
+      '.autodev/evidence/5.3.build.md',
+      // Honest cumulative evolution: 5.3's review/behavior evidence
+      // lands after the pins are evolved (2.x/3.x/4.x/5.1/5.2 precedent).
+      '.autodev/evidence/5.3.review.md',
+      '.autodev/evidence/5.3.behavior.md',
       '.autodev/DECISIONS.md',
       // Cumulative pin evolutions by the 5.2 build (honest cumulative
       // evolution — earlier suites' allowlists admit 5.2's files).
@@ -803,21 +832,28 @@ describe('AC7 — diff discipline', () => {
     const added = diff.split('\n').filter((l) => l.startsWith('+') && !l.startsWith('+++'));
     assert.ok(added.length >= 1);
     for (const l of added) {
-      assert.ok(l.includes('session_fields.js'),
-        'manifest addition must be the session_fields.js line: ' + l);
+      // Honest cumulative evolution: 5.3 adds the selection_memory.js
+      // content_scripts line AND the "storage" permission per its
+      // contract (the chrome.storage.local adapter).
+      assert.ok(l.includes('session_fields.js') || l.includes('selection_memory.js') ||
+                l.includes('"storage"'),
+        'manifest addition must be a 5.2/5.3 line: ' + l);
     }
   });
 
   it('content.js diff is only the 5.2 install wiring', () => {
     const diff = execSync('git diff HEAD -- content.js', { cwd: REPO }).toString();
     if (!diff.trim()) return; // committed
-    // The only new BlindfoldSession.* calls are the two installs.
+    // The 5.1/5.2 installs are committed (in HEAD), so the uncommitted
+    // diff's only new BlindfoldSession.* call is 5.3's
+    // createSelectionMemory (honest cumulative evolution: 5.3 wires the
+    // remembered-defaults memory into content.js per its contract —
+    // construction + restore + the onSessionStarted pass-through).
     const calls = new Set();
     const re = /^\+.*BlindfoldSession\.([A-Za-z0-9_]+)/gm;
     let m;
     while ((m = re.exec(diff)) !== null) calls.add(m[1]);
-    assert.deepEqual([...calls].sort(),
-      ['installSessionControls', 'installSessionFields']);
+    assert.deepEqual([...calls].sort(), ['createSelectionMemory']);
     // No new top-level function declarations, no gameplay identifiers.
     assert.ok(!/^\+function /m.test(diff), 'no new functions in content.js');
     assert.ok(!/move_input|piece_set|chess\.move/i.test(

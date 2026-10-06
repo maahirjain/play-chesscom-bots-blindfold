@@ -668,6 +668,56 @@ describe('AC8 — changed-files discipline', () => {
       // after the pins were evolved (2.x/3.x/4.x precedent).
       '.autodev/evidence/5.1.review.md',
       '.autodev/evidence/5.1.behavior.md',
+      // Honest cumulative evolution: 5.3 (remember previous selections
+      // without silently changing a game's recorded conditions)
+      // legitimately adds selection_memory.js (new/untracked — invisible
+      // to git diff), adds the optional onSessionStarted hook to
+      // session_controls.js (fired once at the phase → 'active' point,
+      // guarded), wires the memory construction + restore + hook
+      // pass-through into content.js, appends the "storage" permission
+      // and selection_memory.js to manifest.json, evolves the
+      // exact-permissions pins (tests/db.test.js,
+      // tests/manifest_sw.test.js), the manifest/js-list pins
+      // (tests/sender.test.js, tests/lifecycle.test.js,
+      // tests/session_store.test.js, tests/recording_host.test.js,
+      // tests/sync_marker.test.js), the load-surface scan
+      // (tests/retention.test.js), records the ## 5.3 decisions, and
+      // adds its test + evidence; its tracked files join the
+      // allowlists. (5.3's new files are untracked and never appear in
+      // git diff HEAD --name-only.)
+      'session_controls.js',
+      'content.js',
+      'manifest.json',
+      '.autodev/DECISIONS.md',
+      'tests/db.test.js',
+      'tests/manifest_sw.test.js',
+      // 5.3 also evolves the working-tree diff pins in these suites.
+      'tests/clock_link.test.js',
+      'tests/timecode.test.js',
+      'tests/sender.test.js',
+      'tests/lifecycle.test.js',
+      'tests/session_store.test.js',
+      'tests/recording_host.test.js',
+      'tests/sync_marker.test.js',
+      'tests/retention.test.js',
+      'tests/device_selection.test.js',
+      'tests/writer.test.js',
+      'tests/session_fields.test.js',
+      'tests/session_controls.test.js',
+      'tests/attempt_tracker.test.js',
+      'tests/audio_policy.test.js',
+      'tests/capture_selection.test.js',
+      'tests/chunk_writer.test.js',
+      'tests/finalizer.test.js',
+      'tests/format_support.test.js',
+      'tests/game_lifecycle.test.js',
+      'tests/history_tracker.test.js',
+      'tests/speech.test.js',
+      'tests/status_indicator.test.js',
+      'tests/stream_starter.test.js',
+      'tests/stream_status.test.js',
+      'tests/track_monitor.test.js',
+      'tests/visibility.test.js',
     ]);
     const out = execSync('git diff HEAD --name-only', { cwd: REPO })
       .toString().trim();

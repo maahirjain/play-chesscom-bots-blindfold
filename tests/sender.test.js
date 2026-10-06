@@ -426,6 +426,12 @@ describe('AC7 — diff discipline (static)', () => {
       // contract, right after session_controls.js (the Start sequence
       // consumes the fields handle).
       'session_fields.js',
+      // Honest cumulative evolution: 5.3 adds selection_memory.js (the
+      // chrome.storage.local-backed remembered-defaults module;
+      // content.js constructs it and calls restore()) to the
+      // content_scripts list per its contract, right after
+      // session_fields.js.
+      'selection_memory.js',
       // Honest cumulative evolution: 4.11 appends sync_flash.js
       // (the visible sync-marker content script) per its contract;
       // content.js itself stays byte-identical apart from 5.1's install.
@@ -441,6 +447,9 @@ describe('AC7 — diff discipline (static)', () => {
     // "tabCapture" and adds host_permissions per its contract. The
     // cumulative invariant: the manifest differs from HEAD only in the js
     // list, the permissions, and host_permissions.
+    // Honest cumulative evolution: 5.3 legitimately appends "storage" to
+    // permissions per its contract (the selection_memory.js
+    // chrome.storage.local adapter).
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
     const headManifest = JSON.parse(
       execSync('git show HEAD:manifest.json', { cwd: ROOT }).toString()
@@ -449,7 +458,7 @@ describe('AC7 — diff discipline (static)', () => {
     headManifest.permissions = manifest.permissions;
     headManifest.host_permissions = manifest.host_permissions;
     assert.deepEqual(manifest, headManifest);
-    assert.deepStrictEqual(manifest.permissions, ['offscreen', 'tabCapture']);
+    assert.deepStrictEqual(manifest.permissions, ['offscreen', 'tabCapture', 'storage']);
     assert.deepStrictEqual(manifest.host_permissions, ['https://www.chess.com/*']);
   });
 
@@ -1213,6 +1222,32 @@ describe('2.5 retry policy', () => {
       // lands after the pins were evolved (2.x/3.x/4.x/5.1 precedent).
       '.autodev/evidence/5.2.review.md',
       '.autodev/evidence/5.2.behavior.md',
+      // Honest cumulative evolution: 5.3 (remember previous selections
+      // without silently changing a game's recorded conditions)
+      // legitimately adds selection_memory.js (createSelectionMemory +
+      // validateRememberedSelection, chrome.storage.local-backed
+      // remembered defaults, no record-write path), adds the optional
+      // onSessionStarted hook to session_controls.js (fired once at the
+      // phase → 'active' point, guarded in try/catch), wires the memory
+      // construction + restore + onSessionStarted pass-through into
+      // content.js, adds the "storage" permission and selection_memory.js
+      // to manifest.json, records the ## 5.3 decisions, and adds its test
+      // + evidence; its files join the allowlists. (session_controls.js,
+      // content.js, manifest.json and .autodev/DECISIONS.md are already
+      // allowlisted from 5.1/5.2.)
+      'selection_memory.js',
+      'tests/selection_memory.test.js',
+      // 5.3 also evolves the exact-permissions pins in these suites
+      // (they carry no git-status allowlist of their own, so they join
+      // here).
+      'tests/db.test.js',
+      'tests/manifest_sw.test.js',
+      '.autodev/evidence/5.3.contract.md',
+      '.autodev/evidence/5.3.build.md',
+      // Honest cumulative evolution: 5.3's review/behavior evidence
+      // lands after the pins are evolved (2.x/3.x/4.x/5.1/5.2 precedent).
+      '.autodev/evidence/5.3.review.md',
+      '.autodev/evidence/5.3.behavior.md',
     ]);
     for (const f of changed) {
       assert.ok(allowed.has(f), `unexpected modified file: ${f}`);

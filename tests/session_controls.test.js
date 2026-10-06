@@ -1127,6 +1127,35 @@ describe('AC7 — diff discipline and scope', () => {
       // lands after the pins were evolved (2.x/3.x/4.x/5.1 precedent).
       '.autodev/evidence/5.2.review.md',
       '.autodev/evidence/5.2.behavior.md',
+      // Honest cumulative evolution: 5.3 (remember previous selections
+      // without silently changing a game's recorded conditions)
+      // legitimately adds selection_memory.js (createSelectionMemory +
+      // validateRememberedSelection, chrome.storage.local-backed
+      // remembered defaults, no record-write path), adds the optional
+      // onSessionStarted hook to session_controls.js (fired once at the
+      // phase → 'active' point, guarded in try/catch), wires the memory
+      // construction + restore + onSessionStarted pass-through into
+      // content.js, adds the "storage" permission and selection_memory.js
+      // to manifest.json, records the ## 5.3 decisions, and adds its test
+      // + evidence; its files join the allowlists. (session_controls.js,
+      // content.js, manifest.json and .autodev/DECISIONS.md are already
+      // allowlisted from 5.1/5.2.)
+      'selection_memory.js',
+      'tests/selection_memory.test.js',
+      // 5.3 also evolves the exact-permissions pins in these suites
+      // (they carry no git-status allowlist of their own, so they join
+      // here).
+      'tests/db.test.js',
+      'tests/manifest_sw.test.js',
+      // 5.3 also evolves the working-tree diff pins in these suites.
+      'tests/clock_link.test.js',
+      'tests/timecode.test.js',
+      '.autodev/evidence/5.3.contract.md',
+      '.autodev/evidence/5.3.build.md',
+      // Honest cumulative evolution: 5.3's review/behavior evidence
+      // lands after the pins are evolved (2.x/3.x/4.x/5.1/5.2 precedent).
+      '.autodev/evidence/5.3.review.md',
+      '.autodev/evidence/5.3.behavior.md',
     ]);
     const stray = changed.filter((f) => !allowed.has(f));
     assert.deepEqual(stray, [],
@@ -1159,6 +1188,20 @@ describe('AC7 — diff discipline and scope', () => {
       l.includes('sessionFields') || l.includes('sessionControlsHandle') ||
       l.includes('extensionVersion') || l.includes('getManifest') ||
       l.includes('beforeElement') || l.includes('fieldsErr');
+    // Honest cumulative evolution: 5.3 wires the remembered-defaults
+    // memory into content.js per its contract — the selectionMemory
+    // declaration, the inline chrome.storage.local adapter, the memory
+    // construction + restore() call, and the onSessionStarted
+    // pass-through into the 5.1 install options.
+    const kw53 = (l) =>
+      l.includes('5.3') || l.includes('selectionMemory') ||
+      l.includes('SelectionMemory') || l.includes('onSessionStarted') ||
+      l.includes('selectionStorageLocal') || l.includes('storageLocal') ||
+      l.includes('chrome.storage') || l.includes('.capture(') ||
+      l.includes('.restore(') || l.includes('memErr') ||
+      l.includes('sessionFieldsHandle') || l.includes('storage: {') ||
+      l.includes('get: function') || l.includes('set: function') ||
+      l.includes('remove: function');
     const structural = (l) =>
       l.trim() === '' || l.trim().startsWith('//') ||
       l.trim().startsWith('}') || l.trim().startsWith('try {') ||
@@ -1168,7 +1211,7 @@ describe('AC7 — diff discipline and scope', () => {
       .filter((l) => l.startsWith('+') && !l.startsWith('+++'))
       .map((l) => l.slice(1));
     assert.ok(added.length > 0, 'expected the install wiring as added lines');
-    assert.ok(added.every((l) => kw51(l) || kw52(l) || structural(l)),
+    assert.ok(added.every((l) => kw51(l) || kw52(l) || kw53(l) || structural(l)),
       'unexpected added lines in content.js:\n' + added.join('\n'));
     const removed = diff.split('\n')
       .filter((l) => l.startsWith('-') && !l.startsWith('---'))

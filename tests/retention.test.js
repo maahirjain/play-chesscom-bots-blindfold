@@ -101,6 +101,10 @@ describe('AC1 — no auto-deletion exists', () => {
     // manifest content_scripts js list per its contract (the
     // baseline/training/evaluation selection fields) — it joins the
     // load surface and the scan.
+    // Honest cumulative evolution: 5.3 adds selection_memory.js to the
+    // manifest content_scripts js list per its contract (the
+    // chrome.storage.local-backed remembered-defaults module) — it
+    // joins the load surface and the scan.
     assert.deepEqual(PRODUCT_FILES, [
       'capture_broker.js',
       'chess_utils.js',
@@ -110,6 +114,7 @@ describe('AC1 — no auto-deletion exists', () => {
       'game_records.js',
       'lifecycle.js',
       'recording_host.js',
+      'selection_memory.js',
       'sender.js',
       'session_conditions.js',
       'session_controls.js',
@@ -647,6 +652,35 @@ describe('AC4 — diff discipline', () => {
       // lands after the pins were evolved (2.x/3.x/4.x/5.1 precedent).
       '.autodev/evidence/5.2.review.md',
       '.autodev/evidence/5.2.behavior.md',
+      // Honest cumulative evolution: 5.3 (remember previous selections
+      // without silently changing a game's recorded conditions)
+      // legitimately adds selection_memory.js (createSelectionMemory +
+      // validateRememberedSelection, chrome.storage.local-backed
+      // remembered defaults, no record-write path), adds the optional
+      // onSessionStarted hook to session_controls.js (fired once at the
+      // phase → 'active' point, guarded in try/catch), wires the memory
+      // construction + restore + onSessionStarted pass-through into
+      // content.js, adds the "storage" permission and selection_memory.js
+      // to manifest.json, records the ## 5.3 decisions, and adds its test
+      // + evidence; its files join the allowlists. (session_controls.js,
+      // content.js, manifest.json and .autodev/DECISIONS.md are already
+      // allowlisted from 5.1/5.2.)
+      'selection_memory.js',
+      'tests/selection_memory.test.js',
+      // 5.3 also evolves the exact-permissions pins in these suites
+      // (they carry no git-status allowlist of their own, so they join
+      // here).
+      'tests/db.test.js',
+      'tests/manifest_sw.test.js',
+      // 5.3 also evolves the working-tree diff pins in these suites.
+      'tests/clock_link.test.js',
+      'tests/timecode.test.js',
+      '.autodev/evidence/5.3.contract.md',
+      '.autodev/evidence/5.3.build.md',
+      // Honest cumulative evolution: 5.3's review/behavior evidence
+      // lands after the pins are evolved (2.x/3.x/4.x/5.1/5.2 precedent).
+      '.autodev/evidence/5.3.review.md',
+      '.autodev/evidence/5.3.behavior.md',
     ]);
     for (const f of changed) {
       assert.ok(allowed.has(f), `unexpected modified file: ${f}`);
@@ -692,6 +726,10 @@ describe('AC4 — diff discipline', () => {
     // file (same skip rule); 5.2's modifications to content.js,
     // manifest.json, recording_host.js, recorder.js, overlay.css, and
     // session_controls.js are already covered by the set.
+    // Honest cumulative evolution (5.3): selection_memory.js is a new
+    // file (same skip rule — no HEAD content to differ from); 5.3's
+    // modifications to content.js, manifest.json, and
+    // session_controls.js are already covered by the set.
     const changedByTasks = new Set(['chess_utils.js', 'content.js',
                                     'manifest.json', 'sounds.js', 'sw.js',
                                     'recording_host.js', 'recorder.js',
@@ -701,6 +739,7 @@ describe('AC4 — diff discipline', () => {
                                     'sync_flash.js',
                                     'session_controls.js',
                                     'session_fields.js',
+                                    'selection_memory.js',
                                     'overlay.css',
                                     'capture_broker.js']);
     for (const f of PRODUCT_FILES) {

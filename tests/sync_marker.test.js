@@ -252,13 +252,17 @@ describe('AC2 — visible marker correct', () => {
     // Honest cumulative evolution (5.2): 5.2 legitimately adds
     // session_fields.js to the js list and restructures the install
     // block (the fields handle is installed after the controls) —
-    // the delta check admits the 5.2 addition too. (5.1's additions
-    // are committed, so the only uncommitted delta is session_fields.js.)
+    // the delta check admits the 5.2 addition too. (5.1's and 5.2's
+    // additions are committed, so the uncommitted delta is the 5.3
+    // addition.)
     const head = execSync('git show HEAD:manifest.json', { cwd: REPO }).toString();
     const headJs = JSON.parse(head).content_scripts[0].js;
     const added = js.filter((f) => headJs.indexOf(f) === -1);
-    assert.deepEqual(added, ['session_fields.js'],
-      'uncommitted js-list delta must be exactly the 5.2 addition');
+    // Honest cumulative evolution: 5.3 adds selection_memory.js (the
+    // chrome.storage.local-backed remembered-defaults module) to the
+    // content_scripts list per its contract.
+    assert.deepEqual(added, ['selection_memory.js'],
+      'uncommitted js-list delta must be exactly the 5.3 addition');
     const diff = execSync('git diff HEAD -- content.js', { cwd: REPO }).toString();
     if (diff.trim() !== '') {
       // While 5.2 is uncommitted, the content.js delta is the install
@@ -945,6 +949,35 @@ describe('AC8 — changed-files discipline', () => {
       // lands after the pins were evolved (2.x/3.x/4.x/5.1 precedent).
       '.autodev/evidence/5.2.review.md',
       '.autodev/evidence/5.2.behavior.md',
+      // Honest cumulative evolution: 5.3 (remember previous selections
+      // without silently changing a game's recorded conditions)
+      // legitimately adds selection_memory.js (createSelectionMemory +
+      // validateRememberedSelection, chrome.storage.local-backed
+      // remembered defaults, no record-write path), adds the optional
+      // onSessionStarted hook to session_controls.js (fired once at the
+      // phase → 'active' point, guarded in try/catch), wires the memory
+      // construction + restore + onSessionStarted pass-through into
+      // content.js, adds the "storage" permission and selection_memory.js
+      // to manifest.json, records the ## 5.3 decisions, and adds its test
+      // + evidence; its files join the allowlists. (session_controls.js,
+      // content.js, manifest.json and .autodev/DECISIONS.md are already
+      // allowlisted from 5.1/5.2.)
+      'selection_memory.js',
+      'tests/selection_memory.test.js',
+      // 5.3 also evolves the exact-permissions pins in these suites
+      // (they carry no git-status allowlist of their own, so they join
+      // here).
+      'tests/db.test.js',
+      'tests/manifest_sw.test.js',
+      // 5.3 also evolves the working-tree diff pins in these suites.
+      'tests/clock_link.test.js',
+      'tests/timecode.test.js',
+      '.autodev/evidence/5.3.contract.md',
+      '.autodev/evidence/5.3.build.md',
+      // Honest cumulative evolution: 5.3's review/behavior evidence
+      // lands after the pins are evolved (2.x/3.x/4.x/5.1/5.2 precedent).
+      '.autodev/evidence/5.3.review.md',
+      '.autodev/evidence/5.3.behavior.md',
     ]);
     const stray = changed.filter((f) => !allowed.has(f));
     assert.deepEqual(stray, [],

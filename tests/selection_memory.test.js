@@ -1,0 +1,877 @@
+// tests/selection_memory.test.js
+//
+// Task 5.3 (PLAN.md §5.3): remember previous selections without silently
+// changing a game's recorded conditions.
+//
+// V1 — static + unit. Covers 5.3.contract.md AC1–AC7 (AC8–AC10 are the
+// V2 harness; AC11 is V3-deferred to §7).
+
+const { describe, it, beforeEach, afterEach } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const { execSync } = require('node:child_process');
+
+const REPO = path.join(__dirname, '..');
+
+function freshModule(name) {
+  delete require.cache[require.resolve('../' + name)];
+  return require('../' + name);
+}
+
+// Merged namespace: the modules share the BlindfoldSession global;
+// session_fields.js / session_controls.js resolve collaborators at call
+// time via globalThis.
+function mergedNS() {
+  const ns = {};
+  for (const f of ['session_identity.js', 'session_conditions.js',
+                   'lifecycle.js', 'session_fields.js',
+                   'session_controls.js', 'selection_memory.js']) {
+    Object.assign(ns, freshModule(f));
+  }
+  return ns;
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Fake promise-shaped storage adapter (chrome.storage.local-shaped:
+// get(key) → {[key]: value}).
+function makeFakeStorage(initial) {
+  const data = Object.assign({}, initial || {});
+  const calls = [];
+  return {
+    data,
+    calls,
+    get(key) {
+      calls.push({ op: 'get', key });
+      const kv = {};
+      if (Object.prototype.hasOwnProperty.call(data, key)) kv[key] = data[key];
+      return Promise.resolve(kv);
+    },
+    set(kv) {
+      calls.push({ op: 'set', kv: Object.assign({}, kv) });
+      Object.assign(data, kv);
+      return Promise.resolve();
+    },
+    remove(key) {
+      calls.push({ op: 'remove', key });
+      delete data[key];
+      return Promise.resolve();
+    },
+  };
+}
+
+function throwingStorage() {
+  const fail = () => Promise.reject(new Error('storage dead'));
+  return {
+    get: fail,
+    set: fail,
+    remove: fail,
+  };
+}
+
+// Comment-stripped source (the sync_marker.test.js precedent): full-line
+// // comments, /* */ blocks, and trailing // comments removed.
+function codeOnly(file) {
+  return fs.readFileSync(path.join(REPO, file), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split('\n')
+    .filter((l) => !l.trim().startsWith('//'))
+    .map((l) => {
+      const idx = l.indexOf('//');
+      return idx === -1 ? l : l.slice(0, idx);
+    })
+    .join('\n');
+}
+
+// ------------------------------------------------------------------
+// AC1 — module shape and convention.
+// ------------------------------------------------------------------
+describe('AC1 — module shape', () => {
+  it('follows the module convention and exports the two functions', () => {
+    const BS = mergedNS();
+    assert.equal(typeof BS.createSelectionMemory, 'function');
+    assert.equal(typeof BS.validateRememberedSelection, 'function');
+  });
+
+  it('STORAGE_KEY is the versioned prefs key', () => {
+    const BS = mergedNS();
+    const mem = BS.createSelectionMemory({ storage: makeFakeStorage() });
+    assert.equal(mem.STORAGE_KEY, 'blindfold.sessionSelection.v1');
+  });
+
+  it('construction requires a promise-shaped storage adapter', () => {
+    const BS = mergedNS();
+    assert.throws(() => BS.createSelectionMemory(), TypeError);
+    assert.throws(() => BS.createSelectionMemory(null), TypeError);
+    assert.throws(() => BS.createSelectionMemory({}), TypeError);
+    assert.throws(() => BS.createSelectionMemory({
+      storage: { get() {}, set() {} }, // missing remove
+    }), TypeError);
+    assert.throws(() => BS.createSelectionMemory({
+      storage: { get: 1, set() {}, remove() {} },
+    }), TypeError);
+    // Well-formed adapter constructs.
+    const mem = BS.createSelectionMemory({ storage: makeFakeStorage() });
+    assert.equal(typeof mem.restore, 'function');
+    assert.equal(typeof mem.capture, 'function');
+    // Frozen handle (repo convention for returned records).
+    assert.ok(Object.isFrozen(mem));
+  });
+
+  it('header documents the 5.3 task and the no-silent-change invariant', () => {
+    const src = fs.readFileSync(path.join(REPO, 'selection_memory.js'), 'utf8');
+    assert.ok(src.includes('Task 5.3'), 'names the PLAN task');
+    assert.ok(src.includes('no-silent-change'), 'documents the invariant');
+    assert.ok(src.includes('chrome.storage.local'), 'documents the store');
+  });
+});
+
+// ------------------------------------------------------------------
+// AC2 — validateRememberedSelection.
+// ------------------------------------------------------------------
+describe('AC2 — validateRememberedSelection', () => {
+  const v = () => mergedNS().validateRememberedSelection;
+
+  it('accepts all three categories plus null', () => {
+    const validate = v();
+    for (const cat of ['baseline', 'training', 'evaluation', null]) {
+      const clean = validate({
+        sessionCategory: cat,
+        trainingApproach: 'shadowing aloud',
+        verbalScaffolding: '',
+      });
+      assert.deepEqual(clean, {
+        sessionCategory: cat,
+        trainingApproach: 'shadowing aloud',
+        verbalScaffolding: '',
+      }, 'category ' + String(cat));
+    }
+  });
+
+  it('rejects unknown category strings — the whole value is corrupt', () => {
+    const validate = v();
+    for (const bad of ['Baseline', 'TRAINING', 'practice', '', 42, {}, []]) {
+      assert.equal(validate({
+        sessionCategory: bad,
+        trainingApproach: 'x',
+        verbalScaffolding: 'y',
+      }), null, 'category ' + JSON.stringify(bad));
+    }
+  });
+
+  it('coerces text fields via String(); null/undefined become empty string', () => {
+    const validate = v();
+    const clean = validate({
+      sessionCategory: 'training',
+      trainingApproach: null,
+      verbalScaffolding: undefined,
+    });
+    assert.deepEqual(clean, {
+      sessionCategory: 'training',
+      trainingApproach: '',
+      verbalScaffolding: '',
+    });
+    const coerced = validate({
+      sessionCategory: 'baseline',
+      trainingApproach: 42,
+      verbalScaffolding: true,
+    });
+    assert.equal(coerced.trainingApproach, '42');
+    assert.equal(coerced.verbalScaffolding, 'true');
+    // Never the literal string "null" from String(null).
+    assert.ok(!coerced.trainingApproach.includes('null'));
+  });
+
+  it('ignores unknown extra keys (lenient-on-input)', () => {
+    const validate = v();
+    const clean = validate({
+      sessionCategory: 'evaluation',
+      trainingApproach: 'a',
+      verbalScaffolding: 'b',
+      deviceId: 'x',
+      extra: { nested: true },
+    });
+    assert.deepEqual(Object.keys(clean).sort(), [
+      'sessionCategory', 'trainingApproach', 'verbalScaffolding',
+    ]);
+  });
+
+  it('returns null — never throws — for missing/corrupt/wrong-shaped input', () => {
+    const validate = v();
+    for (const bad of [undefined, null, 42, 'x', true, [], [1, 2]]) {
+      assert.equal(validate(bad), null, 'input ' + JSON.stringify(bad));
+    }
+    // A frozen empty object is a valid shape with all defaults.
+    const clean = validate({});
+    assert.deepEqual(clean, {
+      sessionCategory: null,
+      trainingApproach: '',
+      verbalScaffolding: '',
+    });
+  });
+
+  it('is a total function: never throws on adversarial input', () => {
+    const validate = v();
+    const evil = [undefined, null, 0, NaN, Infinity, '', 'x', [], {},
+      { sessionCategory: { toString() { throw new Error('evil'); } } }];
+    for (const e of evil) {
+      let threw = false;
+      try { validate(e); } catch (err) { threw = true; }
+      assert.equal(threw, false, 'threw on ' + String(e));
+    }
+  });
+});
+
+// ------------------------------------------------------------------
+// AC3 — restore.
+// ------------------------------------------------------------------
+describe('AC3 — restore', () => {
+  const KEY = 'blindfold.sessionSelection.v1';
+
+  function fieldsHandleStub() {
+    const calls = [];
+    return {
+      calls,
+      disabled: false,
+      setSelection(sel) {
+        calls.push(sel);
+        // Faithful 5.2 write-once stub: no-op while disabled.
+        if (this.disabled) return;
+      },
+      getSelection() { return null; },
+      setEnabled(on) { this.disabled = !on; },
+      getDetectedConditions() { return {}; },
+    };
+  }
+
+  it('valid stored value → setSelection called with the clean selection', async () => {
+    const BS = mergedNS();
+    const stored = {
+      sessionCategory: 'training',
+      trainingApproach: 'shadowing aloud',
+      verbalScaffolding: '',
+      extraIgnored: 1,
+    };
+    const mem = BS.createSelectionMemory({
+      storage: makeFakeStorage({ [KEY]: stored }),
+    });
+    const handle = fieldsHandleStub();
+    const ok = await mem.restore(handle);
+    assert.equal(ok, true);
+    assert.equal(handle.calls.length, 1);
+    assert.deepEqual(handle.calls[0], {
+      sessionCategory: 'training',
+      trainingApproach: 'shadowing aloud',
+      verbalScaffolding: '',
+    });
+  });
+
+  it('missing key → no call, no throw', async () => {
+    const BS = mergedNS();
+    const mem = BS.createSelectionMemory({ storage: makeFakeStorage() });
+    const handle = fieldsHandleStub();
+    const ok = await mem.restore(handle);
+    assert.equal(ok, false);
+    assert.equal(handle.calls.length, 0);
+  });
+
+  it('corrupt stored value → no call, no throw', async () => {
+    const BS = mergedNS();
+    const mem = BS.createSelectionMemory({
+      storage: makeFakeStorage({ [KEY]: { sessionCategory: 'bogus' } }),
+    });
+    const handle = fieldsHandleStub();
+    const ok = await mem.restore(handle);
+    assert.equal(ok, false);
+    assert.equal(handle.calls.length, 0);
+  });
+
+  it('throwing storage → no call, no throw', async () => {
+    const BS = mergedNS();
+    const mem = BS.createSelectionMemory({ storage: throwingStorage() });
+    const handle = fieldsHandleStub();
+    const ok = await mem.restore(handle);
+    assert.equal(ok, false);
+    assert.equal(handle.calls.length, 0);
+  });
+
+  it('does not second-guess the write-once rule: setSelection is called even when disabled', async () => {
+    // The 5.2 handle itself no-ops while disabled; the memory module
+    // must not add its own enabled-check (contract §5.1 — both orders
+    // of the boot-adoption race are safe).
+    const BS = mergedNS();
+    const mem = BS.createSelectionMemory({
+      storage: makeFakeStorage({ [KEY]: { sessionCategory: 'baseline' } }),
+    });
+    const handle = fieldsHandleStub();
+    handle.disabled = true;
+    const ok = await mem.restore(handle);
+    assert.equal(ok, true);
+    assert.equal(handle.calls.length, 1, 'restore calls setSelection unconditionally');
+  });
+
+  it('malformed handle → no throw', async () => {
+    const BS = mergedNS();
+    const mem = BS.createSelectionMemory({
+      storage: makeFakeStorage({ [KEY]: { sessionCategory: 'baseline' } }),
+    });
+    for (const bad of [null, undefined, {}, { setSelection: 42 }]) {
+      const ok = await mem.restore(bad);
+      assert.equal(ok, false);
+    }
+  });
+});
+
+// ------------------------------------------------------------------
+// AC4 — capture.
+// ------------------------------------------------------------------
+describe('AC4 — capture', () => {
+  const KEY = 'blindfold.sessionSelection.v1';
+
+  it('writes exactly {[STORAGE_KEY]: clean selection} via the adapter', async () => {
+    const BS = mergedNS();
+    const storage = makeFakeStorage();
+    const mem = BS.createSelectionMemory({ storage });
+    const ok = await mem.capture({
+      sessionCategory: 'evaluation',
+      trainingApproach: '  think aloud  ',
+      verbalScaffolding: '',
+    });
+    assert.equal(ok, true);
+    assert.deepEqual(storage.calls, [
+      { op: 'set', kv: { [KEY]: {
+        sessionCategory: 'evaluation',
+        trainingApproach: '  think aloud  ',
+        verbalScaffolding: '',
+      } } },
+    ]);
+    // Capture stores the raw form value — trimming is the 1.2
+    // normalizer's job at record time, not the preference's.
+    assert.equal(storage.data[KEY].trainingApproach, '  think aloud  ');
+  });
+
+  it('throwing adapter → swallowed, promise resolves', async () => {
+    const BS = mergedNS();
+    const mem = BS.createSelectionMemory({ storage: throwingStorage() });
+    const ok = await mem.capture({
+      sessionCategory: 'training',
+      trainingApproach: 'x',
+      verbalScaffolding: 'y',
+    });
+    assert.equal(ok, false, 'resolves false, never rejects');
+  });
+
+  it('invalid selection → no write', async () => {
+    const BS = mergedNS();
+    const storage = makeFakeStorage();
+    const mem = BS.createSelectionMemory({ storage });
+    for (const bad of [null, undefined, 42, 'x',
+                       { sessionCategory: 'bogus' }]) {
+      const ok = await mem.capture(bad);
+      assert.equal(ok, false);
+    }
+    assert.deepEqual(storage.calls, [], 'nothing written');
+  });
+});
+
+// ------------------------------------------------------------------
+// AC5 — no-silent-change architectural pins.
+// ------------------------------------------------------------------
+describe('AC5 — no-silent-change architectural pins', () => {
+  it('selection_memory.js has no record-write path (comment-stripped scan)', () => {
+    const code = codeOnly('selection_memory.js');
+    for (const token of ['session-save', 'saveSessionMetadata',
+                         'saveConditions', 'indexedDB',
+                         'chrome.runtime.sendMessage']) {
+      assert.ok(!code.includes(token),
+        'forbidden token present: ' + token);
+    }
+    // The module never touches the chrome global directly — the
+    // adapter is built in content.js and injected.
+    assert.ok(!/\bchrome\b/.test(code),
+      'the chrome global must not appear in selection_memory.js');
+  });
+
+  it('selection_memory.js is listed in content_scripts only', () => {
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(REPO, 'manifest.json'), 'utf8'));
+    assert.ok(manifest.content_scripts[0].js.includes('selection_memory.js'),
+      'listed in content_scripts');
+    // Never in the SW importScripts.
+    const sw = fs.readFileSync(path.join(REPO, 'sw.js'), 'utf8');
+    assert.ok(!sw.includes('selection_memory.js'),
+      'must not be imported into the service worker');
+    // Never in the offscreen document.
+    const recorderHtml = fs.readFileSync(
+      path.join(REPO, 'recorder.html'), 'utf8');
+    assert.ok(!recorderHtml.includes('selection_memory.js'),
+      'must not be loaded in the offscreen document');
+  });
+
+  it('no new channel messages and no new event types in 5.3', () => {
+    const diff = execSync('git diff HEAD --stat', { cwd: REPO }).toString();
+    // session_controls.js / content.js / manifest.json / selection_memory.js
+    // only — recorder.js and recording_host.js are untouched by 5.3.
+    const touched = diff.split('\n').filter((l) => l.includes('|'))
+      .map((l) => l.split('|')[0].trim());
+    for (const f of ['recorder.js', 'recording_host.js', 'sw.js']) {
+      assert.ok(!touched.includes(f), f + ' must be untouched by 5.3');
+    }
+    const controls = codeOnly('session_controls.js');
+    const ensureCount = (controls.match(/onSessionStarted/g) || []).length;
+    assert.ok(ensureCount > 0, 'onSessionStarted wiring present');
+  });
+});
+
+// ------------------------------------------------------------------
+// AC6 — wiring and diff discipline.
+// ------------------------------------------------------------------
+describe('AC6 — wiring and diff discipline', () => {
+  it('changed files are exactly the 5.3 contract §5 list (post-commit-vacuous)', () => {
+    // Post-commit the tree is clean and the pin is vacuous (2.8/4.4/
+    // 4.14/5.1/5.2 precedent); pre-commit it proves exactly 5.3's files
+    // changed.
+    const status = execSync('git status --porcelain', { cwd: REPO }).toString();
+    if (!status.trim()) return;
+    const changed = status.split('\n').filter((l) => l.trim())
+      .map((l) => l.slice(3).trim());
+    const allowed = new Set([
+      // 5.3 (remember previous selections): the new selection_memory.js
+      // + its test, the optional onSessionStarted hook in
+      // session_controls.js (option + single guarded call site), the
+      // memory construction + restore + hook pass-through in
+      // content.js, the "storage" permission + selection_memory.js
+      // content_scripts line in manifest.json, the ## 5.3 decisions,
+      // and its evidence.
+      'selection_memory.js',
+      'tests/selection_memory.test.js',
+      // 5.3 also evolves the exact-permissions pins in these suites
+      // (they carry no git-status allowlist of their own, so they join
+      // here).
+      'tests/db.test.js',
+      'tests/manifest_sw.test.js',
+      // 5.3 also evolves the working-tree diff pins in these suites.
+      'tests/clock_link.test.js',
+      'tests/timecode.test.js',
+      'session_controls.js',
+      'content.js',
+      'manifest.json',
+      '.autodev/evidence/5.3.contract.md',
+      '.autodev/evidence/5.3.build.md',
+      // Honest cumulative evolution: 5.3's review/behavior evidence
+      // lands after the pins are evolved (2.x/3.x/4.x/5.1/5.2 precedent).
+      '.autodev/evidence/5.3.review.md',
+      '.autodev/evidence/5.3.behavior.md',
+      '.autodev/DECISIONS.md',
+      // Cumulative pin evolutions by the 5.3 build (honest cumulative
+      // evolution — earlier suites' allowlists admit 5.3's files).
+      'tests/attempt_tracker.test.js',
+      'tests/audio_policy.test.js',
+      'tests/capture_selection.test.js',
+      'tests/chunk_writer.test.js',
+      'tests/clock_link.test.js',
+      'tests/device_selection.test.js',
+      'tests/finalizer.test.js',
+      'tests/format_support.test.js',
+      'tests/game_lifecycle.test.js',
+      'tests/history_tracker.test.js',
+      'tests/lifecycle.test.js',
+      'tests/recording_host.test.js',
+      'tests/retention.test.js',
+      'tests/sender.test.js',
+      'tests/session_controls.test.js',
+      'tests/session_fields.test.js',
+      'tests/session_store.test.js',
+      'tests/speech.test.js',
+      'tests/status_indicator.test.js',
+      'tests/stream_starter.test.js',
+      'tests/stream_status.test.js',
+      'tests/sync_marker.test.js',
+      'tests/timecode.test.js',
+      'tests/track_monitor.test.js',
+      'tests/visibility.test.js',
+      'tests/writer.test.js',
+    ]);
+    const stray = changed.filter((f) => !allowed.has(f));
+    assert.deepEqual(stray, [],
+      'working tree has non-5.3 changes:\n' + stray.join('\n'));
+  });
+
+  it('session_controls.js diff is only the onSessionStarted option + call site', () => {
+    const diff = execSync('git diff HEAD -- session_controls.js', { cwd: REPO }).toString();
+    if (!diff.trim()) return; // committed
+    const structural = (l) =>
+      l.trim() === '' || l.trim().startsWith('//') ||
+      l.trim().startsWith('}') || l.trim().startsWith('try {') ||
+      l.trim().startsWith('} catch') || l.trim().startsWith('{') ||
+      l.trim() === '});';
+    const added = diff.split('\n')
+      .filter((l) => l.startsWith('+') && !l.startsWith('+++'))
+      .map((l) => l.slice(1));
+    assert.ok(added.length > 0, 'expected the onSessionStarted wiring as added lines');
+    // The 'extensionVersion: extensionVersion,' added line is the
+    // comma-only change where the new onSessionStarted field joins the
+    // returned options object (the comma-less version is the only
+    // removed line, asserted below).
+    const bad = added.filter((l) =>
+      !(structural(l) || l.includes('onSessionStarted') || l.includes('5.3') ||
+        l.trim() === 'extensionVersion: extensionVersion,'));
+    assert.deepEqual(bad, [], 'unexpected added lines in session_controls.js:\n' + bad.join('\n'));
+    const removed = diff.split('\n')
+      .filter((l) => l.startsWith('-') && !l.startsWith('---'))
+      .map((l) => l.slice(1).trim())
+      .filter((l) => l !== '');
+    assert.deepEqual(removed, ['extensionVersion: extensionVersion'],
+      'the only removed line is the comma-less version it replaces');
+    // No new offscreen MSG_* constants (5.3 adds no channel messages).
+    const addedMsgConsts = added.filter((l) => /var MSG_[A-Z_]+ =/.test(l));
+    assert.deepEqual(addedMsgConsts, [], 'no new MSG_* constants');
+  });
+
+  it('content.js diff is only the 5.3 memory wiring', () => {
+    const diff = execSync('git diff HEAD -- content.js', { cwd: REPO }).toString();
+    if (!diff.trim()) return; // committed
+    const structural = (l) =>
+      l.trim() === '' || l.trim().startsWith('//') ||
+      l.trim().startsWith('}') || l.trim().startsWith('try {') ||
+      l.trim().startsWith('} catch') || l.trim().startsWith('{') ||
+      l.trim() === '});' || l.trim() === '},' || l.trim() === '});' ||
+      l.trim().startsWith('(');
+    const kw53 = (l) =>
+      l.includes('5.3') || l.includes('selectionMemory') ||
+      l.includes('SelectionMemory') || l.includes('onSessionStarted') ||
+      l.includes('selectionStorageLocal') || l.includes('storageLocal') ||
+      l.includes('chrome.storage') || l.includes('.capture(') ||
+      l.includes('.restore(') || l.includes('memErr') ||
+      l.includes('sessionFieldsHandle') ||
+      l.includes('storage: {') || l.includes('get: function') ||
+      l.includes('set: function') || l.includes('remove: function');
+    const added = diff.split('\n')
+      .filter((l) => l.startsWith('+') && !l.startsWith('+++'))
+      .map((l) => l.slice(1));
+    assert.ok(added.length > 0, 'expected the memory wiring as added lines');
+    const bad = added.filter((l) => !(structural(l) || kw53(l)));
+    assert.deepEqual(bad, [], 'unexpected added lines in content.js:\n' + bad.join('\n'));
+    const removed = diff.split('\n')
+      .filter((l) => l.startsWith('-') && !l.startsWith('---'))
+      .map((l) => l.slice(1).trim())
+      .filter((l) => l !== '');
+    assert.deepEqual(removed, [], '5.3 must not remove content.js lines');
+    // No new top-level function declarations.
+    assert.ok(!/^\+function /m.test(diff), 'no new functions in content.js');
+  });
+
+  it('manifest.json diff is only the storage permission + selection_memory.js line', () => {
+    const diff = execSync('git diff HEAD -- manifest.json', { cwd: REPO }).toString();
+    if (!diff.trim()) return; // committed
+    const added = diff.split('\n')
+      .filter((l) => l.startsWith('+') && !l.startsWith('+++'))
+      .map((l) => l.slice(1));
+    assert.ok(added.length >= 1);
+    for (const l of added) {
+      assert.ok(l.includes('selection_memory.js') || l.includes('"storage"'),
+        'manifest addition must be the selection_memory.js line or the storage permission: ' + l);
+    }
+    const removed = diff.split('\n')
+      .filter((l) => l.startsWith('-') && !l.startsWith('---'))
+      .map((l) => l.slice(1));
+    for (const l of removed) {
+      assert.ok(l.includes('"offscreen", "tabCapture"') || l.includes('session_fields.js'),
+        'manifest removal must be the superseded permission/js line: ' + l);
+    }
+  });
+
+  it('PLAN.md is unmodified', () => {
+    const diff = execSync('git diff main -- PLAN.md', { cwd: REPO }).toString();
+    assert.equal(diff.trim(), '', 'PLAN.md must never be modified');
+  });
+
+  it('recorder.js, recording_host.js, sw.js are untouched by 5.3 (no new messages)', () => {
+    for (const f of ['recorder.js', 'recording_host.js', 'sw.js']) {
+      const diff = execSync(`git diff HEAD -- ${f}`, { cwd: REPO }).toString();
+      assert.equal(diff.trim(), '', f + ' must be untouched by 5.3');
+    }
+  });
+});
+
+// ------------------------------------------------------------------
+// AC7 — onSessionStarted contract (full Start harness).
+// ------------------------------------------------------------------
+
+// Minimal DOM stub: only what installSessionFields and
+// installSessionControls touch.
+function makeEl(tag) {
+  const el = {
+    tagName: String(tag).toUpperCase(),
+    className: '',
+    textContent: '',
+    value: '',
+    disabled: false,
+    type: '',
+    parentNode: null,
+    children: [],
+    _attrs: {},
+    _clickHandlers: [],
+    setAttribute(k, v) { this._attrs[String(k)] = String(v); },
+    getAttribute(k) {
+      const key = String(k);
+      return Object.prototype.hasOwnProperty.call(this._attrs, key) ?
+        this._attrs[key] : null;
+    },
+    removeAttribute(k) { delete this._attrs[String(k)]; },
+    appendChild(child) {
+      child.parentNode = this;
+      this.children.push(child);
+      return child;
+    },
+    insertBefore(child, ref) {
+      child.parentNode = this;
+      const i = ref ? this.children.indexOf(ref) : -1;
+      if (i === -1) this.children.push(child);
+      else this.children.splice(i, 0, child);
+      return child;
+    },
+    addEventListener(type, fn) {
+      if (type === 'click') this._clickHandlers.push(fn);
+    },
+    click() { for (const fn of this._clickHandlers.slice()) fn(); },
+  };
+  return el;
+}
+
+function makeFakeDocument() {
+  const body = makeEl('body');
+  return {
+    body,
+    createElement: (tag) => makeEl(tag),
+    getElementById: () => null, // fallback path for both installs
+  };
+}
+
+describe('AC7 — onSessionStarted', () => {
+  let savedNS;
+  let savedDocument;
+
+  function publish(BS) {
+    savedNS = globalThis.BlindfoldSession;
+    // lifecycle.js's real emitPageStart needs a sender with emit();
+    // the harness sender below provides it.
+    globalThis.BlindfoldSession = BS;
+  }
+
+  beforeEach(() => {
+    savedDocument = globalThis.document;
+    globalThis.document = makeFakeDocument();
+  });
+
+  afterEach(() => {
+    if (savedDocument === undefined) delete globalThis.document;
+    else globalThis.document = savedDocument;
+    if (savedNS === undefined) delete globalThis.BlindfoldSession;
+    else globalThis.BlindfoldSession = savedNS;
+    savedNS = undefined;
+  });
+
+  // Installs fields + controls with a transport that answers the full
+  // 5.2 Start sequence. Returns the harness.
+  function startHarness({ onSessionStarted, ensureOk = true } = {}) {
+    const BS = mergedNS();
+    publish(BS);
+    const transport = {
+      calls: [],
+      fn(env) {
+        this.calls.push(env);
+        if (env.msg === 'recorder-ensure') {
+          return ensureOk ?
+            Promise.resolve({ ok: true, bootId: 'b', created: true }) :
+            Promise.resolve({ ok: false, reason: 'denied' });
+        }
+        if (env.msg === 'session-save') return Promise.resolve({ ok: true });
+        if (env.msg === 'recorder-set-session') return Promise.resolve({ ok: true });
+        if (env.msg === 'recorder-start-streams') {
+          return Promise.resolve({
+            ok: true,
+            streams: {
+              microphone: { ok: true },
+              screen: { ok: true },
+              webcam: { ok: true },
+            },
+          });
+        }
+        if (env.msg === 'recorder-get-status') {
+          return Promise.resolve({ ok: false, error: 'no-session' });
+        }
+        return Promise.resolve({ ok: false, error: 'unexpected' });
+      },
+    };
+    const sender = { emit() { return { eventId: 'e1' }; } };
+    const glr = {
+      recordStopTermination() { return 'event-id'; },
+      resetEnded() {},
+      getLastObservedEnd() { return null; },
+    };
+    const fields = BS.installSessionFields({ extensionVersion: '1.0.0' });
+    const startedCalls = [];
+    const opts = {
+      sender,
+      sendRecorderMessage: (env) => transport.fn(env),
+      gameLifecycleRecorder: glr,
+      intervalMs: 60000, // no real polling in the harness
+      sessionFields: fields,
+      extensionVersion: '1.0.0',
+      onSessionStarted: onSessionStarted === undefined ?
+        ((sel) => { startedCalls.push(sel); }) : onSessionStarted,
+    };
+    const h = BS.installSessionControls(opts);
+    return { BS, fields, h, transport, startedCalls };
+  }
+
+  it('fires exactly once per successful Start with the recorded selection', async () => {
+    const { fields, h, startedCalls } = startHarness();
+    try {
+      fields.select.value = 'training';
+      fields.approachInput.value = 'shadowing aloud';
+      fields.scaffoldingInput.value = '';
+      h.button.click(); // Start
+      await sleep(60);
+      assert.equal(h.getPhase(), 'active');
+      assert.equal(startedCalls.length, 1, 'fired exactly once');
+      assert.deepEqual(startedCalls[0], {
+        sessionCategory: 'training',
+        trainingApproach: 'shadowing aloud',
+        verbalScaffolding: '',
+      }, 'called with the recorded selection');
+    } finally { h.stop(); }
+  });
+
+  it('is not fired on the no-category abort path', async () => {
+    const { fields, h, startedCalls, transport } = startHarness();
+    try {
+      // Category left at the placeholder → honest abort.
+      fields.approachInput.value = 'x';
+      h.button.click();
+      await sleep(60);
+      assert.equal(h.getPhase(), 'idle');
+      assert.equal(startedCalls.length, 0, 'not fired on abort');
+      assert.ok(!transport.calls.some((c) => c.msg === 'session-save'),
+        'no session-save on the abort path');
+    } finally { h.stop(); }
+  });
+
+  it('is not fired on the ensure-failure abort path', async () => {
+    const { fields, h, startedCalls } = startHarness({ ensureOk: false });
+    try {
+      fields.select.value = 'baseline';
+      h.button.click();
+      await sleep(60);
+      assert.equal(h.getPhase(), 'idle');
+      assert.equal(startedCalls.length, 0, 'not fired on abort');
+    } finally { h.stop(); }
+  });
+
+  it('a throwing callback does not break Start (fault injection)', async () => {
+    const { fields, h, startedCalls } = startHarness({
+      onSessionStarted: () => { throw new Error('boom'); },
+    });
+    try {
+      fields.select.value = 'evaluation';
+      h.button.click();
+      await sleep(60);
+      assert.equal(h.getPhase(), 'active', 'Start still reaches active');
+      assert.equal(startedCalls.length, 0);
+    } finally { h.stop(); }
+  });
+
+  it('onSessionStarted is optional (5.1/5.2-era callers stay compatible)', () => {
+    const BS = mergedNS();
+    publish(BS);
+    const sender = { emit() { return { eventId: 'e1' }; } };
+    const glr = {
+      recordStopTermination() { return 'event-id'; },
+      resetEnded() {},
+      getLastObservedEnd() { return null; },
+    };
+    const h = BS.installSessionControls({
+      sender,
+      sendRecorderMessage: () => Promise.resolve({ ok: false }),
+      gameLifecycleRecorder: glr,
+      intervalMs: 60000,
+    });
+    try {
+      assert.equal(h.getPhase(), 'idle');
+    } finally { h.stop(); }
+    assert.throws(() => BS.installSessionControls({
+      sender,
+      sendRecorderMessage: () => Promise.resolve({ ok: false }),
+      gameLifecycleRecorder: glr,
+      intervalMs: 60000,
+      onSessionStarted: 'yes',
+    }), TypeError, 'non-function onSessionStarted is a TypeError');
+  });
+
+  it('end-to-end: capture at Start → restore pre-fills the next install', async () => {
+    // The 5.3 loop across two installs sharing one storage backend.
+    // The namespace is published manually here (startHarness also
+    // publishes; the manual publish keeps one owner for restore).
+    const BS = mergedNS();
+    const prevNS = globalThis.BlindfoldSession;
+    globalThis.BlindfoldSession = BS;
+    const storage = makeFakeStorage();
+    const mem1 = BS.createSelectionMemory({ storage });
+    const fields = BS.installSessionFields({ extensionVersion: '1.0.0' });
+    const transport = {
+      fn(env) {
+        if (env.msg === 'recorder-ensure') {
+          return Promise.resolve({ ok: true, bootId: 'b', created: true });
+        }
+        if (env.msg === 'session-save') return Promise.resolve({ ok: true });
+        if (env.msg === 'recorder-set-session') {
+          return Promise.resolve({ ok: true });
+        }
+        if (env.msg === 'recorder-start-streams') {
+          return Promise.resolve({
+            ok: true,
+            streams: {
+              microphone: { ok: true },
+              screen: { ok: true },
+              webcam: { ok: true },
+            },
+          });
+        }
+        return Promise.resolve({ ok: false, error: 'no-session' });
+      },
+    };
+    const h = BS.installSessionControls({
+      sender: { emit() { return { eventId: 'e1' }; } },
+      sendRecorderMessage: (env) => transport.fn(env),
+      gameLifecycleRecorder: {
+        recordStopTermination() { return 'event-id'; },
+        resetEnded() {},
+        getLastObservedEnd() { return null; },
+      },
+      intervalMs: 60000,
+      sessionFields: fields,
+      extensionVersion: '1.0.0',
+      onSessionStarted: (sel) => { mem1.capture(sel); },
+    });
+    try {
+      fields.select.value = 'training';
+      fields.approachInput.value = 'shadowing aloud';
+      h.button.click();
+      await sleep(60);
+      assert.equal(h.getPhase(), 'active');
+    } finally { h.stop(); }
+    // Second install (new page load): restore pre-fills the form.
+    const mem2 = BS.createSelectionMemory({ storage });
+    const fields2 = BS.installSessionFields({ extensionVersion: '1.0.0' });
+    const ok = await mem2.restore(fields2);
+    globalThis.BlindfoldSession = prevNS;
+    assert.equal(ok, true);
+    assert.deepEqual(fields2.getSelection(), {
+      sessionCategory: 'training',
+      trainingApproach: 'shadowing aloud',
+      verbalScaffolding: '',
+    });
+  });
+});

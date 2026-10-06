@@ -15,6 +15,12 @@
 // is active (write-once). Without the handle the 5.1 path is
 // preserved byte-for-byte in behavior.
 //
+// Task 5.3 (PLAN.md §5.3) adds one optional install option,
+// onSessionStarted: fired exactly once per successful Start at the
+// phase → 'active' point with the recorded selection (content.js
+// wires it to the selection-memory capture). Guarded in try/catch;
+// never fired on abort paths or for boot-adopted sessions.
+//
 // Two exports, mirroring the 2.8 classifier/renderer split:
 //
 //   classifyStreamStatus(status, startResult) — pure. Input: one
@@ -290,6 +296,19 @@ var BlindfoldSession = BlindfoldSession || {};
     if (typeof onStopComplete !== 'function') {
       throw new TypeError('options.onStopComplete must be a function');
     }
+    // 5.3: remembered-defaults capture hook. Optional (5.1/5.2-era
+    // callers stay compatible): fired exactly once per successful
+    // Start, at the phase → 'active' point, with the selection object
+    // that was recorded (getSelection() at Start, the same values
+    // session-save persisted). Not fired on any abort path, and not
+    // fired for boot-adopted sessions (adoption is not a Start).
+    // Guarded in try/catch at the call site — a throwing callback
+    // must never break Start (3.2 SF-1).
+    var onSessionStarted = options.onSessionStarted === undefined ?
+      defaultNoop : options.onSessionStarted;
+    if (typeof onSessionStarted !== 'function') {
+      throw new TypeError('options.onSessionStarted must be a function');
+    }
     // 5.2: the session-fields handle (or a thunk returning it — the
     // content script installs the fields after the controls, so the
     // handle does not exist at controls-install time). Null/undefined
@@ -328,7 +347,8 @@ var BlindfoldSession = BlindfoldSession || {};
       intervalMs: intervalMs,
       onStopComplete: onStopComplete,
       getSessionFields: getSessionFields,
-      extensionVersion: extensionVersion
+      extensionVersion: extensionVersion,
+      onSessionStarted: onSessionStarted
     };
   }
 
@@ -798,6 +818,18 @@ var BlindfoldSession = BlindfoldSession || {};
           }
           phase = CONTROL_PHASE_ACTIVE;
           setButton('Stop', true, null, 'Stop recording session');
+          // 5.3: remembered-defaults capture — fired exactly once per
+          // successful Start, at the phase → 'active' point, with the
+          // selection object that was recorded (the same values
+          // session-save persisted). Guarded in try/catch so a
+          // throwing callback can never break Start (3.2 SF-1). Null
+          // in the 5.1 no-fields path — the 5.3 capture validates and
+          // no-ops. Not fired on any abort path, and not fired for
+          // boot-adopted sessions (adoption is not a Start: the
+          // adoption path below sets the phase directly).
+          try {
+            opts.onSessionStarted(selection);
+          } catch (e) { /* never break Start on the seam */ }
           // 5.2: write-once rule (PLAN 1.2.1 "once at session start"
           // + 5.3 "without silently changing a game's recorded
           // conditions") — the fields are disabled while the session

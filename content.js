@@ -310,6 +310,10 @@ BlindfoldSession.installStatusIndicator(BlindfoldSession.sender);
 // falls back to the 5.1 Start path (no category gating).
 var sessionFieldsHandle = null;
 var sessionControlsHandle = null;
+// Task 5.3 (PLAN.md §5.3): remembered-defaults memory. Declared here so
+// the onSessionStarted closure below can reference it; constructed
+// after the fields install (it needs the fields handle for restore).
+var selectionMemory = null;
 try {
   sessionControlsHandle = BlindfoldSession.installSessionControls({
     sender: BlindfoldSession.sender,
@@ -323,6 +327,15 @@ try {
     onStopComplete: function (stopResponse) {
       if (typeof BlindfoldSession.onSessionStopComplete === 'function') {
         BlindfoldSession.onSessionStopComplete(stopResponse);
+      }
+    },
+    // 5.3: remembered-defaults capture — fired once per successful
+    // Start with the recorded selection. capture() never throws and
+    // no-ops when the memory failed to construct (degraded: no
+    // remembered defaults), so this is fire-and-forget.
+    onSessionStarted: function (selection) {
+      if (selectionMemory !== null) {
+        selectionMemory.capture(selection);
       }
     },
     // 5.2: thunk — the fields install below has not run yet.
@@ -344,6 +357,35 @@ try {
       sessionControlsHandle.element : null
   });
 } catch (fieldsErr) { /* session UI must never break gameplay */ }
+
+// Task 5.3 (PLAN.md §5.3): remember previous selections. The adapter is
+// built inline here so selection_memory.js never touches the chrome
+// global directly (the AC5 architectural pin). If chrome.storage.local
+// is unavailable the build throws TypeError and this block degrades to
+// no remembered defaults — install continues (the 4.2 selector
+// precedent: a preference loss is degraded convenience, never broken
+// recording). restore() is fire-and-forget: it never throws into page
+// code, and the 5.2 write-once rule makes it safe regardless of
+// boot-adoption ordering — adopted truth always wins over remembered
+// values.
+try {
+  var selectionStorageLocal =
+    (typeof chrome !== 'undefined' && chrome.storage &&
+     chrome.storage.local) ? chrome.storage.local : null;
+  if (selectionStorageLocal === null) {
+    throw new TypeError('selection memory requires chrome.storage.local');
+  }
+  selectionMemory = BlindfoldSession.createSelectionMemory({
+    storage: {
+      get: function (key) { return selectionStorageLocal.get(key); },
+      set: function (kv) { return selectionStorageLocal.set(kv); },
+      remove: function (key) { return selectionStorageLocal.remove(key); }
+    }
+  });
+  if (sessionFieldsHandle !== null) {
+    selectionMemory.restore(sessionFieldsHandle);
+  }
+} catch (memErr) { /* degraded: no remembered defaults */ }
 
 document.addEventListener("keydown", (e) => {
     if (e.key == "j" || e.key == "J") {
