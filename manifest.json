@@ -5,6 +5,7 @@
     "background": {
         "service_worker": "sw.js"
     },
+    "permissions": ["offscreen"],
     "content_scripts": [
         {
             "matches": ["https://www.chess.com/play/computer*"],

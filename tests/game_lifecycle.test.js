@@ -509,6 +509,23 @@ describe('AC11 — diff discipline', () => {
     const status = execSync('git status --porcelain', { cwd: ROOT }).toString();
     const changed = status.split('\n').filter((l) => l.trim()).map((l) => l.slice(3).trim());
     const allowed = new Set([
+      // Honest cumulative evolution: 4.1 (dedicated recording context)
+      // legitimately adds recorder.html/recorder.js/recording_host.js,
+      // the "offscreen" manifest permission, and the sw.js supervisor
+      // wiring; its files join the allowlists.
+      'recorder.html',
+      'recorder.js',
+      'recording_host.js',
+      'manifest.json',
+      'sw.js',
+      'tests/recording_host.test.js',
+      'tests/manifest_sw.test.js',
+      '.autodev/evidence/4.1.contract.md',
+      '.autodev/evidence/4.1.build.md',
+      // Honest cumulative evolution: 4.1's review/behavior
+      // evidence lands after the pins were evolved (2.x/3.x precedent).
+      '.autodev/evidence/4.1.review.md',
+      '.autodev/evidence/4.1.behavior.md',
       'chess_utils.js',
       'content.js',
       'tests/game_lifecycle.test.js',

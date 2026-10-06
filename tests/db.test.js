@@ -181,21 +181,24 @@ describe('Static guards (AC2/AC4)', () => {
     assert.ok(!codeOnly.includes('importScripts'), 'db.js must not call importScripts');
   });
 
-  it('AC4: sw.js functional code is exactly the 2.7 wiring (cumulative)', () => {
+  it('AC4: sw.js functional code is exactly the 4.1 wiring (cumulative)', () => {
     // 2.2 pinned ["'use strict';", "importScripts('db.js');"]; 2.4
     // legitimately extended the worker per its contract (writer intake);
     // 2.6 legitimately extended it per its contract (session-state
     // storage primitives); 2.7 legitimately extends it per its contract
-    // (lifecycle detector). Cumulative invariant: exactly these three
-    // functional lines.
+    // (lifecycle detector); 4.1 legitimately extends it per its contract
+    // (recording-context supervisor + its two startup lines).
+    // Cumulative invariant: exactly these five functional lines.
     const codeLines = swSource
       .split('\n')
       .map((l) => l.replace(/\/\/.*$/, '').trim())
       .filter((l) => l.length > 0);
     assert.deepEqual(codeLines, [
       "'use strict';",
-      "importScripts('db.js', 'event_envelope.js', 'writer.js', 'session_identity.js', 'session_conditions.js', 'session_store.js', 'lifecycle.js');",
-      'BlindfoldSession.writerListener = BlindfoldSession.installWriterListener();'
+      "importScripts('db.js', 'event_envelope.js', 'writer.js', 'session_identity.js', 'session_conditions.js', 'session_store.js', 'lifecycle.js', 'recording_host.js');",
+      'BlindfoldSession.writerListener = BlindfoldSession.installWriterListener();',
+      'BlindfoldSession.recordingHost = BlindfoldSession.createRecordingHost(globalThis.chrome || {});',
+      'BlindfoldSession.recordingHost.start();'
     ]);
   });
 
@@ -209,14 +212,18 @@ describe('Static guards (AC2/AC4)', () => {
     }
   });
 
-  it('AC4: manifest.json differs from HEAD only in the content_scripts js list (2.3)', () => {
+  it('AC4: manifest.json differs from HEAD only in the js list and the 4.1 permissions (cumulative)', () => {
     // 2.2's contract required no manifest change (IndexedDB is
     // permissionless); 2.3 legitimately extended the content_scripts js list
-    // per its contract (exact list pinned in tests/sender.test.js). The
-    // cumulative invariant: nothing else in the manifest changed.
+    // per its contract (exact list pinned in tests/sender.test.js); 4.1
+    // legitimately adds "permissions": ["offscreen"] per its contract
+    // (exact value pinned in tests/recording_host.test.js). The cumulative
+    // invariant: nothing else in the manifest changed.
     const atHead = JSON.parse(execSync('git show HEAD:manifest.json', { cwd: ROOT }).toString());
     const onDisk = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8'));
     atHead.content_scripts[0].js = onDisk.content_scripts[0].js;
+    atHead.permissions = onDisk.permissions;
     assert.deepEqual(onDisk, atHead);
+    assert.deepStrictEqual(onDisk.permissions, ['offscreen']);
   });
 });

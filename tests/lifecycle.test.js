@@ -909,30 +909,41 @@ describe('AC15 — diff discipline', () => {
     ]);
   });
 
-  it('manifest is otherwise meaning-identical to HEAD (only the js list changed)', () => {
+  it('manifest is otherwise meaning-identical to HEAD (js list + 4.1 permissions only)', () => {
+    // Honest cumulative evolution: 4.1 legitimately adds
+    // "permissions": ["offscreen"] per its contract (pinned in
+    // tests/recording_host.test.js AC2).
     const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8'));
     const headManifest = JSON.parse(
       execSync('git show HEAD:manifest.json', { cwd: ROOT }).toString()
     );
     headManifest.content_scripts[0].js = manifest.content_scripts[0].js;
+    headManifest.permissions = manifest.permissions;
     assert.deepEqual(manifest, headManifest);
   });
 
-  it('sw.js: importScripts carries lifecycle.js + install call intact (2.7 committed)', () => {
-    // Post-commit durable form of the 2.7 diff pin: the working tree now
-    // equals HEAD, so assert the contracted content instead of the diff.
+  it('sw.js: importScripts carries lifecycle.js + recording_host.js + install calls intact (4.1 committed)', () => {
+    // Post-commit durable form of the 2.7 diff pin; 4.1 legitimately
+    // extends the importScripts line (recording-context supervisor) and
+    // adds the two recordingHost startup lines per its contract. The
+    // working tree now equals HEAD, so assert the contracted content
+    // instead of the diff.
     const sw = fs.readFileSync(path.join(ROOT, 'sw.js'), 'utf8');
     const calls = (sw.match(/importScripts\s*\(/g) || []).length;
     assert.strictEqual(calls, 1, 'exactly one importScripts call');
     assert.ok(sw.includes(
       "importScripts('db.js', 'event_envelope.js', 'writer.js', " +
-      "'session_identity.js', 'session_conditions.js', 'session_store.js', 'lifecycle.js');"
+      "'session_identity.js', 'session_conditions.js', 'session_store.js', 'lifecycle.js', 'recording_host.js');"
     ));
     assert.ok(!sw.includes('2.7: page/context start'),
       '2.7 must be removed from the absent list');
     assert.ok(sw.includes(
       'BlindfoldSession.writerListener = BlindfoldSession.installWriterListener();'
     ));
+    assert.ok(sw.includes(
+      'BlindfoldSession.recordingHost = BlindfoldSession.createRecordingHost(globalThis.chrome || {});'
+    ));
+    assert.ok(sw.includes('BlindfoldSession.recordingHost.start();'));
   });
 
   it('writer.js: the 2.7 §3.2 hook is present and type-agnostic (2.7 committed)', () => {
@@ -981,6 +992,23 @@ describe('AC15 — diff discipline', () => {
     const status = execSync('git status --porcelain', { cwd: ROOT }).toString();
     const changed = status.split('\n').filter((l) => l.trim()).map((l) => l.slice(3).trim());
     const allowed = new Set([
+      // Honest cumulative evolution: 4.1 (dedicated recording context)
+      // legitimately adds recorder.html/recorder.js/recording_host.js,
+      // the "offscreen" manifest permission, and the sw.js supervisor
+      // wiring; its files join the allowlists.
+      'recorder.html',
+      'recorder.js',
+      'recording_host.js',
+      'manifest.json',
+      'sw.js',
+      'tests/recording_host.test.js',
+      'tests/manifest_sw.test.js',
+      '.autodev/evidence/4.1.contract.md',
+      '.autodev/evidence/4.1.build.md',
+      // Honest cumulative evolution: 4.1's review/behavior
+      // evidence lands after the pins were evolved (2.x/3.x precedent).
+      '.autodev/evidence/4.1.review.md',
+      '.autodev/evidence/4.1.behavior.md',
       // 2.7's own files:
       'lifecycle.js',
       'tests/lifecycle.test.js',

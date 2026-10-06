@@ -428,3 +428,60 @@ Consequential engineering decisions with reasoning and evidence. Newest first.
 - **3.2 SF-1 precedent applied:** all 3.5 recorder calls from DOM
   listeners/wiring are failure-isolated; instrumentation never breaks
   the page.
+## 4.1 dedicated recording context (PLAN.md §4.1)
+
+- **Offscreen document, supervised by the SW.** The recording context is an
+  MV3 offscreen document (`recorder.html` + `recorder.js`), created and
+  supervised by `recording_host.js` (imported by `sw.js`). This is the
+  sanctioned Chrome pattern for `getUserMedia`/`getDisplayMedia` +
+  `MediaRecorder` in MV3: the SW is killable and lacks media APIs; content
+  scripts and popups are explicitly forbidden by PLAN 4.1 (they die on
+  refresh/focus loss); a persistent extension tab would be user-visible and
+  user-closable. The document is extension-owned and independent of every
+  content tab, so Chess.com page refreshes cannot touch it.
+- **Full reason set up front.** `createDocument` is called once with
+  `USER_MEDIA` (4.2 mic, 4.4 webcam) + `DISPLAY_MEDIA` (4.3 screen/tab) +
+  `AUDIO_PLAYBACK` (4.7 game/extension audio, 4.11 audible sync marker) and a
+  justification citing synchronized session recording. There is exactly one
+  offscreen document per extension and it hosts all of Section 4, so
+  declaring the full set up front is honest and avoids a later recreate to
+  widen reasons. 4.1 itself performs no capture (pin-tested absent).
+- **Recording platform APIs live ONLY in recorder.js.** Never in content
+  scripts, never in the SW. `recording_host.js` touches `chrome.offscreen` /
+  `chrome.runtime` only and is self-sufficient (it does not import
+  recorder.js; its envelope check is local, avoiding a cross-module
+  dependency in the SW).
+- **Chrome 116+ constraint (documented, not solved).** `chrome.offscreen`
+  requires Chrome 109+, but `hasDocument()` is Chrome 150+; the supervisor
+  therefore detects the document via `chrome.runtime.getContexts()` on
+  Chrome 116–149 (review SF-1). The repo declares no
+  `minimum_chrome_version`; `ensureRecordingContext()` degrades honestly
+  with `{ok:false, reason:'offscreen-unavailable'}` (plain data, never
+  throws) instead of changing the manifest floor.
+- **Chunk bytes never travel through SW messaging.** Media chunk bytes
+  (potentially hundreds of MB) are written by the offscreen document
+  directly to the extension-owned IndexedDB (2.2) — same extension origin,
+  shared storage partition. 4.8 defines the chunk schema; 4.1 only
+  establishes the path. Recording-*lifecycle* events reuse the existing
+  transactional writer intake (`{kind:'event', ...}` direct from the
+  offscreen document to writer.js) — no relay, preserving append-sequence
+  guarantees. 4.1 builds no new pipeline.
+- **Message channel namespacing.** `{kind:'recorder', msg, v:1}` can never
+  collide with the writer's `{kind:'event'}` on the shared
+  `chrome.runtime.onMessage` bus. Receivers are lenient-on-input (unknown
+  kinds/msgs ignored, no response) and reject unknown protocol versions
+  with `{ok:false}` — never throw. The `recorder-pong` carries a
+  `performance.now()` hook for 4.10/4.12 clock-anchor alignment.
+- **SW-startup wiring never throws.** `start()` installs the
+  recorder-channel listener and kicks a lazy `ensureRecordingContext()`;
+  failures are swallowed (retried on demand), so a broken recording context
+  can never break SW boot.
+- **Harness limitation (documented).** Forcing a true SW-process death via
+  CDP proved flaky in headless Chrome (`Target.closeTarget` kills the
+  worker but wake-up is unreliable; a DevTools-attached browser does not
+  apply the 30s idle timeout). V2 therefore proves re-discovery with a
+  fresh `createRecordingHost` (blank in-memory state — exactly what a
+  restarted SW has) against the real document: same bootId adopted, zero
+  duplicate `createDocument` calls. The restart path executes the identical
+  `start()` → `ensure()` code; a natural restart on the owner device (§7)
+  will exercise the true process boundary.

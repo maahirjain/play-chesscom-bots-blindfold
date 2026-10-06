@@ -35,15 +35,21 @@ describe('AC1 — manifest entry', () => {
   });
 
   it('no other top-level manifest keys were added', () => {
+    // Honest cumulative evolution: 4.1 legitimately adds the "permissions"
+    // key (exactly ["offscreen"]) per its contract. The cumulative
+    // invariant: no other top-level keys beyond the original six plus
+    // "permissions".
     assert.deepStrictEqual(
       Object.keys(manifest).sort(),
       ['background', 'content_scripts', 'manifest_version', 'name', 'version',
-       'web_accessible_resources'].sort()
+       'web_accessible_resources', 'permissions'].sort()
     );
   });
 
-  it('no permissions, host_permissions, content_security_policy; version unchanged', () => {
-    assert.ok(!('permissions' in manifest));
+  it('permissions is exactly ["offscreen"]; no host_permissions/CSP; version unchanged', () => {
+    // Honest cumulative evolution: 4.1 adds the "offscreen" permission for
+    // the dedicated recording context (PLAN.md §4.1). Nothing else.
+    assert.deepStrictEqual(manifest.permissions, ['offscreen']);
     assert.ok(!('host_permissions' in manifest));
     assert.ok(!('content_security_policy' in manifest));
     assert.strictEqual(manifest.version, '1.0.0');
@@ -80,26 +86,29 @@ describe('AC3 — sw.js functional code is exactly the db.js import', () => {
   const swRaw = fs.readFileSync(path.join(REPO, 'sw.js'), 'utf8');
   const codeOnly = stripComments(swRaw);
 
-  it('stripped of comments, functional code is the 2.7 wiring (cumulative)', () => {
+  it('stripped of comments, functional code is the 4.1 wiring (cumulative)', () => {
     // 2.1 pinned the comment-only stub; 2.2 added the db.js import; 2.4
     // legitimately added the writer intake per its contract; 2.6
     // legitimately added the session-state storage primitives per its
     // contract; 2.7 legitimately added the lifecycle detector per its
-    // contract. Cumulative invariant: exactly these three functional
-    // lines.
+    // contract; 4.1 legitimately adds the recording-context supervisor
+    // (recording_host.js) plus its two startup lines per its contract.
+    // Cumulative invariant: exactly these five functional lines.
     const lines = codeOnly.split('\n').map(l => l.trim()).filter(l => l.length > 0);
     assert.deepStrictEqual(lines, [
       "'use strict';",
-      "importScripts('db.js', 'event_envelope.js', 'writer.js', 'session_identity.js', 'session_conditions.js', 'session_store.js', 'lifecycle.js');",
-      'BlindfoldSession.writerListener = BlindfoldSession.installWriterListener();'
+      "importScripts('db.js', 'event_envelope.js', 'writer.js', 'session_identity.js', 'session_conditions.js', 'session_store.js', 'lifecycle.js', 'recording_host.js');",
+      'BlindfoldSession.writerListener = BlindfoldSession.installWriterListener();',
+      'BlindfoldSession.recordingHost = BlindfoldSession.createRecordingHost(globalThis.chrome || {});',
+      'BlindfoldSession.recordingHost.start();'
     ]);
   });
 
-  it('exactly one importScripts call, importing the 2.7 module set', () => {
+  it('exactly one importScripts call, importing the 4.1 module set', () => {
     const calls = codeOnly.match(/importScripts\s*\(/g) || [];
     assert.strictEqual(calls.length, 1, 'expected exactly one importScripts call');
-    assert.ok(codeOnly.includes("importScripts('db.js', 'event_envelope.js', 'writer.js', 'session_identity.js', 'session_conditions.js', 'session_store.js', 'lifecycle.js')"),
-      'must import the storage layer, the event contract, the writer, and the session-state modules');
+    assert.ok(codeOnly.includes("importScripts('db.js', 'event_envelope.js', 'writer.js', 'session_identity.js', 'session_conditions.js', 'session_store.js', 'lifecycle.js', 'recording_host.js')"),
+      'must import the storage layer, the event contract, the writer, the session-state modules, the lifecycle detector, and the recording-context supervisor');
   });
 
   const forbidden = [
@@ -146,11 +155,13 @@ describe('AC4/AC6 — diff is exactly the background block', () => {
     );
   });
 
-  it('manifest head is exactly version/name/version/background (AC4, cumulative)', () => {
+  it('manifest head is version/name/version/background/permissions (AC4, cumulative)', () => {
     // 2.1 inserted the background block; 2.2's contract requires the manifest
-    // to be byte-identical to HEAD (pinned in tests/db.test.js). The
-    // cumulative invariant: the head is exactly these four keys, so no
-    // permissions/CSP/version changes can sneak in.
+    // to be byte-identical to HEAD (pinned in tests/db.test.js); 4.1
+    // legitimately inserts the "permissions": ["offscreen"] block after
+    // background per its contract. The cumulative invariant: the head is
+    // exactly these five keys, so no other permissions/CSP/version changes
+    // can sneak in.
     const head = manifestRaw.slice(0, newContentIdx);
     assert.strictEqual(
       head,
@@ -161,8 +172,9 @@ describe('AC4/AC6 — diff is exactly the background block', () => {
       '    "background": {\n' +
       '        "service_worker": "sw.js"\n' +
       '    },\n' +
+      '    "permissions": ["offscreen"],\n' +
       '    ',
-      'manifest head changed beyond the background block'
+      'manifest head changed beyond the background + permissions blocks'
     );
   });
 

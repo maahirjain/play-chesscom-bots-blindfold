@@ -85,6 +85,9 @@ describe('AC1 — no auto-deletion exists', () => {
     // If the derivation above ever silently misses a loaded script, this
     // fails loudly. The expected set is the union of manifest content-script
     // js + sw.js importScripts + sw.js itself, minus vendored chess.min.js.
+    // (4.1 adds recording_host.js to the SW importScripts line per its
+    // contract; recorder.js/recorder.html are the offscreen document, not
+    // SW-loaded, so they are outside the retention-scan surface by design.)
     assert.deepEqual(PRODUCT_FILES, [
       'chess_utils.js',
       'content.js',
@@ -92,6 +95,7 @@ describe('AC1 — no auto-deletion exists', () => {
       'event_envelope.js',
       'game_records.js',
       'lifecycle.js',
+      'recording_host.js',
       'sender.js',
       'session_conditions.js',
       'session_identity.js',
@@ -215,6 +219,23 @@ describe('AC4 — diff discipline', () => {
     const status = execSync('git status --porcelain', { cwd: ROOT }).toString();
     const changed = status.split('\n').filter((l) => l.trim()).map((l) => l.slice(3).trim());
     const allowed = new Set([
+      // Honest cumulative evolution: 4.1 (dedicated recording context)
+      // legitimately adds recorder.html/recorder.js/recording_host.js,
+      // the "offscreen" manifest permission, and the sw.js supervisor
+      // wiring; its files join the allowlists.
+      'recorder.html',
+      'recorder.js',
+      'recording_host.js',
+      'manifest.json',
+      'sw.js',
+      'tests/recording_host.test.js',
+      'tests/manifest_sw.test.js',
+      '.autodev/evidence/4.1.contract.md',
+      '.autodev/evidence/4.1.build.md',
+      // Honest cumulative evolution: 4.1's review/behavior
+      // evidence lands after the pins were evolved (2.x/3.x precedent).
+      '.autodev/evidence/4.1.review.md',
+      '.autodev/evidence/4.1.behavior.md',
       'tests/retention.test.js',
       '.autodev/evidence/2.9.contract.md',
       '.autodev/evidence/2.9.build.md',
@@ -293,7 +314,12 @@ describe('AC4 — diff discipline', () => {
       'tests/lifecycle.test.js',
       'tests/session_store.test.js',
       'tests/status_indicator.test.js',
-      'tests/writer.test.js',
+            'tests/writer.test.js',
+      // Honest cumulative evolution: 4.1 legitimately extends sw.js and the
+      // manifest, so the sw.js/manifest pins in these suites evolve too.
+      'tests/db.test.js',
+      'tests/session_store.test.js',
+
       'tests/sender.test.js',
       // This task's own verification evidence lands after the builder ran:
       // '.autodev/evidence/2.9.review.md', '.autodev/evidence/2.9.behavior.md'
@@ -304,15 +330,21 @@ describe('AC4 — diff discipline', () => {
     assert.ok(fs.existsSync(path.join(ROOT, 'tests', 'retention.test.js')));
   });
 
-  it('no product file differs from HEAD (except 3.1–3.4\'s legitimately changed files)', () => {
+  it('no product file differs from HEAD (except legitimately changed files)', () => {
     // Honest cumulative evolution: 3.1 legitimately modifies
     // chess_utils.js, content.js, and manifest.json (pinned by
     // tests/history_tracker.test.js AC13); 3.4 legitimately modifies
     // sounds.js (speech tracker + link threading) and content.js
-    // (link threading + tracker install). All other product files must
-    // remain byte-identical — the retention guarantee.
+    // (link threading + tracker install); 4.1 legitimately modifies
+    // manifest.json (the "offscreen" permission) and sw.js (the
+    // recording-context supervisor wiring). All other product files must
+    // remain byte-identical — the retention guarantee. New files that do
+    // not exist at HEAD (4.1's recording_host.js) are skipped: they have no
+    // HEAD content to differ from, and their scan coverage comes from the
+    // deletion-primitive / TTL scans above.
     const changedByTasks = new Set(['chess_utils.js', 'content.js',
-                                    'manifest.json', 'sounds.js']);
+                                    'manifest.json', 'sounds.js', 'sw.js',
+                                    'recording_host.js']);
     for (const f of PRODUCT_FILES) {
       if (changedByTasks.has(f)) continue;
       const head = execSync(`git show HEAD:${f}`, { cwd: ROOT, stdio: 'pipe' }).toString();

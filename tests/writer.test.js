@@ -675,17 +675,23 @@ describe('AC10 — listener installation and adapter', () => {
 // AC11: diff discipline.
 // ------------------------------------------------------------------
 describe('AC11 — diff discipline', () => {
-  it('sw.js: importScripts line + install call + header update only (2.7 cumulative)', () => {
+  it('sw.js: importScripts line + install calls + header update only (4.1 cumulative)', () => {
     // 2.6 legitimately extended the importScripts line per its contract
     // (session-state storage primitives); 2.7 legitimately extends it per
-    // its contract (lifecycle detector). Cumulative invariant: exactly
-    // one importScripts call, exactly one installWriterListener call, and
-    // the 2.7 line removed from the absent list.
+    // its contract (lifecycle detector); 4.1 legitimately extends it per
+    // its contract (recording-context supervisor + two startup lines).
+    // Cumulative invariant: exactly one importScripts call, exactly one
+    // installWriterListener call, and the completed tasks removed from the
+    // absent list.
     const sw = fs.readFileSync(path.join(ROOT, 'sw.js'), 'utf8');
-    assert.ok(sw.includes("importScripts('db.js', 'event_envelope.js', 'writer.js', 'session_identity.js', 'session_conditions.js', 'session_store.js', 'lifecycle.js');"),
+    assert.ok(sw.includes("importScripts('db.js', 'event_envelope.js', 'writer.js', 'session_identity.js', 'session_conditions.js', 'session_store.js', 'lifecycle.js', 'recording_host.js');"),
       'importScripts line');
     assert.ok(sw.includes('BlindfoldSession.writerListener = BlindfoldSession.installWriterListener();'),
       'install call with lifecycle handle');
+    assert.ok(sw.includes('BlindfoldSession.recordingHost = BlindfoldSession.createRecordingHost(globalThis.chrome || {});'),
+      'recordingHost construction');
+    assert.ok(sw.includes('BlindfoldSession.recordingHost.start();'),
+      'recordingHost startup');
     assert.ok(!sw.includes('2.4:'), '2.4 line removed from the absent list');
     assert.ok(!sw.includes('2.6:'), '2.6 line removed from the absent list');
     assert.ok(!sw.includes('2.7: page/context start'), '2.7 line removed from the absent list');
@@ -698,20 +704,40 @@ describe('AC11 — diff discipline', () => {
     assert.equal((codeStripped.match(/installWriterListener\s*\(/g) || []).length, 1);
   });
 
-  it('manifest.json differs from HEAD only in the content_scripts js list (2.7)', () => {
+  it('manifest.json differs from HEAD only in the js list and the 4.1 permissions (cumulative)', () => {
     // Honest cumulative evolution: 2.7 legitimately inserts lifecycle.js
-    // after sender.js per its contract. The cumulative invariant is that
-    // nothing else in the manifest changed.
+    // after sender.js per its contract; 4.1 legitimately adds
+    // "permissions": ["offscreen"] per its contract. The cumulative
+    // invariant is that nothing else in the manifest changed.
     const headManifest = JSON.parse(execSync('git show HEAD:manifest.json', { cwd: ROOT }).toString());
     const current = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8'));
     headManifest.content_scripts[0].js = current.content_scripts[0].js;
-    assert.deepEqual(current, headManifest, 'manifest changed beyond the js list');
+    headManifest.permissions = current.permissions;
+    assert.deepEqual(current, headManifest, 'manifest changed beyond the js list + permissions');
+    assert.deepStrictEqual(current.permissions, ['offscreen']);
   });
 
   it('no other repo files modified (git status allowlist)', () => {
     const status = execSync('git status --porcelain', { cwd: ROOT }).toString();
     const changed = status.split('\n').filter((l) => l.trim()).map((l) => l.slice(3).trim());
     const allowed = new Set([
+      // Honest cumulative evolution: 4.1 (dedicated recording context)
+      // legitimately adds recorder.html/recorder.js/recording_host.js,
+      // the "offscreen" manifest permission, and the sw.js supervisor
+      // wiring; its files join the allowlists.
+      'recorder.html',
+      'recorder.js',
+      'recording_host.js',
+      'manifest.json',
+      'sw.js',
+      'tests/recording_host.test.js',
+      'tests/manifest_sw.test.js',
+      '.autodev/evidence/4.1.contract.md',
+      '.autodev/evidence/4.1.build.md',
+      // Honest cumulative evolution: 4.1's review/behavior
+      // evidence lands after the pins were evolved (2.x/3.x precedent).
+      '.autodev/evidence/4.1.review.md',
+      '.autodev/evidence/4.1.behavior.md',
       'sw.js',
       'writer.js',
       'tests/writer.test.js',

@@ -523,11 +523,15 @@ describe('AC9 — diff discipline', () => {
       .replace(/\/\/.*$/gm, '');
     const lines = swCode.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
     // 2.7 legitimately appends lifecycle.js to the importScripts line per
-    // its contract (SW-side discontinuity detection).
+    // its contract (SW-side discontinuity detection); 4.1 legitimately
+    // appends recording_host.js plus the two recordingHost startup lines
+    // per its contract (recording-context supervision).
     assert.deepEqual(lines, [
       "'use strict';",
-      "importScripts('db.js', 'event_envelope.js', 'writer.js', 'session_identity.js', 'session_conditions.js', 'session_store.js', 'lifecycle.js');",
-      'BlindfoldSession.writerListener = BlindfoldSession.installWriterListener();'
+      "importScripts('db.js', 'event_envelope.js', 'writer.js', 'session_identity.js', 'session_conditions.js', 'session_store.js', 'lifecycle.js', 'recording_host.js');",
+      'BlindfoldSession.writerListener = BlindfoldSession.installWriterListener();',
+      'BlindfoldSession.recordingHost = BlindfoldSession.createRecordingHost(globalThis.chrome || {});',
+      'BlindfoldSession.recordingHost.start();'
     ]);
   });
 
@@ -543,12 +547,15 @@ describe('AC9 — diff discipline', () => {
     // Honest cumulative evolution: 2.7 inserted lifecycle.js after sender.js;
     // 2.8 inserts status_indicator.js after lifecycle.js (deviation from the
     // 2.8 contract AC10 documented in 2.8.build.md — the module cannot load
-    // in the content script without the manifest entry).
+    // in the content script without the manifest entry); 4.1 legitimately
+    // adds "permissions": ["offscreen"] per its contract (pinned in
+    // tests/recording_host.test.js AC2).
     const headManifest = JSON.parse(
       execSync('git show HEAD:manifest.json', { cwd: ROOT, stdio: 'pipe' }).toString());
     const current = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8'));
     headManifest.content_scripts[0].js = current.content_scripts[0].js;
-    assert.deepEqual(current, headManifest, 'manifest changed beyond the js list');
+    headManifest.permissions = current.permissions;
+    assert.deepEqual(current, headManifest, 'manifest changed beyond the js list + permissions');
     assert.deepEqual(current.content_scripts[0].js, [
       'event_envelope.js', 'sender.js', 'lifecycle.js', 'status_indicator.js',
       'sounds.js', 'chess.min.js', 'game_records.js', 'chess_utils.js', 'content.js'
@@ -590,6 +597,23 @@ describe('AC9 — diff discipline', () => {
     const status = execSync('git status --porcelain', { cwd: ROOT }).toString();
     const changed = status.split('\n').filter((l) => l.trim()).map((l) => l.slice(3).trim());
     const allowed = new Set([
+      // Honest cumulative evolution: 4.1 (dedicated recording context)
+      // legitimately adds recorder.html/recorder.js/recording_host.js,
+      // the "offscreen" manifest permission, and the sw.js supervisor
+      // wiring; its files join the allowlists.
+      'recorder.html',
+      'recorder.js',
+      'recording_host.js',
+      'manifest.json',
+      'sw.js',
+      'tests/recording_host.test.js',
+      'tests/manifest_sw.test.js',
+      '.autodev/evidence/4.1.contract.md',
+      '.autodev/evidence/4.1.build.md',
+      // Honest cumulative evolution: 4.1's review/behavior
+      // evidence lands after the pins were evolved (2.x/3.x precedent).
+      '.autodev/evidence/4.1.review.md',
+      '.autodev/evidence/4.1.behavior.md',
       'sw.js',
       'session_store.js',
       'session_identity.js',
