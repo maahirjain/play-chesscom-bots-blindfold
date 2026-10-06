@@ -846,6 +846,27 @@ describe('AC13 — diff discipline', () => {
       '.autodev/evidence/3.5.review.md',
       '.autodev/evidence/3.5.behavior.md',
       'tests/attempt_tracker.test.js',
+      // Honest cumulative evolution: 4.14 (report per-stream
+      // recording status) legitimately adds stream_status.js (the
+      // read-only per-stream status query over the registry, chunk
+      // state, live tracks, health mirror, and manifest — no writes,
+      // no events, no UI), the additive track_monitor.getStreamHealth
+      // seam (+ the health mirror, nowUtcIso opt, and retention
+      // calls), the recorder-get-status channel message + lazy
+      // status-reader getter in recorder.js, the script tag in
+      // recorder.html, records the ## 4.14 decisions, and adds its
+      // test + evidence; its files join the allowlists.
+      'stream_status.js',
+      'tests/stream_status.test.js',
+      // timecode pins tracked diffs only; track_monitor.js is the
+      // tracked 4.14-modified file.
+      'track_monitor.js',
+      '.autodev/evidence/4.14.contract.md',
+      '.autodev/evidence/4.14.build.md',
+      // Honest cumulative evolution: 4.14's review/behavior evidence
+      // lands after the pins were evolved (2.x/3.x/4.1-4.13 precedent).
+      '.autodev/evidence/4.14.review.md',
+      '.autodev/evidence/4.14.behavior.md',
     ]);
     for (const f of changed) {
       assert.ok(allowed.has(f), `unexpected modified file: ${f}`);

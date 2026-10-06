@@ -257,10 +257,66 @@ var BlindfoldSession = BlindfoldSession || {};
     var emitEvent = o.emitEvent;
     var getChunkState = (typeof o.getChunkState === 'function') ?
       o.getChunkState : function () { return null; };
+    // 4.14: optional wall-clock for the in-memory health mirror's
+    // atUtc stamps (additive; defaults to the real clock).
+    var nowUtcIso = (typeof o.nowUtcIso === 'function') ? o.nowUtcIso :
+      function () { return new Date().toISOString(); };
 
     // streamKind → { streamKind, segmentId, tracks: [{track, trackKind,
     // onMute, onUnmute, onEnded, detach}], recorder, recorderOnError }.
     var monitored = {};
+
+    // 4.14: in-memory health mirror — the last observed recorder error
+    // and discontinuity per kind, generation-scoped (cleared on
+    // attach/detach). The monitor already observes both; retaining the
+    // last observation is a query over observed state, not a new
+    // pipeline. The SW-side event log remains the durable timeline
+    // (§6.3 reads it at export); after a document restart this mirror
+    // is empty by construction (the manifest tells the
+    // cross-generation story).
+    var health = {};
+
+    function clearHealth(kind) {
+      if (health[kind]) {
+        delete health[kind];
+      }
+    }
+
+    function healthEntry(kind) {
+      if (!health[kind]) {
+        health[kind] = { lastRecorderError: null, lastDiscontinuity: null };
+      }
+      return health[kind];
+    }
+
+    function stampUtc() {
+      try {
+        var s = nowUtcIso();
+        return (typeof s === 'string' && s !== '') ? s : null;
+      } catch (e) {
+        return null;
+      }
+    }
+
+    // 4.14: retain the last observed recorder error for the kind.
+    function retainRecorderError(kind, errorName, errorMessage) {
+      var he = healthEntry(kind);
+      he.lastRecorderError = {
+        errorName: (typeof errorName === 'string' && errorName !== '') ?
+          errorName : null,
+        errorMessage: (typeof errorMessage === 'string') ? errorMessage : null,
+        atUtc: stampUtc()
+      };
+    }
+
+    // 4.14: retain the last observed discontinuity for the kind.
+    function retainDiscontinuity(kind, reason) {
+      var hd = healthEntry(kind);
+      hd.lastDiscontinuity = {
+        reason: (typeof reason === 'string' && reason !== '') ? reason : null,
+        atUtc: stampUtc()
+      };
+    }
 
     function guarded(fn) {
       try {
@@ -329,6 +385,8 @@ var BlindfoldSession = BlindfoldSession || {};
       });
       safeEmit(EVENT_STREAM_DISCONTINUITY, payload,
         { segmentId: entry.segmentId });
+      // 4.14: retain the discontinuity in the in-memory health mirror.
+      retainDiscontinuity(entry.streamKind, reason);
     }
 
     function attachTrack(entry, track, trackKind) {
@@ -419,6 +477,8 @@ var BlindfoldSession = BlindfoldSession || {};
               recorderState: recorderState
             }),
             { segmentId: entry.segmentId });
+          // 4.14: retain the observation in the in-memory health mirror.
+          retainRecorderError(entry.streamKind, errorName, errorMessage);
           // Observation first, then the explicit flag (chained order).
           emitDiscontinuity(entry, 'recorder-error', {});
         });
@@ -479,12 +539,18 @@ var BlindfoldSession = BlindfoldSession || {};
       if (recorder && typeof recorder === 'object') {
         attachRecorder(entry, recorder);
       }
+      // 4.14: a successful attach starts a fresh health generation
+      // (generation-scoped by detach/attach; the events are separate).
+      healthEntry(kind);
       return { ok: true, streamKind: kind, tracks: entry.tracks.length };
     }
 
-    // Detach all monitoring for a kind. Idempotent.
+    // Detach all monitoring for a kind. Idempotent. 4.14: the
+    // in-memory health mirror is generation-scoped, so detaching
+    // clears it (a later attach starts a fresh generation).
     function detachStream(streamKind) {
       var kind = requireStreamKind(streamKind);
+      clearHealth(kind);
       var entry = monitored[kind];
       if (!entry) {
         return { ok: true, streamKind: kind, wasMonitored: false };
@@ -533,6 +599,10 @@ var BlindfoldSession = BlindfoldSession || {};
       });
       safeEmit(EVENT_STREAM_DISCONTINUITY, payload,
         segmentId === null ? null : { segmentId: segmentId });
+      // 4.14: retain the chunk-terminal discontinuity in the health
+      // mirror (the mapping is the identity — terminal state IS the
+      // reason code).
+      retainDiscontinuity(kind, terminalState);
     }
 
     // Restart discontinuity (recorder.js's manifest pre-check calls
@@ -567,6 +637,8 @@ var BlindfoldSession = BlindfoldSession || {};
       });
       safeEmit(EVENT_STREAM_DISCONTINUITY, payload,
         newSegmentId === null ? null : { segmentId: newSegmentId });
+      // 4.14: retain the restart discontinuity in the health mirror.
+      retainDiscontinuity(kind, 'restart');
     }
 
     function getMonitoredKinds() {
@@ -587,13 +659,38 @@ var BlindfoldSession = BlindfoldSession || {};
       });
     }
 
+    // 4.14: the in-memory health mirror for one kind — the last
+    // observed recorder error and discontinuity this document
+    // generation. null when the kind was never monitored (unknown is
+    // null, never fabricated). Additive: no new listeners, no new
+    // emissions, monitor behavior otherwise unchanged.
+    function getStreamHealth(streamKind) {
+      var kind = requireStreamKind(streamKind);
+      var h = health[kind];
+      if (!h) {
+        return null;
+      }
+      return {
+        lastRecorderError: h.lastRecorderError ? {
+          errorName: h.lastRecorderError.errorName,
+          errorMessage: h.lastRecorderError.errorMessage,
+          atUtc: h.lastRecorderError.atUtc
+        } : null,
+        lastDiscontinuity: h.lastDiscontinuity ? {
+          reason: h.lastDiscontinuity.reason,
+          atUtc: h.lastDiscontinuity.atUtc
+        } : null
+      };
+    }
+
     return {
       attachStream: attachStream,
       detachStream: detachStream,
       onChunkTerminalState: onChunkTerminalState,
       emitRestartDiscontinuity: emitRestartDiscontinuity,
       getMonitoredKinds: getMonitoredKinds,
-      getMonitoredTracks: getMonitoredTracks
+      getMonitoredTracks: getMonitoredTracks,
+      getStreamHealth: getStreamHealth
     };
   }
 

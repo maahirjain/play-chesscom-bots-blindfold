@@ -144,6 +144,14 @@ var BlindfoldSession = BlindfoldSession || {};
   // Session-gated (no session → no-session). The only deliberate
   // channel-vocabulary addition of 4.13 (contract §7).
   var MSG_STOP_STREAMS = 'recorder-stop-streams';
+  // 4.14 per-stream status query (PLAN.md §4.14). SW → offscreen:
+  // §5 (session lifecycle / readiness gating) and §6.3
+  // (media-sync.json), both SW-side, query offscreen-local live
+  // state through this message (the recorder-get-formats precedent —
+  // the only way to reach document-local state). Session-gated (no
+  // session → no-session). The only deliberate channel-vocabulary
+  // addition of 4.14 (contract §3.2).
+  var MSG_GET_STATUS = 'recorder-get-status';
 
   // Source context stamped on every event this document emits (1.3's
   // SOURCE_CONTEXTS already includes 'recording_context').
@@ -381,6 +389,11 @@ var BlindfoldSession = BlindfoldSession || {};
       // {ok:false, error:'no-session'}).
       if (message.msg === MSG_STOP_STREAMS) {
         return handleStopStreams(message, sendResponse);
+      }
+      // 4.14: per-stream status query. Session-gated inside the
+      // handler (no session → {ok:false, error:'no-session'}).
+      if (message.msg === MSG_GET_STATUS) {
+        return handleStatusCommand(message, sendResponse);
       }
       return false; // unknown msg: ignore, no response
     }
@@ -1020,6 +1033,54 @@ var BlindfoldSession = BlindfoldSession || {};
       return finalizer;
     }
 
+    // ----------------------------------------------------------------
+    // 4.14: per-stream recording status (PLAN.md §4.14). recorder.js
+    // wires the status reader the same way as formatSupport /
+    // audioPolicy / chunkWriter / trackMonitor: lazy,
+    // shared-namespace-resolved, test-injectable via o.streamStatus.
+    // Absence is a wiring defect → plain Error, like
+    // createChunkWriter. Read-only by construction: the injected
+    // surface contains no writer, and the module never emits,
+    // writes, or controls (V1 code-scan pinned). It reports facts
+    // per stream so a dead microphone, failed screen capture, or
+    // stalled chunk loop cannot masquerade as a complete recording;
+    // "required streams" / readiness policy is §5's, not 4.14's.
+    // ----------------------------------------------------------------
+
+    var streamStatusReader = null;
+    function getStreamStatusReader() {
+      if (streamStatusReader === null) {
+        var BS = shared();
+        if (typeof BS.createStreamStatus !== 'function') {
+          throw new Error('recorder: createStreamStatus is unavailable');
+        }
+        if (o.streamStatus !== undefined && o.streamStatus !== null) {
+          streamStatusReader = o.streamStatus;
+        } else {
+          streamStatusReader = BS.createStreamStatus({
+            getStreamRecord: function (streamKind) {
+              return getStreamStarter().getStreamRecord(streamKind);
+            },
+            getChunkState: function (streamKind) {
+              return getChunkWriter().getChunkState(streamKind);
+            },
+            getMonitoredTracks: function (streamKind) {
+              return getTrackMonitor().getMonitoredTracks(streamKind);
+            },
+            getStreamHealth: function (streamKind) {
+              return getTrackMonitor().getStreamHealth(streamKind);
+            },
+            getManifestRecordsBySession: function (sid) {
+              return getFormatSupport().getManifestRecordsBySession(sid);
+            },
+            getSessionId: function () { return sessionId; },
+            nowUtcIso: nowUtcIso
+          });
+        }
+      }
+      return streamStatusReader;
+    }
+
     // Offscreen → SW flash-relay request (contract §7). Always resolves
     // (never rejects): an unreachable SW becomes data, never a thrown
     // marker failure.
@@ -1262,6 +1323,44 @@ var BlindfoldSession = BlindfoldSession || {};
       }
       return respondAsync(Promise.resolve()
         .then(function () { return fin.stopAndFinalize(); }),
+        sendResponse, toChannelError);
+    }
+
+    // 4.14: per-stream status query (PLAN.md §4.14).
+    // 'recorder-get-status' → {ok, sessionId, queriedAtUtc, statuses}.
+    // Session-gated (no session → {ok:false, error:'no-session'} —
+    // status is session-scoped; without a session there is nothing
+    // to report). The reader never throws into the channel handler:
+    // a synchronously-throwing factory becomes {ok:false} here, and
+    // a rejected status read becomes {ok:false} via respondAsync
+    // (the 3.2 SF-1 precedent).
+    function handleStatusCommand(message, sendResponse) {
+      if (!isSessionActive()) {
+        try {
+          sendResponse({ ok: false, error: 'no-session' });
+        } catch (w) { /* ignore */ }
+        return false;
+      }
+      var reader;
+      try {
+        reader = getStreamStatusReader();
+      } catch (e) {
+        try {
+          sendResponse({ ok: false, error: 'unavailable' });
+        } catch (w) { /* ignore */ }
+        return false;
+      }
+      return respondAsync(
+        Promise.resolve()
+          .then(function () { return reader.getAllStreamStatuses(); })
+          .then(function (statuses) {
+            return {
+              ok: true,
+              sessionId: sessionId,
+              queriedAtUtc: nowUtcIso(),
+              statuses: statuses
+            };
+          }),
         sendResponse, toChannelError);
     }
 
@@ -1550,6 +1649,11 @@ var BlindfoldSession = BlindfoldSession || {};
       // recorder-stop-streams handler stops the streams and finalizes
       // the segments through the finalizer).
       getFinalizer: getFinalizer,
+      // 4.14 surface (Node tests drive this directly; the
+      // recorder-get-status handler answers per-stream status through
+      // the status reader — read-only, never throws into the
+      // channel).
+      getStreamStatusReader: getStreamStatusReader,
       restoreDevices: restoreDevices,
       getSession: function () { return { sessionId: sessionId, gameId: gameId }; }
     };
@@ -1584,6 +1688,7 @@ var BlindfoldSession = BlindfoldSession || {};
   BlindfoldSession.RECORDER_MSG_GET_FORMATS = MSG_FORMATS;
   BlindfoldSession.RECORDER_MSG_START_STREAMS = MSG_START_STREAMS;
   BlindfoldSession.RECORDER_MSG_STOP_STREAMS = MSG_STOP_STREAMS;
+  BlindfoldSession.RECORDER_MSG_GET_STATUS = MSG_GET_STATUS;
   BlindfoldSession.RECORDER_MSG_SYNC_FLASH = MSG_SYNC_FLASH;
   BlindfoldSession.RECORDER_SOURCE_CONTEXT = RECORDER_SOURCE_CONTEXT;
   BlindfoldSession.isRecorderMessage = isRecorderMessage;

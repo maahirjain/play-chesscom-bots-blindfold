@@ -1081,3 +1081,63 @@ Consequential engineering decisions with reasoning and evidence. Newest first.
   V1-pinned (post-gap media not forceable headless — documented
   honestly). Regressions: sw-chunks 42/42, sw-streams 57/57,
   sw-track-monitor 46/46, sw-sync-marker 43/43.
+
+## 4.14 — Report per-stream recording status (PLAN.md §4.14)
+
+- **The masquerade-driven design.** PLAN line 181: "Report each
+  stream's status separately so microphone, screen, or webcam failure
+  cannot masquerade as complete recording." The contract's §1.2
+  masquerade table maps each failure mode to the exact status field
+  that surfaces it — especially chunk-terminal states with a
+  still-"recording" recorder (chunk-stalled while `recorderState` is
+  'recording': lifecycle stays 'recording', the stall is a fact in
+  `chunk.*` + `lastDiscontinuity`).
+- **No smoothed 'error' lifecycle.** Lifecycle is `idle | recording |
+  stopped | finalized`, derived mechanically from the §1.1 truth table
+  (live registry entry → recording; no live + unfinalized manifest
+  segments → stopped; no live + all finalized → finalized; nothing →
+  idle). Failures surface as facts (`chunk.*`, `lastRecorderError`,
+  `lastDiscontinuity`, `tracks[]`) — smoothing is how failures
+  masquerade. A dead recorder ('inactive' state, still registered)
+  still reports `recording` (the registry is the authority) with the
+  true `recorderState` beside it.
+- **Offscreen-local reads only, no event-log dependency.** The event
+  log is SW-side; 4.14 reads the registry, chunk state, live tracks,
+  manifest, and one new additive in-memory seam. Deliberate honesty
+  boundary: status reports document-local live state, not a durable
+  cross-generation timeline (the manifest tells that story; the SW
+  log tells the event story).
+- **Additive `track_monitor.getStreamHealth(streamKind)`.** Retains
+  the last observed recorder error + discontinuity per kind,
+  generation-scoped (cleared on detach/attach). No new listeners, no
+  new emissions, monitor behavior otherwise unchanged. After a
+  document restart the mirror is empty by construction.
+- **"Required streams" is §5's policy, not 4.14's.** 4.14 reports
+  facts per kind; §5 applies its required-set policy over them. The
+  module contains no readiness/required vocabulary (V1 code-scan pin).
+- **Status is read-only by construction.** `stream_status.js`
+  references no `chrome.*`, no `document`, no indexedDB; the factory
+  is fully injected and every injected read is guarded (a throwing
+  read degrades to null/[] — a query must never fail because a live
+  read did). The manifest read failing rejects, and the channel
+  handler maps that to `{ok:false}` (the 3.2 SF-1 precedent); sync
+  kind validation throws TypeError/RangeError (repo convention).
+- **Exactly one new channel message** (`recorder-get-status`; MSG_*
+  23→24, the recorder-get-formats precedent). Session-gated: no
+  session → `{ok:false, error:'no-session'}`. The handler never throws
+  into the channel. No new event types, no manifest widening (18
+  keys), `DB_VERSION` stays 2, content scripts byte-identical, no
+  gameplay change.
+- **Record selection honesty.** Manifest identity/timing prefers the
+  live registry (segmentId, startedAt*); manifest-only fields prefer
+  the live segment's record, else the most recently created record
+  (createdAtUtc is stamped at stream start so it orders generations —
+  including the in-progress one whose segmentNumber is still null).
+- **V1: 45/45.** Exact 17-key shape per kind, lifecycle truth table
+  incl. the no-smoothing masquerade case, live `tracks[]` reads,
+  health generation scoping (attach→retained, detach→null,
+  re-attach→fresh), read-only code-scan pin, MSG_* 24-entry
+  vocabulary, `RECORDER_MSG_GET_STATUS` export, no-session guard +
+  `{ok:false}` mapping, MANIFEST_KEYS 18, DB_VERSION 2, double-query
+  determinism, and diff discipline (22 suites evolved with
+  justification comments).

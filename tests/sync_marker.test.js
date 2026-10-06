@@ -597,7 +597,7 @@ describe('AC5 — failure honesty', () => {
 // ------------------------------------------------------------------
 
 describe('AC6 — vocabulary discipline', () => {
-  it('MSG_* gains exactly one value per task: MSG_STOP_STREAMS=recorder-stop-streams (4.13)', () => {
+  it('MSG_* gains exactly one value per task: MSG_STOP_STREAMS=recorder-stop-streams (4.13), MSG_GET_STATUS=recorder-get-status (4.14)', () => {
     const src = fs.readFileSync(path.join(REPO, 'recorder.js'), 'utf8');
     const found = [];
     const re = /var (MSG_[A-Z_]+) = '([^']+)';/g;
@@ -630,10 +630,14 @@ describe('AC6 — vocabulary discipline', () => {
       'MSG_SYNC_FLASH=recorder-sync-flash',
       // Honest cumulative evolution: 4.13 deliberately adds the single
       // stop-streams message (contract §7).
-      'MSG_STOP_STREAMS=recorder-stop-streams'
+      'MSG_STOP_STREAMS=recorder-stop-streams',
+      // Honest cumulative evolution: 4.14 deliberately adds the single
+      // per-stream status query message (contract §3.2).
+      'MSG_GET_STATUS=recorder-get-status'
     ]);
     assert.equal(BS.RECORDER_MSG_SYNC_FLASH, 'recorder-sync-flash');
     assert.equal(BS.RECORDER_MSG_STOP_STREAMS, 'recorder-stop-streams');
+    assert.equal(BS.RECORDER_MSG_GET_STATUS, 'recorder-get-status');
   });
 
   function makeSwHost(tabsImpl, queryImpl) {
@@ -847,6 +851,28 @@ describe('AC8 — changed-files discipline', () => {
       'tests/timecode.test.js',
       'tests/visibility.test.js',
       'tests/writer.test.js',
+      // 4.14 deliberately touches track_monitor.js (additive
+      // getStreamHealth seam + health mirror) — not in 4.11's
+      // allowlist, so listed here.
+      'track_monitor.js',
+      // Honest cumulative evolution: 4.14 (report per-stream
+      // recording status) legitimately adds stream_status.js (the
+      // read-only per-stream status query over the registry, chunk
+      // state, live tracks, health mirror, and manifest — no writes,
+      // no events, no UI), the additive track_monitor.getStreamHealth
+      // seam (+ the health mirror, nowUtcIso opt, and retention
+      // calls), the recorder-get-status channel message + lazy
+      // status-reader getter in recorder.js, the script tag in
+      // recorder.html, records the ## 4.14 decisions, and adds its
+      // test + evidence; its files join the allowlists.
+      'stream_status.js',
+      'tests/stream_status.test.js',
+      '.autodev/evidence/4.14.contract.md',
+      '.autodev/evidence/4.14.build.md',
+      // Honest cumulative evolution: 4.14's review/behavior evidence
+      // lands after the pins were evolved (2.x/3.x/4.1-4.13 precedent).
+      '.autodev/evidence/4.14.review.md',
+      '.autodev/evidence/4.14.behavior.md',
     ]);
     const stray = changed.filter((f) => !allowed.has(f));
     assert.deepEqual(stray, [],

@@ -335,18 +335,22 @@ describe('AC6 — purity and no persistence', () => {
       'media_chunks keeps its compound key [segmentId, chunkIndex]');
   });
 
-  it('no producer or consumer module was modified by 4.12 (4.13 changes are deliberate)', () => {
+  it('no producer or consumer module was modified by 4.12 (4.13 and 4.14 changes are deliberate)', () => {
     // Honest cumulative evolution (4.13): 4.13 deliberately modifies
     // stream_starter.js (discardActiveStream seam), format_support.js
     // (MANIFEST_KEYS 16 → 18), recorder.js (recorder-stop-streams
     // handler + getFinalizer), and recorder.html (finalizer.js script
-    // tag) — see .autodev/evidence/4.13.contract.md. The modules 4.13
-    // does NOT touch stay untouched.
+    // tag) — see .autodev/evidence/4.13.contract.md. Honest cumulative
+    // evolution (4.14): 4.14 deliberately adds the additive
+    // getStreamHealth seam (+ health mirror, nowUtcIso opt, retention
+    // calls) to track_monitor.js — see
+    // .autodev/evidence/4.14.contract.md. The modules neither task
+    // touches stay untouched.
     const names = execSync('git diff HEAD --name-only', { cwd: REPO })
       .toString().split('\n').filter((l) => l.trim());
     for (const f of ['chunk_writer.js', 'clock_link.js',
-      'sync_marker.js', 'sync_flash.js', 'track_monitor.js', 'db.js']) {
-      assert.ok(!names.includes(f), `${f} must be untouched by 4.12/4.13`);
+      'sync_marker.js', 'sync_flash.js', 'db.js']) {
+      assert.ok(!names.includes(f), `${f} must be untouched by 4.12/4.13/4.14`);
     }
   });
 });
@@ -460,7 +464,28 @@ describe('AC8 — changed-files discipline', () => {
       'tests/sync_marker.test.js',
       'tests/track_monitor.test.js',
       'tests/visibility.test.js',
-      'tests/writer.test.js'
+      'tests/writer.test.js',
+      // Honest cumulative evolution: 4.14 (report per-stream
+      // recording status) legitimately adds stream_status.js (the
+      // read-only per-stream status query over the registry, chunk
+      // state, live tracks, health mirror, and manifest — no writes,
+      // no events, no UI), the additive track_monitor.getStreamHealth
+      // seam (+ the health mirror, nowUtcIso opt, and retention
+      // calls), the recorder-get-status channel message + lazy
+      // status-reader getter in recorder.js, the script tag in
+      // recorder.html, records the ## 4.14 decisions, and adds its
+      // test + evidence; its files join the allowlists.
+      'stream_status.js',
+      'tests/stream_status.test.js',
+      // timecode pins tracked diffs only; track_monitor.js is the
+      // tracked 4.14-modified file.
+      'track_monitor.js',
+      '.autodev/evidence/4.14.contract.md',
+      '.autodev/evidence/4.14.build.md',
+      // Honest cumulative evolution: 4.14's review/behavior evidence
+      // lands after the pins were evolved (2.x/3.x/4.1-4.13 precedent).
+      '.autodev/evidence/4.14.review.md',
+      '.autodev/evidence/4.14.behavior.md',
     ]);
     const out = execSync('git diff HEAD --name-only', { cwd: REPO })
       .toString().trim();

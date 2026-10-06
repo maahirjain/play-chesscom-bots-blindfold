@@ -4,7 +4,7 @@
      task 4.5 (PLAN.md §4.5) + task 4.6 (PLAN.md §4.6) +
      task 4.7 (PLAN.md §4.7) + task 4.8 (PLAN.md §4.8) +
      task 4.9 (PLAN.md §4.9) + task 4.10 (PLAN.md §4.10) +
-     task 4.11 (PLAN.md §4.11).
+     task 4.11 (PLAN.md §4.11) + task 4.14 (PLAN.md §4.14).
      MV3 offscreen document: the extension's dedicated recording context.
      Loads event_envelope.js (envelope construction for the 4.2/4.3/4.4
      events), db.js (extension-owned IndexedDB — 4.5's recording
@@ -27,6 +27,9 @@
      finalizer.js (4.13 Stop: stop-marker wait, recorder stop, bounded
      final-flush await, device release, discontinuous-segment splits,
      per-(sessionId, streamKind) numbering, finalizedAtUtc mark),
+     stream_status.js (4.14 read-only per-stream status query over the
+     registry, chunk state, live tracks, health mirror, and manifest —
+     no writes, no events, no UI),
      then recorder.js. Created by the service
      worker via chrome.offscreen.createDocument(); never opened by the
      user. -->
@@ -48,6 +51,7 @@
   <script src="chunk_writer.js"></script>
   <script src="track_monitor.js"></script>
   <script src="finalizer.js"></script>
+  <script src="stream_status.js"></script>
   <script src="recorder.js"></script>
 </body>
 </html>
