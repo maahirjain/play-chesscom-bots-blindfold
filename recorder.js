@@ -790,10 +790,46 @@ var BlindfoldSession = BlindfoldSession || {};
       return streamStarter;
     }
 
+    // ----------------------------------------------------------------
+    // 4.8: incremental chunk extraction (PLAN.md §4.8). recorder.js wires
+    // the chunk writer into the stream starter the same way as
+    // formatSupport / audioPolicy: lazy, shared-namespace-resolved,
+    // test-injectable via o.chunkWriter. Absence is a wiring defect →
+    // plain Error, like createFormatSupport.
+    // ----------------------------------------------------------------
+
+    var chunkWriter = null;
+    function getChunkWriter() {
+      if (chunkWriter === null) {
+        var BS = shared();
+        if (typeof BS.createChunkWriter !== 'function') {
+          throw new Error('recorder: createChunkWriter is unavailable');
+        }
+        if (o.chunkWriter !== undefined && o.chunkWriter !== null) {
+          chunkWriter = o.chunkWriter;
+        } else {
+          // Timer globals default inside the writer; the DB is read
+          // lazily from the shared namespace (format_support precedent)
+          // — the chunk writes go direct to the extension-owned IDB
+          // from the offscreen document (4.1's direct-IDB path).
+          chunkWriter = BS.createChunkWriter({
+            nowUtcIso: o.selectorClock
+          });
+        }
+      }
+      return chunkWriter;
+    }
+
     // 'recorder-start-streams' → {ok, streams:{microphone,screen,webcam}}
     // (or top-level {ok:false, error} guards). Failure-isolated like
     // every other command (3.2 SF-1 precedent): the starter returns data,
     // never throws across the channel.
+    //
+    // 4.8: chunking starts automatically for every successfully started
+    // stream — Start implies record; no new channel message. The kickoff
+    // is best-effort and wrapped: chunking can never fail the streams or
+    // the channel response (the writer's own state exposes any issue to
+    // 4.9/4.14).
     function handleStartStreams(message, sendResponse) {
       var starter;
       try {
@@ -806,6 +842,25 @@ var BlindfoldSession = BlindfoldSession || {};
       }
       return respondAsync(Promise.resolve().then(function () {
         return starter.startStreams();
+      }).then(function (result) {
+        try {
+          var active = starter.getActiveStreams();
+          if (active) {
+            var writer = getChunkWriter();
+            var kinds = Object.keys(active);
+            for (var i = 0; i < kinds.length; i++) {
+              var rec = active[kinds[i]];
+              if (rec && rec.recorder) {
+                writer.startForStream({
+                  streamKind: kinds[i],
+                  segmentId: rec.segmentId,
+                  recorder: rec.recorder
+                });
+              }
+            }
+          }
+        } catch (e) { /* chunking is best-effort; streams are recording */ }
+        return result;
       }), sendResponse, toChannelError);
     }
 
@@ -1072,6 +1127,10 @@ var BlindfoldSession = BlindfoldSession || {};
       // 4.6 surface (Node tests drive these directly; §5 drives the
       // recorder-start-streams channel message).
       getStreamStarter: getStreamStarter,
+      // 4.8 surface (Node tests drive this directly; the
+      // recorder-start-streams handler starts chunking automatically for
+      // every successfully started stream — no new channel message).
+      getChunkWriter: getChunkWriter,
       restoreDevices: restoreDevices,
       getSession: function () { return { sessionId: sessionId, gameId: gameId }; }
     };

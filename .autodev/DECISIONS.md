@@ -736,3 +736,71 @@ Consequential engineering decisions with reasoning and evidence. Newest first.
   `recorder-start-streams` responses + the manifest record; 4.14/§6.3
   read from there. The MSG_* vocabulary and the nine event names are
   V1-pinned unchanged.
+
+## 4.8 incremental chunk extraction
+
+- **Storage: the 2.2 `media_chunks` store, ratified — no schema change.**
+  Task 2.2 created `media_chunks` (compound keyPath
+  `[segmentId, chunkIndex]`) with the comment "§4.8 incremental chunks;
+  §6.4 ordered assembly"; 4.8 ratifies it. No OPFS (second storage
+  mechanism, second quota/retention story, no functional gain — IDB
+  structured-clones Blobs natively and §6.6's streaming export works over
+  an IDB cursor), no in-memory (defeats the purpose), no DB_VERSION bump,
+  no new index (export scoping: manifest `bySessionId` → segmentIds →
+  chunks by compound-key prefix). `DB_VERSION` stays 2.
+- **`requestData()` polling, not timeslice (4.6's recommendation,
+  contracted in 4.8).** One `setInterval` per stream at the named,
+  V1-pinned `CHUNK_POLL_MS = 5000` ± 10% jitter (lockstep avoidance);
+  ticks skip when `recorder.state !== 'recording'`; a `requestData()`
+  throw is a missed tick, never a stream failure. A timeslice fires on
+  the recorder's clock whether or not data exists and cannot be aligned
+  with write backpressure; polling gives 4.8 control (skip, back off,
+  stop per stream). 5 s balances incremental durability against IDB
+  write volume; tuning is §7 territory.
+- **Chunk identity = `[segmentId, chunkIndex]`, 0-based per segment.**
+  The index is reserved synchronously at chunk acceptance — a V1 test
+  caught the alternative (assigning the index in the write's `.then`)
+  allowing two rapid chunks to share a key, which IDB `put` would
+  silently overwrite (data loss). A failed write therefore leaves a gap,
+  never a duplicate; 4.13 reads in key order. 0-byte Blobs are dropped
+  before acceptance (not stored, index not consumed, counted in
+  `emptyPolls`); they are not misses. `streamKind`/`sessionId`/`gameId`/
+  `byteLength` are not persisted (derivable rule); `timecodeMs` is stored
+  raw from the event for 4.12, never analyzed.
+- **Miss and failure semantics are fail-loud / fail-closed.** No
+  `dataavailable` within `CHUNK_REQUEST_TIMEOUT_MS = 2000` counts a
+  miss; 3 consecutive misses → `chunk-stalled`, loop stopped (4.9 decides
+  the durable log shape). `QuotaExceededError` on write → stop that
+  stream's loop immediately (`chunk-quota-exceeded`, no retry spin
+  against a full quota); other rejections → `chunk-write-error` with
+  name/message preserved in state. The recorder is untouched — the
+  recording continues; the failure is visible (4.14 reports it per
+  stream), never silent. No new event type in 4.8 ("recorder errors" is
+  4.9's PLAN language).
+- **Restart honesty.** Already-written chunks persist (extension-owned
+  IDB); in-flight data the encoder holds but 4.8 has not yet requested
+  dies with the document — no API recovers it, none is fabricated. Poll
+  timers die with the document; 4.8 does not resurrect recorders. 4.9
+  logs the discontinuity; 4.13 re-segments; §5 decides restarts.
+- **4.13 seam.** `stopForStream()`/`stopAll()` stop the poll loops, but
+  the `ondataavailable` handler stays attached: the final `dataavailable`
+  from `recorder.stop()` is stored as a chunk like any other, and 4.13
+  must await it before declaring a segment finalized. `getChunkState()`
+  exposes exactly `{status, lastChunkIndex, lastWriteAtUtc,
+  consecutiveMisses, emptyPolls, lastErrorName, lastErrorMessage}`
+  (in-memory; the durable trace is the chunks) for 4.9/4.13/4.14.
+- **No new channel message.** Chunking starts automatically for every
+  successfully started stream (recorder.js kicks it off after
+  `recorder-start-streams` resolves — Start implies record; §5 surface
+  stays minimal). The kickoff is best-effort and wrapped: chunking can
+  never fail the streams or the channel response. The MSG_* vocabulary
+  and the nine event names are V1-pinned unchanged. `recorder.js`
+  references no media-capture APIs (4.1 boundary holds).
+- **No manifest widening** (chunk counts are derivable via key-prefix
+  count; standing rule). No concatenation, no Blob assembly, no
+  playback UI, no transcoding, no chunk deletion (4.13 / §2.9).
+- **Forward note for 4.13:** there is no awaitable for the final `stop()`
+  flush — the ondataavailable handler stores it as a chunk but 4.8
+  exposes no promise for it. 4.13's contract must address how finalization
+  waits for (or times out on) that last chunk. 4.13 must also tolerate
+  non-contiguous chunk indexes (failed writes leave gaps by design).

@@ -845,6 +845,19 @@ describe('2.5 retry policy', () => {
       // after the pins were evolved (2.x/3.x/4.1-4.6 precedent).
       '.autodev/evidence/4.7.review.md',
       '.autodev/evidence/4.7.behavior.md',
+      // Honest cumulative evolution: 4.8 (incremental chunk extraction)
+      // legitimately adds chunk_writer.js, wires the automatic chunking
+      // kickoff into recorder.js's recorder-start-streams handler, loads
+      // the new module in recorder.html, records the ## 4.8 decisions,
+      // and adds its test + evidence; its files join the allowlists.
+      'chunk_writer.js',
+      'tests/chunk_writer.test.js',
+      '.autodev/evidence/4.8.contract.md',
+      '.autodev/evidence/4.8.build.md',
+      // Honest cumulative evolution: 4.8's review/behavior evidence lands
+      // after the pins were evolved (2.x/3.x/4.1-4.7 precedent).
+      '.autodev/evidence/4.8.review.md',
+      '.autodev/evidence/4.8.behavior.md',
       // Honest cumulative evolution: 4.3's review/behavior evidence lands
       // after the pins were evolved (2.x/3.x/4.1/4.2 precedent).
       '.autodev/evidence/4.3.review.md',
