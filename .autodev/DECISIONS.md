@@ -101,3 +101,9 @@ Consequential engineering decisions with reasoning and evidence. Newest first.
    Vault and the managed browser's fill flow. They must never appear in chat,
    repo files, evidence, logs, or agent context. Browser tasks use the saved
    login; no agent ever sees the values.
+
+7. **Puppeteer `--load-extension` needs `--disable-extensions` removed.**
+   Puppeteer's default args include `--disable-extensions`, which silently
+   neuters `--load-extension` (no targets register, no errors). Extension-load
+   harnesses must pass `ignoreDefaultArgs: ['--disable-extensions']`
+   (found during 2.1 AC5 verification).
