@@ -219,8 +219,15 @@
       ]
     },
     "2.3": {
-      "commit": null,
-      "status": "PENDING"
+      "status": "DONE",
+      "commit": "ee3fd42",
+      "verification": "V1 PASS (28/28 node --test); V2 PASS (SW-SENDER 19/19 in real content-script isolated world: message shape/order/acks, no-listener queuing); adversarial review APPROVE (pump fix verified); behavioral BEHAVIOR_VERIFIED (39/39); 284/284 accumulated",
+      "deferred": [
+        "real chess.com injection -> 7.x/owner device",
+        "SW intake/writer/dedup/acks -> 2.4",
+        "retry policy/timeout -> 2.5",
+        "restore/lifecycle/status/retention -> 2.6-2.9"
+      ]
     },
     "2.4": {
       "commit": null,
