@@ -17,6 +17,7 @@ const path = require('node:path');
 
 const REPO = path.resolve(__dirname, '..');
 const BS_FMT = require(path.join(REPO, 'format_support.js'));
+const BS_POL = require(path.join(REPO, 'audio_policy.js'));
 const BS_DB = require(path.join(REPO, 'db.js'));
 const BS_ENV = require(path.join(REPO, 'event_envelope.js'));
 const BS_DEV = require(path.join(REPO, 'device_selection.js'));
@@ -25,8 +26,10 @@ const BS_REC = require(path.join(REPO, 'recorder.js'));
 
 // The Node test harness publishes the merged namespace on
 // globalThis (sender.js precedent): format_support resolves DB through
-// shared(), and the recorder resolves createFormatSupport the same way.
-const BS = Object.assign({}, BS_ENV, BS_FMT, BS_DEV, BS_CAP, BS_DB, BS_REC);
+// shared(), the recorder resolves createFormatSupport the same way, and
+// (4.7) format_support resolves the audio-content validators at call
+// time from the shared namespace.
+const BS = Object.assign({}, BS_ENV, BS_FMT, BS_DEV, BS_CAP, BS_DB, BS_REC, BS_POL);
 globalThis.BlindfoldSession = BS;
 
 const SID = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa';
@@ -245,7 +248,10 @@ describe('AC5 — requireValidManifestRecord', () => {
       streamStartedAtMonotonicMs: null,
       effectiveDeviceId: null,
       audioTrackPresent: null,
-      videoTrackPresent: null
+      videoTrackPresent: null,
+      // 4.7-owned (nullable):
+      screenAudioContent: null,
+      micAudioContent: null
     }, overrides || {});
   }
 
@@ -256,7 +262,7 @@ describe('AC5 — requireValidManifestRecord', () => {
     });
   }
 
-  it('accepts a valid record (4.5 shape + 4.6-widened fields)', () => {
+  it('accepts a valid record (4.5 shape + 4.6/4.7-widened fields)', () => {
     const fs = makeFs();
     assert.deepEqual(fs.requireValidManifestRecord(validRecord()), validRecord());
   });
@@ -349,7 +355,11 @@ describe('AC6 — recordSegmentFormat', () => {
       streamStartedAtMonotonicMs: null,
       effectiveDeviceId: null,
       audioTrackPresent: null,
-      videoTrackPresent: null
+      videoTrackPresent: null,
+      // 4.7-owned fields default to null when the 4.5/4.6 call shape is
+      // used (deliberate 13 → 15 widening).
+      screenAudioContent: null,
+      micAudioContent: null
     });
   });
 
@@ -552,6 +562,21 @@ describe('AC8 — diff discipline', () => {
       // after the pins were evolved (2.x/3.x/4.1-4.5 precedent).
       '.autodev/evidence/4.6.review.md',
       '.autodev/evidence/4.6.behavior.md',
+      // Honest cumulative evolution: 4.7 (audio-content policy)
+      // legitimately adds audio_policy.js, wires the classifications
+      // into stream_starter.js's manifest-write stage, widens
+      // format_support.js's manifest validator 13 → 15, loads the new
+      // module in recorder.html, resolves it in recorder.js, records
+      // the ## 4.7 decisions, and adds its test + evidence; its files
+      // join the allowlists.
+      'audio_policy.js',
+      'tests/audio_policy.test.js',
+      '.autodev/evidence/4.7.contract.md',
+      '.autodev/evidence/4.7.build.md',
+      // Honest cumulative evolution: 4.7's review/behavior evidence lands
+      // after the pins were evolved (2.x/3.x/4.1-4.6 precedent).
+      '.autodev/evidence/4.7.review.md',
+      '.autodev/evidence/4.7.behavior.md',
       '.autodev/DECISIONS.md',
       // Cumulative evolution: earlier suites' diff-discipline allowlists
       // are evolved by this task with justification comments.

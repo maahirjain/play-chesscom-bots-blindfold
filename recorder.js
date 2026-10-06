@@ -691,6 +691,30 @@ var BlindfoldSession = BlindfoldSession || {};
       return formatSupport;
     }
 
+    // ----------------------------------------------------------------
+    // 4.7's audio-content policy (PLAN.md §4.7). recorder.js wires it
+    // into the stream starter the same way as formatSupport; the policy
+    // itself is pure classification (no media APIs), resolved from the
+    // shared namespace. Absence is a wiring defect → plain Error, like
+    // createFormatSupport.
+    // ----------------------------------------------------------------
+
+    var audioPolicy = null;
+    function getAudioPolicy() {
+      if (audioPolicy === null) {
+        var BS = shared();
+        if (typeof BS.createAudioPolicy !== 'function') {
+          throw new Error('recorder: createAudioPolicy is unavailable');
+        }
+        if (o.audioPolicy !== undefined && o.audioPolicy !== null) {
+          audioPolicy = o.audioPolicy;
+        } else {
+          audioPolicy = BS.createAudioPolicy();
+        }
+      }
+      return audioPolicy;
+    }
+
     // 'recorder-get-formats' → { ok, formats, verifiedAtUtc }. The probe
     // always re-runs; an unavailable MediaRecorder becomes {ok:false}
     // data (never a thrown listener break).
@@ -753,6 +777,7 @@ var BlindfoldSession = BlindfoldSession || {};
             captureSelector: getCaptureSelector(),
             broker: o.broker !== undefined ? o.broker : createBrokerClient(),
             formatSupport: getFormatSupport(),
+            audioPolicy: getAudioPolicy(),
             getSessionId: function () { return sessionId; },
             getGameId: function () { return gameId; },
             nowUtcIso: o.selectorClock,
@@ -1041,6 +1066,9 @@ var BlindfoldSession = BlindfoldSession || {};
       // 4.5 surface (Node tests drive these directly; 4.6 calls
       // getFormatSupport().recordSegmentFormat at stream start).
       getFormatSupport: getFormatSupport,
+      // 4.7 surface (Node tests drive these directly; 4.7's
+      // classifications are wired into the stream starter).
+      getAudioPolicy: getAudioPolicy,
       // 4.6 surface (Node tests drive these directly; §5 drives the
       // recorder-start-streams channel message).
       getStreamStarter: getStreamStarter,

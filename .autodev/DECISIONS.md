@@ -677,3 +677,62 @@ Consequential engineering decisions with reasoning and evidence. Newest first.
   returned the method unbound → `TypeError: Illegal invocation` in the
   real document (V1's injected fakes never caught it). Repaired to a
   bound caller + V1 regression test.
+
+## 4.7 audio-content policy
+
+- **4.7 = policy, not acquisition.** 4.6 already acquires the screen
+  stream's audio wherever the platform offers it (tab mode requests tab
+  audio through the SW broker; screen mode requests `{audio:true}` via
+  getDisplayMedia). 4.7 classifies what that audio track *can* contain
+  by construction and writes the classification into the manifest —
+  it acquires nothing new, builds no mixer, and performs no content
+  analysis (the mission's raw-collection rule forbids it).
+- **New module `audio_policy.js`** (DOM-free, repo module pattern):
+  `classifyScreenAudio({captureMode, audioTrackPresent})` →
+  `'tab-audio' | 'system-audio' | 'none' | null`;
+  `assertMicAudio({audioTrackPresent, audioTrackCount})` →
+  `'device-only' | null`. Pure functions; classification can never fail
+  a stream (malformed input → `null`; a policy throw is swallowed by the
+  starter and yields nulls — V1-pinned).
+- **Mode×content matrix (contract §1.1):** tab+track → `'tab-audio'`
+  (the tab's rendered audio only — game sounds; system/extension audio
+  EXCLUDED by platform construction); screen+track → `'system-audio'`
+  (whatever the OS mixer delivers — MAY include game sounds and
+  extension speech IFF the user ticked "Share system audio"; the
+  checkbox is outside our observation boundary); either mode without a
+  track → `'none'`; unknown/unrecorded mode with a track → `null`
+  (never guessed).
+- **`speechSynthesis` routing fact (contract §1.3):** 3.4's spoken
+  announcements render through the platform TTS engine to the SYSTEM
+  audio output — not through any tab's audio pipeline, not a
+  MediaStream we own. Tab-mode capture therefore CANNOT contain
+  extension speech by platform construction; screen mode can, iff
+  system audio is shared. 4.7 must not fabricate an audio pipeline (no
+  routing speechSynthesis into a MediaStream — the platform offers
+  none to an extension offscreen document). 3.4's event log says what
+  was spoken and when; 4.7 says which recordings could possibly contain
+  the sound; correlation is §6/§7 territory.
+- **Acoustic bleed is a physical reality, not a defect (contract
+  §1.4).** The microphone transduces whatever sound reaches it,
+  including speaker output. No software suppression, filtering, or
+  echo-cancellation policy is attempted (no mic-constraint changes);
+  mitigation is the owner's (headphones, mic placement). Device caveat:
+  if the owner's selected "mic" is itself a loopback / stereo-mix /
+  virtual-cable device, the mic stream may contain game/extension audio
+  by DEVICE CONFIGURATION — traceable via `effectiveDeviceId` (4.6),
+  never second-guessed here.
+- **Manifest widens deliberately 13 → 15:** `screenAudioContent`
+  (screen records only) and `micAudioContent` (mic records only), both
+  nullable, uniform record shape (null elsewhere). format_support.js
+  resolves the validators at call time from the shared namespace
+  (sender.js precedent); absence is a wiring defect (plain Error).
+- **The "intentional mix" prohibition is testable:** V1 code-scan pin
+  over all seven offscreen scripts forbids `AudioContext`,
+  `webkitAudioContext`, `AudioDestinationNode`,
+  `createMediaStreamDestination`, and `AnalyserNode` in executable
+  code (4.6's separateness re-pinned). The mic recorder carries exactly
+  the mic device's audio track(s) — structural.
+- **No new event types, no new channel message:** classifications ride
+  `recorder-start-streams` responses + the manifest record; 4.14/§6.3
+  read from there. The MSG_* vocabulary and the nine event names are
+  V1-pinned unchanged.

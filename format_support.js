@@ -85,7 +85,10 @@ var BlindfoldSession = BlindfoldSession || {};
   // its keyPath is segmentId, so 4.6 mints it and adds the actual start
   // times). The 4.6 fields are nullable so 4.5's write API keeps its
   // shape; 4.6's stream starter always provides real values (V1-pinned).
-  // 4.10 (clockAnchor), 4.12 (timecode/offsets), and 4.13 (status,
+  // 4.7 adds the audio-content classifications (screenAudioContent on
+  // screen records, micAudioContent on mic records; null elsewhere —
+  // the record shape stays uniform, per the 4.6 precedent). 4.10
+  // (clockAnchor), 4.12 (timecode/offsets), and 4.13 (status,
   // finalizedAtUtc) own their fields and widen this validator when they
   // add them — the exact-keys convention rejects anything else, so the
   // widening is deliberate, not a silent break.
@@ -103,7 +106,10 @@ var BlindfoldSession = BlindfoldSession || {};
     'streamStartedAtMonotonicMs',
     'effectiveDeviceId',
     'audioTrackPresent',
-    'videoTrackPresent'
+    'videoTrackPresent',
+    // 4.7-owned:
+    'screenAudioContent',
+    'micAudioContent'
   ];
 
   var FILE_EXTENSIONS = ['.webm', '.mp4', '.m4a'];
@@ -307,9 +313,10 @@ var BlindfoldSession = BlindfoldSession || {};
     // ----------------------------------------------------------------
 
     // Exact-keys validator for a manifest record. Covers the eight
-    // 4.5-owned fields plus the six 4.6-owned fields (deliberate
-    // widening — see MANIFEST_KEYS). The 4.6 fields are nullable:
-    // recordSegmentFormat derives them only when 4.6 provides them.
+    // 4.5-owned fields plus the six 4.6-owned fields plus the two
+    // 4.7-owned audio-content classifications (deliberate widenings —
+    // see MANIFEST_KEYS). The 4.6/4.7 fields are nullable:
+    // recordSegmentFormat derives them only when provided.
     function requireValidManifestRecord(record) {
       requireExactKeys(record, MANIFEST_KEYS, 'recording_manifest record');
       requireUuidV4(record.segmentId, 'segmentId');
@@ -350,7 +357,33 @@ var BlindfoldSession = BlindfoldSession || {};
           typeof record.videoTrackPresent !== 'boolean') {
         throw new TypeError('videoTrackPresent must be a boolean or null');
       }
+      // 4.7-owned audio-content classifications. The vocabulary lives in
+      // audio_policy.js; resolved at call time from the shared namespace
+      // (sender.js precedent — this module never carries the policy's
+      // exports at load). Absence is a wiring defect: plain Error.
+      var ap = audioPolicyValidators();
+      ap.requireScreenAudioContent(record.screenAudioContent,
+        'screenAudioContent');
+      ap.requireMicAudioContent(record.micAudioContent, 'micAudioContent');
       return record;
+    }
+
+    // Resolve the 4.7 audio-content validators from the shared namespace
+    // at call time. recorder.html loads audio_policy.js, so the document
+    // always has them; Node tests merge the modules onto
+    // globalThis.BlindfoldSession (stream_starter.test.js precedent).
+    function audioPolicyValidators() {
+      var s = shared();
+      var reqScreen = s ? s.requireScreenAudioContent : null;
+      var reqMic = s ? s.requireMicAudioContent : null;
+      if (typeof reqScreen !== 'function' ||
+          typeof reqMic !== 'function') {
+        throw new Error('format_support: audio_policy.js is unavailable');
+      }
+      return {
+        requireScreenAudioContent: reqScreen,
+        requireMicAudioContent: reqMic
+      };
     }
 
     // Write one manifest record. The fileExtension is derived from the
@@ -361,6 +394,11 @@ var BlindfoldSession = BlindfoldSession || {};
     // effectiveDeviceId, audioTrackPresent, videoTrackPresent) are
     // accepted when provided and default to null otherwise — the
     // deliberate 4.6 widening keeps 4.5's call shape intact.
+    //
+    // 4.7's fields (screenAudioContent, micAudioContent) are accepted
+    // when provided and default to null otherwise — the same deliberate
+    // widening pattern. 4.7's stream starter provides the real
+    // classifications; null means "not applicable / not observed."
     //
     // Pre-session inertness (2.x/3.x/4.2 precedent): null/undefined
     // sessionId or gameId → plain data {ok:false, error:'no-session'},
@@ -377,6 +415,9 @@ var BlindfoldSession = BlindfoldSession || {};
       }
       var record;
       try {
+        // The 4.7 validators come from audio_policy.js (call-time
+        // shared-namespace resolution); absence is a wiring defect.
+        var ap = audioPolicyValidators();
         record = {
           segmentId: requireUuidV4(input.segmentId, 'segmentId'),
           sessionId: requireUuidV4(input.sessionId, 'sessionId'),
@@ -403,7 +444,13 @@ var BlindfoldSession = BlindfoldSession || {};
             requireBoolean(input.audioTrackPresent, 'audioTrackPresent'),
           videoTrackPresent: (input.videoTrackPresent === undefined ||
             input.videoTrackPresent === null) ? null :
-            requireBoolean(input.videoTrackPresent, 'videoTrackPresent')
+            requireBoolean(input.videoTrackPresent, 'videoTrackPresent'),
+          // 4.7-owned (nullable; 4.7's stream starter provides the real
+          // classifications at manifest-write time; null elsewhere).
+          screenAudioContent: ap.requireScreenAudioContent(
+            input.screenAudioContent, 'screenAudioContent'),
+          micAudioContent: ap.requireMicAudioContent(
+            input.micAudioContent, 'micAudioContent')
         };
         requireValidManifestRecord(record);
       } catch (e) {

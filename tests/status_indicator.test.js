@@ -486,6 +486,21 @@ describe('AC10–AC12 — diff discipline and scope', () => {
       // after the pins were evolved (2.x/3.x/4.1-4.5 precedent).
       '.autodev/evidence/4.6.review.md',
       '.autodev/evidence/4.6.behavior.md',
+      // Honest cumulative evolution: 4.7 (audio-content policy)
+      // legitimately adds audio_policy.js, wires the classifications
+      // into stream_starter.js's manifest-write stage, widens
+      // format_support.js's manifest validator 13 → 15, loads the new
+      // module in recorder.html, resolves it in recorder.js, records
+      // the ## 4.7 decisions, and adds its test + evidence; its files
+      // join the allowlists.
+      'audio_policy.js',
+      'tests/audio_policy.test.js',
+      '.autodev/evidence/4.7.contract.md',
+      '.autodev/evidence/4.7.build.md',
+      // Honest cumulative evolution: 4.7's review/behavior evidence lands
+      // after the pins were evolved (2.x/3.x/4.1-4.6 precedent).
+      '.autodev/evidence/4.7.review.md',
+      '.autodev/evidence/4.7.behavior.md',
       // Honest cumulative evolution: 4.3's review/behavior evidence lands
       // after the pins were evolved (2.x/3.x/4.1/4.2 precedent).
       '.autodev/evidence/4.3.review.md',

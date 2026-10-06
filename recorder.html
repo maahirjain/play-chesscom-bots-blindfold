@@ -1,7 +1,8 @@
 <!DOCTYPE html>
 <!-- recorder.html — task 4.1 (PLAN.md §4.1) + task 4.2 (PLAN.md §4.2) +
      task 4.3 (PLAN.md §4.3) + task 4.4 (PLAN.md §4.4) +
-     task 4.5 (PLAN.md §4.5) + task 4.6 (PLAN.md §4.6).
+     task 4.5 (PLAN.md §4.5) + task 4.6 (PLAN.md §4.6) +
+     task 4.7 (PLAN.md §4.7).
      MV3 offscreen document: the extension's dedicated recording context.
      Loads event_envelope.js (envelope construction for the 4.2/4.3/4.4
      events), db.js (extension-owned IndexedDB — 4.5's recording
@@ -9,8 +10,10 @@
      path), device_selection.js (4.2 microphone + 4.4 webcam
      selection/permission), capture_selection.js (4.3 screen/tab capture
      selection/permission), format_support.js (4.5 format verification +
-     manifest writer), stream_starter.js (4.6 stream acquisition +
-     MediaRecorder start), then recorder.js. Created by the service
+     manifest writer), audio_policy.js (4.7 audio-content policy —
+     pure classification, no media APIs), stream_starter.js (4.6 stream
+     acquisition + MediaRecorder start, 4.7 classification at
+     manifest-write time), then recorder.js. Created by the service
      worker via chrome.offscreen.createDocument(); never opened by the
      user. -->
 <html>
@@ -24,6 +27,7 @@
   <script src="device_selection.js"></script>
   <script src="capture_selection.js"></script>
   <script src="format_support.js"></script>
+  <script src="audio_policy.js"></script>
   <script src="stream_starter.js"></script>
   <script src="recorder.js"></script>
 </body>

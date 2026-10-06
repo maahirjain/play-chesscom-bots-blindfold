@@ -23,6 +23,7 @@ const path = require('node:path');
 
 const REPO = path.resolve(__dirname, '..');
 const BS_STR = require(path.join(REPO, 'stream_starter.js'));
+const BS_POL = require(path.join(REPO, 'audio_policy.js'));
 const BS_FMT = require(path.join(REPO, 'format_support.js'));
 const BS_DB = require(path.join(REPO, 'db.js'));
 const BS_ENV = require(path.join(REPO, 'event_envelope.js'));
@@ -34,7 +35,7 @@ const BS_REC = require(path.join(REPO, 'recorder.js'));
 // globalThis (sender.js precedent): recorder.js resolves
 // createStreamStarter the same way.
 const BS = Object.assign({},
-  BS_ENV, BS_STR, BS_FMT, BS_DEV, BS_CAP, BS_DB, BS_REC);
+  BS_ENV, BS_STR, BS_FMT, BS_DEV, BS_CAP, BS_DB, BS_REC, BS_POL);
 globalThis.BlindfoldSession = BS;
 
 const SID = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa';
@@ -992,7 +993,12 @@ describe('AC7 — recorder-start-streams channel message', () => {
 // ------------------------------------------------------------------
 
 describe('AC8 — manifest widening is deliberate; no new event types', () => {
-  it('MANIFEST_KEYS grew by exactly the six 4.6-owned fields', () => {
+  it('MANIFEST_KEYS grew by exactly the six 4.6-owned + two 4.7-owned fields', () => {
+    // Honest cumulative evolution (4.7): the manifest validator widens
+    // deliberately 13 → 15 with the two 4.7-owned audio-content
+    // classifications (screenAudioContent, micAudioContent) — see
+    // .autodev/evidence/4.7.contract.md §2. The 4.5/4.6 fields below
+    // are unchanged.
     const keys = BS.MANIFEST_KEYS;
     const extra = keys.filter((k) => ![
       'segmentId', 'sessionId', 'gameId', 'streamKind',
@@ -1000,9 +1006,10 @@ describe('AC8 — manifest widening is deliberate; no new event types', () => {
     ].includes(k));
     assert.deepEqual(extra.sort(), [
       'audioTrackPresent', 'effectiveDeviceId', 'streamStartedAtMonotonicMs',
-      'streamStartedAtUtc', 'videoTrackPresent'
+      'streamStartedAtUtc', 'videoTrackPresent',
+      'screenAudioContent', 'micAudioContent'
     ].sort());
-    assert.equal(keys.length, 13);
+    assert.equal(keys.length, 15);
   });
 
   it('recordSegmentFormat accepts the widened shape (real values)', async () => {
@@ -1073,7 +1080,10 @@ describe('AC8 — manifest widening is deliberate; no new event types', () => {
       actualMimeType: 'video/webm', fileExtension: '.webm',
       createdAtUtc: '2026-10-06T12:00:00.000Z',
       streamStartedAtUtc: null, streamStartedAtMonotonicMs: null,
-      effectiveDeviceId: null, audioTrackPresent: null, videoTrackPresent: null
+      effectiveDeviceId: null, audioTrackPresent: null, videoTrackPresent: null,
+      // Honest cumulative evolution (4.7): the two 4.7-owned
+      // audio-content classifications join the exact-keys shape.
+      screenAudioContent: null, micAudioContent: null
     };
     assert.doesNotThrow(() => fst.requireValidManifestRecord(base));
     assert.throws(() => fst.requireValidManifestRecord(
@@ -1127,6 +1137,21 @@ describe('diff-discipline pins (4.6 evolution)', () => {
       // after the pins were evolved (2.x/3.x/4.1-4.5 precedent).
       '.autodev/evidence/4.6.review.md',
       '.autodev/evidence/4.6.behavior.md',
+      // Honest cumulative evolution: 4.7 (audio-content policy)
+      // legitimately adds audio_policy.js, wires the classifications
+      // into stream_starter.js's manifest-write stage, widens
+      // format_support.js's manifest validator 13 → 15, loads the new
+      // module in recorder.html, resolves it in recorder.js, records
+      // the ## 4.7 decisions, and adds its test + evidence; its files
+      // join the allowlists.
+      'audio_policy.js',
+      'tests/audio_policy.test.js',
+      '.autodev/evidence/4.7.contract.md',
+      '.autodev/evidence/4.7.build.md',
+      // Honest cumulative evolution: 4.7's review/behavior evidence lands
+      // after the pins were evolved (2.x/3.x/4.1-4.6 precedent).
+      '.autodev/evidence/4.7.review.md',
+      '.autodev/evidence/4.7.behavior.md',
       '.autodev/DECISIONS.md',
       // Cumulative evolution: earlier suites' diff-discipline allowlists
       // are evolved by this task with justification comments.

@@ -115,6 +115,11 @@ var BlindfoldSession = BlindfoldSession || {};
   //   captureSelector— the 4.3 capture selector instance
   //   broker         — SW broker client {resolveTargetTab, getStreamId}
   //   formatSupport  — 4.5's {verifyFormats, recordSegmentFormat}
+  //   audioPolicy    — 4.7's {classifyScreenAudio, assertMicAudio};
+  //                    injected for tests, else resolved lazily from the
+  //                    document's shared namespace at call time.
+  //                    Classification can never fail a stream (nulls on
+  //                    any failure).
   //   getSessionId / getGameId — thunks (pre-session inertness)
   //   nowUtcIso      — () => UTC ISO string (injectable clock)
   //   perfNowMs      — () => performance.now() (injectable clock)
@@ -186,6 +191,62 @@ var BlindfoldSession = BlindfoldSession || {};
     var captureSelector = o.captureSelector || null;
     var broker = o.broker || null;
     var formatSupport = o.formatSupport || null;
+    var audioPolicyOpt = o.audioPolicy || null;
+
+    // 4.7's audio-content policy ({classifyScreenAudio, assertMicAudio}).
+    // Injected for tests; in the offscreen document resolved lazily from
+    // the shared namespace at call time (recorder.js passes it like
+    // formatSupport). Classification can NEVER fail a stream: an
+    // unavailable policy or a policy throw yields null classifications,
+    // recorded honestly.
+    function readAudioPolicy() {
+      if (audioPolicyOpt &&
+          typeof audioPolicyOpt.classifyScreenAudio === 'function' &&
+          typeof audioPolicyOpt.assertMicAudio === 'function') {
+        return audioPolicyOpt;
+      }
+      var g = readGlobal();
+      var ns = g ? g.BlindfoldSession : null;
+      if (ns && typeof ns.createAudioPolicy === 'function') {
+        try {
+          var ap = ns.createAudioPolicy();
+          if (ap && typeof ap.classifyScreenAudio === 'function' &&
+              typeof ap.assertMicAudio === 'function') {
+            audioPolicyOpt = ap;
+            return ap;
+          }
+        } catch (e) { /* fall through to nulls */ }
+      }
+      return null;
+    }
+
+    // Classify this stream's audio content (4.7). Pure and infallible
+    // from the caller's perspective: any failure → {null, null}.
+    function classifyStreamAudio(kind, acq) {
+      var out = { screenAudioContent: null, micAudioContent: null };
+      try {
+        var ap = readAudioPolicy();
+        if (!ap) {
+          return out;
+        }
+        var presence = !!acq.audioTrackPresent;
+        if (kind === 'screen') {
+          out.screenAudioContent = ap.classifyScreenAudio({
+            captureMode: (acq.captureMode === undefined) ?
+              null : acq.captureMode,
+            audioTrackPresent: presence
+          });
+        } else if (kind === 'microphone') {
+          out.micAudioContent = ap.assertMicAudio({
+            audioTrackPresent: presence,
+            audioTrackCount: (typeof acq.audioTrackCount === 'number') ?
+              acq.audioTrackCount : null
+          });
+        }
+        // Webcam records carry null for both (uniform record shape).
+      } catch (e) { /* classification can never fail a stream */ }
+      return out;
+    }
 
     function getSessionId() {
       return (typeof o.getSessionId === 'function') ? o.getSessionId() : null;
@@ -289,6 +350,7 @@ var BlindfoldSession = BlindfoldSession || {};
     function observeTracks(stream) {
       var audio = false;
       var video = false;
+      var audioTrackCount = 0;
       var tracks = [];
       try {
         tracks = (stream && typeof stream.getTracks === 'function') ?
@@ -297,11 +359,15 @@ var BlindfoldSession = BlindfoldSession || {};
       for (var i = 0; i < tracks.length; i++) {
         try {
           var kind = tracks[i] ? tracks[i].kind : null;
-          if (kind === 'audio') { audio = true; }
+          if (kind === 'audio') { audio = true; audioTrackCount++; }
           if (kind === 'video') { video = true; }
         } catch (e) { /* ignore */ }
       }
-      return { audioTrackPresent: audio, videoTrackPresent: video };
+      return {
+        audioTrackPresent: audio,
+        videoTrackPresent: video,
+        audioTrackCount: audioTrackCount
+      };
     }
 
     // Acquire one device stream (mic or camera). Returns
@@ -336,7 +402,8 @@ var BlindfoldSession = BlindfoldSession || {};
                   stream: stream,
                   effectiveDeviceId: selection,
                   audioTrackPresent: presence.audioTrackPresent,
-                  videoTrackPresent: presence.videoTrackPresent
+                  videoTrackPresent: presence.videoTrackPresent,
+                  audioTrackCount: presence.audioTrackCount
                 };
               }
               // No selection: the system default was used. Record the
@@ -348,7 +415,8 @@ var BlindfoldSession = BlindfoldSession || {};
                       stream: stream,
                       effectiveDeviceId: effectiveDeviceId,
                       audioTrackPresent: presence.audioTrackPresent,
-                      videoTrackPresent: presence.videoTrackPresent
+                      videoTrackPresent: presence.videoTrackPresent,
+                      audioTrackCount: presence.audioTrackCount
                     };
                   }, function (err) {
                     stopAllTracks(stream);
@@ -360,7 +428,8 @@ var BlindfoldSession = BlindfoldSession || {};
                 stream: stream,
                 effectiveDeviceId: effectiveDeviceId,
                 audioTrackPresent: presence.audioTrackPresent,
-                videoTrackPresent: presence.videoTrackPresent
+                videoTrackPresent: presence.videoTrackPresent,
+                audioTrackCount: presence.audioTrackCount
               };
             });
         });
@@ -378,14 +447,21 @@ var BlindfoldSession = BlindfoldSession || {};
         })
         .then(function (st) {
           var mode = (st && typeof st.captureMode === 'string') ? st.captureMode : null;
+          var p;
           if (mode === 'tab') {
-            return acquireTabStream(md);
+            p = acquireTabStream(md);
+          } else if (mode === 'screen') {
+            p = acquireDisplayStream();
+          } else {
+            throw codedError('no-capture-mode',
+              'stream_starter: no capture mode selected');
           }
-          if (mode === 'screen') {
-            return acquireDisplayStream();
-          }
-          throw codedError('no-capture-mode',
-            'stream_starter: no capture mode selected');
+          // 4.7 needs the capture mode at manifest-write time (the
+          // screen-audio classification is mode-dependent).
+          return p.then(function (acq) {
+            acq.captureMode = mode;
+            return acq;
+          });
         });
     }
 
@@ -428,7 +504,8 @@ var BlindfoldSession = BlindfoldSession || {};
             stream: stream,
             effectiveDeviceId: null, // tab ids are unstable; never persisted (4.3)
             audioTrackPresent: presence.audioTrackPresent,
-            videoTrackPresent: presence.videoTrackPresent
+            videoTrackPresent: presence.videoTrackPresent,
+            audioTrackCount: presence.audioTrackCount
           };
         });
     }
@@ -449,7 +526,8 @@ var BlindfoldSession = BlindfoldSession || {};
             stream: stream,
             effectiveDeviceId: null,
             audioTrackPresent: presence.audioTrackPresent,
-            videoTrackPresent: presence.videoTrackPresent
+            videoTrackPresent: presence.videoTrackPresent,
+            audioTrackCount: presence.audioTrackCount
           };
         }, function (err) {
           // §6.2 honesty: a hidden offscreen document may lack the
@@ -541,6 +619,10 @@ var BlindfoldSession = BlindfoldSession || {};
             stopAllTracks(acq.stream);
             return failResult('write-manifest', e);
           }
+          // 4.7: classify what this stream's audio CAN contain, from the
+          // real acquisition observations (capture mode + track
+          // presence). Never content analysis; never fails the stream.
+          var audioClass = classifyStreamAudio(kind, acq);
           var record = {
             segmentId: segmentId,
             sessionId: getSessionId(),
@@ -552,7 +634,11 @@ var BlindfoldSession = BlindfoldSession || {};
             streamStartedAtMonotonicMs: startedAtMonotonicMs,
             effectiveDeviceId: acq.effectiveDeviceId,
             audioTrackPresent: acq.audioTrackPresent,
-            videoTrackPresent: acq.videoTrackPresent
+            videoTrackPresent: acq.videoTrackPresent,
+            // 4.7: audio-content policy classification (by construction,
+            // never content analysis). Pure — cannot fail the stream.
+            screenAudioContent: audioClass.screenAudioContent,
+            micAudioContent: audioClass.micAudioContent
           };
           return Promise.resolve()
             .then(function () { return fs.recordSegmentFormat(record); })
@@ -586,7 +672,11 @@ var BlindfoldSession = BlindfoldSession || {};
                 actualMimeType: actualMimeType,
                 fileExtension: wr.fileExtension,
                 audioTrackPresent: acq.audioTrackPresent,
-                videoTrackPresent: acq.videoTrackPresent
+                videoTrackPresent: acq.videoTrackPresent,
+                // 4.7: the audio-content classifications ride the
+                // response (no new event types, no new channel).
+                screenAudioContent: audioClass.screenAudioContent,
+                micAudioContent: audioClass.micAudioContent
               };
             }, function (err) {
               try { recorder.stop(); } catch (w) { /* ignore */ }
