@@ -1,0 +1,699 @@
+// Task 2.4 (PLAN.md §2.4): V1 verification for writer.js — the
+// transactional event writer (dedup by eventId, commit-awaited acks).
+//
+// Hand-rolled in-memory IndexedDB fake (the repo stays dependency-free —
+// no fake-indexeddb). The fake consumes the REAL DB.SCHEMA, so schema
+// drift breaks here by design. Documented fake limits (see makeFakeIDB):
+// the fake does NOT model overlapping-transaction serialization — the
+// §2.6 no-lock concurrency argument is verified at V2 against real
+// IndexedDB (AC13). It also does not model structured-clone
+// serialization (records are stored by reference).
+//
+// Real-transport behavior is covered at V2 in the puppeteer harness
+// (~/workspace/tools/ext-verify/sw-writer.js).
+
+const assert = require('node:assert/strict');
+const { describe, it, beforeEach } = require('node:test');
+const fs = require('node:fs');
+const path = require('node:path');
+const { execSync } = require('node:child_process');
+
+const ROOT = path.join(__dirname, '..');
+
+// Load order: event_envelope.js, then db.js; publish the merged namespace
+// on globalThis (writer.js reads both at call time via the shared
+// namespace), then require writer.js and merge its exports.
+const Envelope = require('../event_envelope.js');
+const DBModule = require('../db.js');
+const merged = Object.assign({}, Envelope, DBModule);
+const priorGlobal = globalThis.BlindfoldSession;
+globalThis.BlindfoldSession = merged;
+const WriterExports = require('../writer.js');
+Object.assign(merged, WriterExports);
+const BlindfoldSession = merged;
+
+const WRITER_PATH = path.join(ROOT, 'writer.js');
+const writerSource = fs.readFileSync(WRITER_PATH, 'utf8');
+// Strip line and block comments so static checks see code tokens only.
+const codeOnly = writerSource
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .replace(/\/\/.*$/gm, '');
+
+// Deterministic UUID v4 fixtures (version nibble 4, variant nibble 8-b).
+const SID1 = 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11';
+const SID2 = 'b1f2a345-6c78-4d9e-8f01-23456789abcd';
+const EID1 = 'c2f3a456-7d89-4e0f-9123-456789abcdef';
+const EID2 = 'd3f4b567-8e9a-4f01-a234-56789abcdef0';
+const EID3 = 'e4f5c678-9f0b-4012-b345-6789abcdef01';
+
+const tick = () => new Promise((resolve) => setImmediate(resolve));
+
+// ------------------------------------------------------------------
+// In-memory IndexedDB fake.
+// ------------------------------------------------------------------
+// Implements exactly the IDB surface writer.js touches:
+//   indexedDB.open(name, version) -> request {onupgradeneeded, onsuccess,
+//     onerror, result, error}
+//   db.transaction(storeNames, mode) -> tx {objectStore(name), abort(),
+//     oncomplete, onerror, onabort}
+//   db.objectStoreNames.contains(name); db.createObjectStore(name, {keyPath})
+//   upgradeTx.objectStore(name)
+//   store.get(key) / store.put(record) -> request {onsuccess, onerror,
+//     result, error}; store.indexNames.contains(name);
+//   store.createIndex(name, keyPath, {unique})
+// KeyPaths are extracted from the REAL DB.SCHEMA (string and compound
+// forms). A record missing its keyPath value makes put() throw
+// synchronously with name 'DataError' (mirrors the real DOMException).
+//
+// Transactional fidelity: writes go to a per-tx journal and are applied
+// to the committed stores ONLY on tx commit; abort discards the journal.
+// Reads see the tx's own journaled writes first (last write wins), then
+// committed state — mirroring real IndexedDB. This is what makes the AC9
+// atomicity tests meaningful.
+//
+// Failure injection:
+//   fake.failNextPut = {name, message} — the next put() request fails.
+//   fake.failPutOnStore = '<store>' — the next put() to that store fails
+//     (lets a test fail the second put in a transaction).
+//   fake.brokenStores.add('<store>') — db.transaction() throws
+//     NotFoundError synchronously for that store (schema-drift surface).
+// Ordering observability: fake.onTxComplete() is invoked synchronously
+// before the fake fires tx.oncomplete, so tests can assert the ack came
+// from the commit event.
+function makeFakeIDB() {
+  const schema = BlindfoldSession.DB.SCHEMA;
+  const stores = {}; // name -> { keyPath, records: Map, indexes: {} }
+  const fake = {
+    failNextPut: null,
+    failPutOnStore: null,
+    brokenStores: new Set(),
+    onTxComplete: null,
+    _stores: stores,
+    open: function (name, version) {
+      const req = { onsuccess: null, onerror: null, onupgradeneeded: null,
+                    result: undefined, error: undefined };
+      queueMicrotask(() => {
+        const db = makeFakeDB();
+        req.result = db;
+        try {
+          if (req.onupgradeneeded) {
+            req.onupgradeneeded({ target: req, oldVersion: 0, newVersion: version });
+          }
+          if (req.onsuccess) req.onsuccess({ target: req });
+        } catch (e) {
+          req.error = e;
+          if (req.onerror) req.onerror({ target: req });
+        }
+      });
+      return req;
+    }
+  };
+
+  function dataError() {
+    const e = new Error('fake: keyPath value missing');
+    e.name = 'DataError';
+    return e;
+  }
+  function notFoundError(what) {
+    const e = new Error('fake: ' + what + ' not found');
+    e.name = 'NotFoundError';
+    return e;
+  }
+
+  function extractKey(keyPath, record) {
+    let raw;
+    if (Array.isArray(keyPath)) {
+      raw = keyPath.map((k) => record[k]);
+      if (raw.some((v) => v === undefined)) throw dataError();
+    } else {
+      raw = record[keyPath];
+      if (raw === undefined) throw dataError();
+    }
+    return JSON.stringify(raw);
+  }
+
+  function makeFakeDB() {
+    // Pre-create every store from the real schema (fresh per open).
+    for (const spec of schema.stores) {
+      if (!stores[spec.name]) {
+        stores[spec.name] = { keyPath: spec.keyPath, records: new Map(), indexes: {} };
+        for (const idx of spec.indexes) stores[spec.name].indexes[idx.name] = idx;
+      }
+    }
+    return {
+      objectStoreNames: { contains: (n) => !!stores[n] },
+      createObjectStore: (n, opts) => {
+        if (!stores[n]) stores[n] = { keyPath: opts.keyPath, records: new Map(), indexes: {} };
+        return makeFakeStore(n, null);
+      },
+      transaction: (storeNames, mode) => makeFakeTx(storeNames, mode),
+      close: () => {}
+    };
+  }
+
+  function makeFakeStore(name, tx) {
+    const store = stores[name];
+    function journaledGet(key) {
+      const k = JSON.stringify(key);
+      if (tx) {
+        for (let i = tx._journal.length - 1; i >= 0; i--) {
+          const w = tx._journal[i];
+          if (w.store === name && w.key === k) return w.record;
+        }
+      }
+      return store.records.get(k);
+    }
+    return {
+      indexNames: { contains: (n) => !!store.indexes[n] },
+      createIndex: (n, kp, opts) => { store.indexes[n] = { name: n, keyPath: kp, unique: !!opts.unique }; },
+      get: (key) => {
+        const req = { onsuccess: null, onerror: null, result: undefined, error: undefined };
+        tx._pending++;
+        queueMicrotask(() => {
+          tx._pending--;
+          req.result = journaledGet(key);
+          if (req.onsuccess) req.onsuccess({ target: req });
+          queueMicrotask(() => maybeComplete(tx));
+        });
+        return req;
+      },
+      put: (record) => {
+        const req = { onsuccess: null, onerror: null, result: undefined, error: undefined };
+        // Synchronous DataError for a missing keyPath (mirrors real IDB).
+        const key = extractKey(store.keyPath, record); // throws -> caller wraps
+        tx._pending++;
+        queueMicrotask(() => {
+          tx._pending--;
+          const shouldFail = fake.failNextPut || (fake.failPutOnStore === name);
+          if (shouldFail) {
+            const spec = fake.failNextPut || { name: 'QuotaExceededError', message: 'fake: injected put failure' };
+            fake.failNextPut = null;
+            if (fake.failPutOnStore === name) fake.failPutOnStore = null;
+            const err = new Error(spec.message || 'fake: injected put failure');
+            err.name = spec.name || 'Error';
+            req.error = err;
+            if (req.onerror) req.onerror({ target: req });
+          } else {
+            tx._journal.push({ store: name, key: key, record: record });
+            req.result = record[Array.isArray(store.keyPath) ? store.keyPath[0] : store.keyPath];
+            if (req.onsuccess) req.onsuccess({ target: req });
+          }
+          queueMicrotask(() => maybeComplete(tx));
+        });
+        return req;
+      }
+    };
+  }
+
+  function makeFakeTx(storeNames, mode) {
+    const names = Array.isArray(storeNames) ? storeNames : [storeNames];
+    for (const n of names) {
+      if (!stores[n] || fake.brokenStores.has(n)) throw notFoundError('object store ' + n);
+    }
+    const tx = {
+      _pending: 0,
+      _aborted: false,
+      _completed: false,
+      _journal: [],
+      oncomplete: null,
+      onerror: null,
+      onabort: null,
+      objectStore: (n) => {
+        if (!stores[n] || fake.brokenStores.has(n)) throw notFoundError('object store ' + n);
+        return makeFakeStore(n, tx);
+      },
+      abort: () => {
+        if (tx._aborted || tx._completed) return;
+        tx._aborted = true;
+        tx._journal = []; // discard uncommitted writes
+        queueMicrotask(() => { if (tx.onabort) tx.onabort({ target: tx }); });
+      }
+    };
+    return tx;
+  }
+
+  function maybeComplete(tx) {
+    if (!tx._aborted && !tx._completed && tx._pending === 0) {
+      tx._completed = true;
+      // Commit: apply the journal to the committed stores.
+      for (const w of tx._journal) {
+        stores[w.store].records.set(w.key, w.record);
+      }
+      tx._journal = [];
+      if (fake.onTxComplete) fake.onTxComplete();
+      if (tx.oncomplete) tx.oncomplete({ target: tx });
+    }
+  }
+
+  return fake;
+}
+
+// Install a fresh fake indexedDB and clear db.js's cached handle.
+function installFakeIDB() {
+  const fake = makeFakeIDB();
+  globalThis.indexedDB = fake;
+  BlindfoldSession.DB.closeDatabase();
+  return fake;
+}
+
+function uninstallIDB() {
+  delete globalThis.indexedDB;
+  BlindfoldSession.DB.closeDatabase();
+}
+
+// --- Event fixtures: genuine 11-key envelopes via event_envelope.js ---
+let anchor = null;
+let sourceSeq = 0;
+function testAnchor() {
+  if (!anchor) anchor = BlindfoldSession.captureClockAnchor();
+  return anchor;
+}
+function makeEnvelope(overrides) {
+  const a = testAnchor();
+  // createEvent always mints its own eventId; callers that need a
+  // deterministic ID pass eventId and get it applied post-creation.
+  const { eventId: wantedId, ...rest } = overrides || {};
+  const env = BlindfoldSession.createEvent(Object.assign({
+    eventType: 'move_confirmed',
+    sessionId: SID1,
+    gameId: null,
+    sourceContext: 'content_script',
+    sourceSeq: sourceSeq++,
+    clockSegmentId: a.segmentId,
+    monotonicMs: a.monotonicMs + sourceSeq,
+    payload: { from: 'e2', to: 'e4', promotion: null }
+  }, rest));
+  if (wantedId !== undefined) {
+    return Object.freeze(Object.assign({}, env, { eventId: wantedId }));
+  }
+  return env;
+}
+function storedRecord(fake, eventId) {
+  return fake._stores.events.records.get(JSON.stringify(eventId));
+}
+function seqState(fake, sessionId) {
+  return fake._stores.sequence_state.records.get(JSON.stringify(sessionId));
+}
+// Stores are created lazily on indexedDB.open(); a test that never
+// triggers a write sees no store at all — which also means "nothing written".
+function storeSize(fake, name) {
+  const s = fake._stores[name];
+  return s ? s.records.size : 0;
+}
+
+beforeEach(() => {
+  uninstallIDB();
+  delete globalThis.chrome;
+  sourceSeq = 0;
+});
+
+// ------------------------------------------------------------------
+// AC1: module loads in Node; exports; static guards.
+// ------------------------------------------------------------------
+describe('AC1 — module shape and static guards', () => {
+  it('loads in Node with no chrome global', () => {
+    assert.equal(typeof globalThis.chrome, 'undefined');
+    assert.equal(typeof BlindfoldSession.writeEvent, 'function');
+    assert.equal(typeof BlindfoldSession.installWriterListener, 'function');
+    assert.equal(BlindfoldSession.MESSAGE_KIND, 'event');
+  });
+
+  it('no chrome.* literal or localStorage outside comments', () => {
+    assert.ok(!/chrome\./.test(codeOnly), 'found chrome. literal in code');
+    assert.ok(!/localStorage/.test(codeOnly), 'found localStorage in code');
+  });
+
+  it('no indexedDB read at load time (module required fine without it)', () => {
+    assert.equal(typeof globalThis.indexedDB, 'undefined');
+    assert.ok(BlindfoldSession.DB, 'DB namespace present');
+  });
+});
+
+// ------------------------------------------------------------------
+// AC2: malformed kind:'event' messages; writeEvent TypeError.
+// ------------------------------------------------------------------
+describe('AC2 — malformed messages', () => {
+  function installListenerHarness() {
+    const calls = [];
+    const listeners = [];
+    globalThis.chrome = {
+      runtime: {
+        onMessage: { addListener: (fn) => listeners.push(fn) }
+      }
+    };
+    BlindfoldSession.installWriterListener();
+    return { calls, listeners };
+  }
+
+  it('writeEvent(nonObject) throws TypeError synchronously', () => {
+    for (const bad of [null, undefined, 42, 'event', []]) {
+      assert.throws(() => BlindfoldSession.writeEvent(bad), TypeError);
+    }
+  });
+
+  it('listener: kind:event with missing event -> malformed-message, nothing written', async () => {
+    const fake = installFakeIDB();
+    const { listeners } = installListenerHarness();
+    const responses = [];
+    const ret = listeners[0]({ kind: 'event' }, {}, (ack) => responses.push(ack));
+    assert.equal(ret, false, 'sync response should return false');
+    assert.deepStrictEqual(responses, [{ ok: false, eventId: null, error: 'malformed-message' }]);
+    await tick();
+    assert.equal(storeSize(fake, 'events'), 0, 'nothing written');
+    assert.equal(storeSize(fake, 'sequence_state'), 0, 'counter untouched');
+  });
+
+  it('listener: kind:event with non-object event -> malformed-message', async () => {
+    installFakeIDB();
+    const { listeners } = installListenerHarness();
+    const responses = [];
+    listeners[0]({ kind: 'event', event: 'nope' }, {}, (ack) => responses.push(ack));
+    assert.deepStrictEqual(responses, [{ ok: false, eventId: null, error: 'malformed-message' }]);
+  });
+});
+
+// ------------------------------------------------------------------
+// AC3: invalid envelope -> invalid-envelope; stores untouched.
+// ------------------------------------------------------------------
+describe('AC3 — envelope validation boundary', () => {
+  it('envelope missing eventId -> invalid-envelope, stores untouched', async () => {
+    const fake = installFakeIDB();
+    const env = makeEnvelope();
+    const broken = Object.assign({}, env);
+    delete broken.eventId;
+    const ack = await BlindfoldSession.writeEvent(broken);
+    assert.equal(ack.ok, false);
+    assert.equal(ack.error, 'invalid-envelope');
+    assert.equal(ack.eventId, null, 'no extractable ID');
+    assert.equal(storeSize(fake, 'events'), 0);
+    assert.equal(storeSize(fake, 'sequence_state'), 0);
+  });
+
+  it('bad eventType (not flat snake_case) -> invalid-envelope with the intake eventId echoed', async () => {
+    installFakeIDB();
+    const env = makeEnvelope({ eventId: EID1 });
+    const broken = Object.assign({}, env, { eventType: 'NotASnakeCaseType' });
+    const ack = await BlindfoldSession.writeEvent(broken);
+    assert.deepStrictEqual(ack, { ok: false, eventId: EID1, error: 'invalid-envelope' });
+  });
+
+  it('payload is NOT semantically validated (envelope-level only)', async () => {
+    // A payload no Section-1 factory would produce still passes the writer:
+    // semantic refereeing is the emitter's job, not the writer's.
+    const fake = installFakeIDB();
+    const env = makeEnvelope({ eventId: EID1, payload: { nonsense: true } });
+    const ack = await BlindfoldSession.writeEvent(env);
+    assert.deepStrictEqual(ack, { ok: true, eventId: EID1 });
+    assert.equal(storedRecord(fake, EID1).appendSeq, 0);
+  });
+});
+
+// ------------------------------------------------------------------
+// AC4: appendSeq !== null on intake -> append-seq-present.
+// ------------------------------------------------------------------
+describe('AC4 — double-processing rule', () => {
+  it('intake with appendSeq 7 -> append-seq-present, nothing written', async () => {
+    const fake = installFakeIDB();
+    const env = makeEnvelope({ eventId: EID1 });
+    const replayed = Object.assign({}, env, { appendSeq: 7 });
+    const ack = await BlindfoldSession.writeEvent(replayed);
+    assert.deepStrictEqual(ack, { ok: false, eventId: EID1, error: 'append-seq-present' });
+    assert.equal(storeSize(fake, 'events'), 0);
+    assert.equal(storeSize(fake, 'sequence_state'), 0);
+  });
+});
+
+// ------------------------------------------------------------------
+// AC5: new event -> appendSeq assigned; ack only after tx.oncomplete.
+// ------------------------------------------------------------------
+describe('AC5 — appendSeq assignment and commit-awaited ack', () => {
+  it('new event stored with appendSeq 0; counter advanced; ack after oncomplete', async () => {
+    const fake = installFakeIDB();
+    const order = [];
+    fake.onTxComplete = () => order.push('tx-oncomplete');
+    const env = makeEnvelope({ eventId: EID1 });
+    const ackP = BlindfoldSession.writeEvent(env);
+    const ack = await ackP.then((a) => { order.push('ack-resolved'); return a; });
+    assert.deepStrictEqual(ack, { ok: true, eventId: EID1 });
+    assert.deepStrictEqual(order, ['tx-oncomplete', 'ack-resolved'],
+      'ack must be produced by the commit event, not before it');
+    const stored = storedRecord(fake, EID1);
+    assert.equal(stored.appendSeq, 0);
+    assert.deepStrictEqual(seqState(fake, SID1), { sessionId: SID1, nextAppendSeq: 1 });
+    // Intake object is never mutated (still the frozen null-appendSeq envelope).
+    assert.equal(env.appendSeq, null);
+    assert.ok(Object.isFrozen(env));
+  });
+
+  it('second event for the session gets appendSeq 1', async () => {
+    const fake = installFakeIDB();
+    await BlindfoldSession.writeEvent(makeEnvelope({ eventId: EID1 }));
+    const ack = await BlindfoldSession.writeEvent(makeEnvelope({ eventId: EID2 }));
+    assert.deepStrictEqual(ack, { ok: true, eventId: EID2 });
+    assert.equal(storedRecord(fake, EID2).appendSeq, 1);
+    assert.deepStrictEqual(seqState(fake, SID1), { sessionId: SID1, nextAppendSeq: 2 });
+  });
+});
+
+// ------------------------------------------------------------------
+// AC6: per-session independent counters.
+// ------------------------------------------------------------------
+describe('AC6 — per-session counters', () => {
+  it('two sessions count independently from 0', async () => {
+    const fake = installFakeIDB();
+    await BlindfoldSession.writeEvent(makeEnvelope({ eventId: EID1, sessionId: SID1 }));
+    await BlindfoldSession.writeEvent(makeEnvelope({ eventId: EID2, sessionId: SID2 }));
+    await BlindfoldSession.writeEvent(makeEnvelope({ eventId: EID3, sessionId: SID1 }));
+    assert.equal(storedRecord(fake, EID1).appendSeq, 0);
+    assert.equal(storedRecord(fake, EID2).appendSeq, 0);
+    assert.equal(storedRecord(fake, EID3).appendSeq, 1);
+    assert.deepStrictEqual(seqState(fake, SID1), { sessionId: SID1, nextAppendSeq: 2 });
+    assert.deepStrictEqual(seqState(fake, SID2), { sessionId: SID2, nextAppendSeq: 1 });
+  });
+});
+
+// ------------------------------------------------------------------
+// AC7: duplicate same-content -> idempotent ok:true, counter untouched.
+// ------------------------------------------------------------------
+describe('AC7 — idempotent duplicate', () => {
+  it('resend of the identical envelope -> ok:true, counter and record unchanged', async () => {
+    const fake = installFakeIDB();
+    const env = makeEnvelope({ eventId: EID1 });
+    const first = await BlindfoldSession.writeEvent(env);
+    assert.deepStrictEqual(first, { ok: true, eventId: EID1 });
+    // Simulate the 2.5 retry-after-lost-ack: a fresh clone of the same event.
+    const retry = JSON.parse(JSON.stringify(env));
+    const second = await BlindfoldSession.writeEvent(retry);
+    assert.deepStrictEqual(second, { ok: true, eventId: EID1 });
+    assert.deepStrictEqual(seqState(fake, SID1), { sessionId: SID1, nextAppendSeq: 1 },
+      'counter must not advance on idempotent retry');
+    const stored = storedRecord(fake, EID1);
+    assert.equal(stored.appendSeq, 0, 'assigned appendSeq preserved');
+    assert.equal(fake._stores.events.records.size, 1, 'no second record');
+  });
+
+  it('same content with different key order still dedups', async () => {
+    const fake = installFakeIDB();
+    const env = makeEnvelope({ eventId: EID1 });
+    await BlindfoldSession.writeEvent(env);
+    const reordered = {};
+    for (const k of Object.keys(env).reverse()) reordered[k] = env[k];
+    const ack = await BlindfoldSession.writeEvent(reordered);
+    assert.deepStrictEqual(ack, { ok: true, eventId: EID1 });
+    assert.equal(fake._stores.events.records.size, 1);
+  });
+});
+
+// ------------------------------------------------------------------
+// AC8: duplicate different-content -> event-id-content-mismatch, never
+// overwrites.
+// ------------------------------------------------------------------
+describe('AC8 — content mismatch under a known eventId', () => {
+  it('same eventId, flipped payload field -> mismatch ack, stored record kept', async () => {
+    const fake = installFakeIDB();
+    const env = makeEnvelope({ eventId: EID1, payload: { from: 'e2', to: 'e4', promotion: null } });
+    await BlindfoldSession.writeEvent(env);
+    const tampered = Object.assign({}, env, {
+      payload: { from: 'e2', to: 'e5', promotion: null }
+    });
+    const ack = await BlindfoldSession.writeEvent(tampered);
+    assert.deepStrictEqual(ack,
+      { ok: false, eventId: EID1, error: 'event-id-content-mismatch' });
+    const stored = storedRecord(fake, EID1);
+    assert.deepStrictEqual(stored.payload, { from: 'e2', to: 'e4', promotion: null },
+      'stored record must never be overwritten');
+    assert.equal(stored.appendSeq, 0);
+    assert.deepStrictEqual(seqState(fake, SID1), { sessionId: SID1, nextAppendSeq: 1 },
+      'counter untouched by the rejected duplicate');
+  });
+});
+
+// ------------------------------------------------------------------
+// AC9: injected write failure -> atomic abort, write-failed:<name>.
+// ------------------------------------------------------------------
+describe('AC9 — atomic abort on write failure', () => {
+  it('failing event put -> nothing stored, counter not advanced', async () => {
+    const fake = installFakeIDB();
+    await BlindfoldSession.writeEvent(makeEnvelope({ eventId: EID1 }));
+    fake.failNextPut = { name: 'QuotaExceededError', message: 'fake: quota' };
+    const ack = await BlindfoldSession.writeEvent(makeEnvelope({ eventId: EID2 }));
+    assert.equal(ack.ok, false);
+    assert.equal(ack.eventId, EID2);
+    assert.equal(ack.error, 'write-failed:QuotaExceededError');
+    assert.equal(storedRecord(fake, EID2), undefined, 'failed event must leave no trace');
+    assert.deepStrictEqual(seqState(fake, SID1), { sessionId: SID1, nextAppendSeq: 1 },
+      'counter must not advance on abort');
+    assert.equal(storedRecord(fake, EID1).appendSeq, 0, 'earlier event intact');
+  });
+
+  it('failing counter put -> event also rolled back', async () => {
+    const fake = installFakeIDB();
+    // Fail the SECOND put in the transaction (the sequence_state write).
+    // The event put succeeds into the tx journal; the failed counter put
+    // aborts the tx, and the journal is discarded — real IDB atomicity.
+    fake.failPutOnStore = 'sequence_state';
+    const ack = await BlindfoldSession.writeEvent(makeEnvelope({ eventId: EID1 }));
+    assert.equal(ack.ok, false);
+    assert.equal(ack.error, 'write-failed:QuotaExceededError');
+    assert.equal(storeSize(fake, 'events'), 0,
+      'journaled event write must be rolled back on abort');
+    assert.equal(storeSize(fake, 'sequence_state'), 0);
+  });
+
+  it('synchronous transaction throw becomes a write-failed ack, not a throw', async () => {
+    const fake = installFakeIDB();
+    // Schema-drift surface: db.transaction throws NotFoundError
+    // synchronously (mirrors the sync DataError/NotFoundError throws the
+    // writer defends against per DECISIONS.md #9b).
+    fake.brokenStores.add('events');
+    const ack = await BlindfoldSession.writeEvent(makeEnvelope({ eventId: EID1 }));
+    assert.equal(ack.ok, false);
+    assert.equal(ack.error, 'write-failed:NotFoundError');
+    assert.equal(ack.eventId, EID1);
+  });
+
+  it('unavailable indexedDB -> write-failed:unavailable, never throws', async () => {
+    uninstallIDB(); // no indexedDB at all
+    const env = makeEnvelope({ eventId: EID1 });
+    const ack = await BlindfoldSession.writeEvent(env);
+    assert.deepStrictEqual(ack, { ok: false, eventId: EID1, error: 'write-failed:unavailable' });
+  });
+});
+
+// ------------------------------------------------------------------
+// AC10: installWriterListener adapter behavior.
+// ------------------------------------------------------------------
+describe('AC10 — listener installation and adapter', () => {
+  function fakeChrome() {
+    const listeners = [];
+    return {
+      listeners,
+      chrome: { runtime: { onMessage: { addListener: (fn) => listeners.push(fn) } } }
+    };
+  }
+
+  it('kind:event -> returns true and exactly one sendResponse with the ack', async () => {
+    const fake = installFakeIDB();
+    const fc = fakeChrome();
+    globalThis.chrome = fc.chrome;
+    BlindfoldSession.installWriterListener();
+    assert.equal(fc.listeners.length, 1);
+    const responses = [];
+    let returned;
+    // Drive the listener; the ack is async (returns true).
+    const env = makeEnvelope({ eventId: EID1 });
+    await new Promise((resolve) => {
+      returned = fc.listeners[0]({ kind: 'event', event: env }, {},
+        (ack) => { responses.push(ack); resolve(); });
+    });
+    assert.equal(returned, true, 'async channel must stay open');
+    assert.equal(responses.length, 1, 'exactly one sendResponse');
+    assert.deepStrictEqual(responses[0], { ok: true, eventId: EID1 });
+    assert.equal(storedRecord(fake, EID1).appendSeq, 0, 'event actually written');
+  });
+
+  it('other kinds -> returns false, no sendResponse', async () => {
+    installFakeIDB();
+    const fc = fakeChrome();
+    globalThis.chrome = fc.chrome;
+    BlindfoldSession.installWriterListener();
+    const responses = [];
+    const ret = fc.listeners[0]({ kind: 'something-else' }, {},
+      (ack) => responses.push(ack));
+    assert.equal(ret, false);
+    await tick();
+    assert.equal(responses.length, 0, 'no response for foreign kinds');
+  });
+
+  it('installWriterListener returns the listener for lifecycle management', () => {
+    const fc = fakeChrome();
+    globalThis.chrome = fc.chrome;
+    const listener = BlindfoldSession.installWriterListener();
+    assert.equal(typeof listener, 'function');
+    assert.equal(fc.listeners[0], listener, 'returned fn is the installed one');
+  });
+
+  it('no chrome -> plain Error (not TypeError)', () => {
+    delete globalThis.chrome;
+    let caught = null;
+    try {
+      BlindfoldSession.installWriterListener();
+    } catch (e) {
+      caught = e;
+    }
+    assert.ok(caught instanceof Error, 'must throw');
+    assert.equal(caught.constructor, Error, 'must be a plain Error, not a subclass');
+  });
+});
+
+// ------------------------------------------------------------------
+// AC11: diff discipline.
+// ------------------------------------------------------------------
+describe('AC11 — diff discipline', () => {
+  it('sw.js: importScripts line + install call + header update only', () => {
+    const sw = fs.readFileSync(path.join(ROOT, 'sw.js'), 'utf8');
+    assert.ok(sw.includes("importScripts('db.js', 'event_envelope.js', 'writer.js');"),
+      'importScripts line');
+    assert.ok(sw.includes('BlindfoldSession.writerListener = BlindfoldSession.installWriterListener();'),
+      'install call with lifecycle handle');
+    assert.ok(!sw.includes('2.4:'), '2.4 line removed from the absent list');
+    // No other functional surface: exactly one importScripts call, exactly
+    // one installWriterListener call.
+    const codeStripped = sw
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\/\/.*$/gm, '');
+    assert.equal((codeStripped.match(/importScripts\s*\(/g) || []).length, 1);
+    assert.equal((codeStripped.match(/installWriterListener\s*\(/g) || []).length, 1);
+  });
+
+  it('manifest.json byte-identical to HEAD (this task changes no manifest)', () => {
+    const head = execSync('git show HEAD:manifest.json', { cwd: ROOT }).toString();
+    const current = fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8');
+    assert.strictEqual(current, head);
+  });
+
+  it('no other repo files modified (git status allowlist)', () => {
+    const status = execSync('git status --porcelain', { cwd: ROOT }).toString();
+    const changed = status.split('\n').filter((l) => l.trim()).map((l) => l.slice(3).trim());
+    const allowed = new Set([
+      'sw.js',
+      'writer.js',
+      'tests/writer.test.js',
+      // Honest cumulative evolution of transient sw.js-pinning assertions
+      // broken by 2.4's legitimate sw.js amendment (2.2/2.3 precedent):
+      'tests/db.test.js',
+      'tests/manifest_sw.test.js',
+      'tests/sender.test.js',
+      '.autodev/evidence/2.4.contract.md',
+      '.autodev/evidence/2.4.build.md',
+      // This task's own verification evidence lands after the builder ran:
+      '.autodev/evidence/2.4.review.md',
+      '.autodev/evidence/2.4.behavior.md'
+    ]);
+    for (const f of changed) {
+      assert.ok(allowed.has(f), `unexpected modified file: ${f}`);
+    }
+    assert.ok(changed.includes('writer.js'), 'writer.js must be new');
+    assert.ok(changed.includes('sw.js'), 'sw.js must be modified');
+  });
+});

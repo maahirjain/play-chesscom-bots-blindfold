@@ -129,3 +129,8 @@ Consequential engineering decisions with reasoning and evidence. Newest first.
     it does NOT resolve `undefined`. Senders must treat rejection as
     "unacknowledged, keep queued". (Found during 2.3 V2 verification —
     the sender records `transport-error:Error` and stops the pump.)
+    **Nuance:** when a listener IS installed but returns `false` without
+    calling `sendResponse`, the promise *resolves `undefined`* (this
+    Chrome build) rather than hanging. `undefined` is never an ack —
+    the 2.3 sender already treats it as unacknowledged. (Found during
+    2.4 behavioral verification.)

@@ -404,20 +404,21 @@ describe('AC7 — diff discipline (static)', () => {
     assert.deepEqual(manifest, headManifest);
   });
 
-  it('content.js diff is only the instantiation line', () => {
-    const diff = execSync('git diff HEAD -- content.js', { cwd: ROOT }).toString();
-    const added = diff.split('\n').filter((l) => l.startsWith('+') && !l.startsWith('+++'));
-    assert.deepEqual(added, ['+BlindfoldSession.sender = BlindfoldSession.createSender();']);
-    const removed = diff.split('\n').filter((l) => l.startsWith('-') && !l.startsWith('---'));
-    assert.deepEqual(removed, []);
+  it('content.js still carries exactly the one sender-instantiation line (cumulative)', () => {
+    // 2.3 added the line via git diff; 2.4 must not add more. Cumulative
+    // invariant: the line exists exactly once in the file.
+    const content = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
+    const needle = 'BlindfoldSession.sender = BlindfoldSession.createSender();';
+    const occurrences = content.split(needle).length - 1;
+    assert.strictEqual(occurrences, 1, 'expected exactly one sender instantiation line');
   });
 
-  it('sw.js and db.js are byte-identical to HEAD', () => {
-    for (const f of ['sw.js', 'db.js']) {
-      const head = execSync(`git show HEAD:${f}`, { cwd: ROOT });
-      const work = fs.readFileSync(path.join(ROOT, f));
-      assert.ok(head.equals(work), f + ' differs from HEAD');
-    }
+  it('db.js is byte-identical to HEAD; sw.js state is owned by the 2.4 contract', () => {
+    // 2.4 legitimately amended sw.js (writer intake); its cumulative state
+    // is pinned in tests/writer.test.js (AC11). db.js must be untouched.
+    const head = execSync('git show HEAD:db.js', { cwd: ROOT });
+    const work = fs.readFileSync(path.join(ROOT, 'db.js'));
+    assert.ok(head.equals(work), 'db.js differs from HEAD');
   });
 
   it('sender.js has no chrome. literal in code (lazy resolver uses bracket notation)', () => {

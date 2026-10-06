@@ -80,15 +80,23 @@ describe('AC3 — sw.js functional code is exactly the db.js import', () => {
   const swRaw = fs.readFileSync(path.join(REPO, 'sw.js'), 'utf8');
   const codeOnly = stripComments(swRaw);
 
-  it('stripped of comments, functional code is the use-strict directive + db.js import', () => {
+  it('stripped of comments, functional code is the 2.4 wiring (cumulative)', () => {
+    // 2.1 pinned the comment-only stub; 2.2 added the db.js import; 2.4
+    // legitimately added the writer intake per its contract. Cumulative
+    // invariant: exactly these three functional lines.
     const lines = codeOnly.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-    assert.deepStrictEqual(lines, ["'use strict';", "importScripts('db.js');"]);
+    assert.deepStrictEqual(lines, [
+      "'use strict';",
+      "importScripts('db.js', 'event_envelope.js', 'writer.js');",
+      'BlindfoldSession.writerListener = BlindfoldSession.installWriterListener();'
+    ]);
   });
 
-  it('exactly one importScripts call, importing db.js', () => {
+  it('exactly one importScripts call, importing db.js + event_envelope.js + writer.js', () => {
     const calls = codeOnly.match(/importScripts\s*\(/g) || [];
     assert.strictEqual(calls.length, 1, 'expected exactly one importScripts call');
-    assert.ok(codeOnly.includes("importScripts('db.js')"), 'must import db.js');
+    assert.ok(codeOnly.includes("importScripts('db.js', 'event_envelope.js', 'writer.js')"),
+      'must import the storage layer, the event contract, and the writer');
   });
 
   const forbidden = [
