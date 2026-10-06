@@ -92,6 +92,36 @@
       "task": "1.2",
       "item": "export merge (initialConditions)",
       "depends_on": "6.1"
+    },
+    {
+      "task": "1.3",
+      "item": "AC18 appendSeq assignment",
+      "depends_on": "2.4"
+    },
+    {
+      "task": "1.3",
+      "item": "AC20 reference roles",
+      "depends_on": "3.2/3.4/4.10"
+    },
+    {
+      "task": "1.3",
+      "item": "V3: in-context anchor capture, per-segment counters, SW-restart re-anchor",
+      "depends_on": "2.3/2.6/2.7/4.1"
+    },
+    {
+      "task": "1.3",
+      "item": "V3: cross-context delivery preserving times",
+      "depends_on": "2.3/2.5"
+    },
+    {
+      "task": "1.3",
+      "item": "export ordering by appendSeq",
+      "depends_on": "6.2"
+    },
+    {
+      "task": "1.3",
+      "item": "V3: media alignment via deriveWallUtcMs",
+      "depends_on": "4.12/6.3"
     }
   ],
   "mission": "logging-instrumentation",
@@ -145,8 +175,17 @@
       ]
     },
     "1.3": {
+      "status": "DONE",
       "commit": null,
-      "status": "PENDING"
+      "verification": "V1 PASS (47/47 node --test, adversarial review); V2 PASS (headless-Chrome renderer smoke)",
+      "deferred": [
+        "AC18 append assignment -> 2.4",
+        "AC20 ref roles -> 3.2/3.4/4.10",
+        "in-context capture/counters/re-anchor -> 2.3/2.6/2.7/4.1",
+        "cross-context delivery -> 2.3/2.5",
+        "export ordering -> 6.2",
+        "media alignment -> 4.12/6.3"
+      ]
     },
     "1.4": {
       "commit": null,

@@ -2,6 +2,23 @@
 
 Consequential engineering decisions with reasoning and evidence. Newest first.
 
+## 2026-10-06 — Task 1.3 review decisions (from independent review)
+
+1. **Malformed IDs → TypeError (not RangeError).** The 1.3 contract's §2.10
+   parenthetical listed "non-uuid IDs" under RangeError, but AC5/AC15
+   explicitly require TypeError for missing/malformed sessionId/gameId/
+   clockSegmentId, and the 1.1 precedent (`requireValidMetadata`) throws
+   TypeError for malformed IDs. Decision: the builder was right; the
+   contract parenthetical was the outlier. Contract amended: TypeError =
+   wrong type/shape *including malformed IDs*; RangeError = value outside
+   an allowed domain (bad event-type syntax, bad sourceContext,
+   negative/non-integer sequences, malformed refs role names).
+
+2. **Envelope has 11 keys, not 12.** The 1.3 contract repeatedly said "(12)"
+   but its own §3.3 shape lists 11 keys; the implementation, key-order test,
+   and createEvent literal all agree on 11. Corrected the contract,
+   build report, code comments, and test names. No behavior change.
+
 ## 2026-10-06 — Task 1.2 repair decisions (from independent review)
 
 1. **`normalizePlayerColor` uses the 1.1 domain model (RangeError for all
