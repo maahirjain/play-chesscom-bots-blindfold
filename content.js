@@ -64,6 +64,33 @@ if (typeof window !== 'undefined') {
 const PIECESET_KEY = "blindfold_chess_piece_set";
 let piece_set = localStorage.getItem(PIECESET_KEY) || "neo";
 
+// Task 3.3 (PLAN.md §3.3): piece-visibility and help-request recorder.
+// Records each reveal/hide transition at setPieceSet with its source,
+// the initial visibility state (3.3.1), and each spoken-assistance
+// shortcut request with whether it had usable content (3.3.3). Emission
+// is gated on non-empty sessionId AND gameId — pre-§5 the recorder is
+// inert (no dangling records). §5 seam: §5's session-start path must
+// call visibilityRecorder.recordInitial('session_start'); the 'init'
+// record below covers the page-load read. Recorder calls are
+// failure-isolated (3.2 SF-1 precedent): instrumentation must never
+// break speech or UX.
+const visibilityRecorder = BlindfoldSession.createVisibilityRecorder({
+  getSessionId: () => BlindfoldSession.activeSessionId,
+  getGameId: () => BlindfoldSession.activeGameId,
+  getPieceSet: () => piece_set,
+  emitEvent: (eventType, payload, refs) =>
+    BlindfoldSession.sender.emit({
+      eventType,
+      sessionId: BlindfoldSession.activeSessionId,
+      gameId: BlindfoldSession.activeGameId,
+      payload,
+      refs: refs || null,
+    }),
+});
+try {
+  visibilityRecorder.recordInitial('init');
+} catch (e) { /* best-effort; 3.2 SF-1 precedent */ }
+
 applyCurrentPieceSet();
 
 observeMoves((half_moves) => {
@@ -193,14 +220,27 @@ document.addEventListener("keydown", (e) => {
 document.addEventListener("keydown", (e) => {
     if (e.key == "v" || e.key == "V") {
         e.preventDefault();
-        setPieceSet(piece_set === "blindfold" ? "neo" : "blindfold");
+        setPieceSet(piece_set === "blindfold" ? "neo" : "blindfold", "keyboard");
     }
 })
+
+// 3.3.3: record a help-shortcut request BEFORE speaking (request-first
+// ordering; the utterance lifecycle is 3.4's scope). hadUsableContent is
+// computed from values already in hand. Failure-isolated: a recorder
+// throw must never break the shortcut's speech (3.2 SF-1 precedent).
+// Explicitly NOT help requests: j (navigation), v (visibility, 3.3.2),
+// Escape (3.4 speech cancellation).
+function recordHelpRequestSafe(shortcut, hadUsableContent) {
+  try {
+    visibilityRecorder.recordHelpRequest(shortcut, hadUsableContent);
+  } catch (e) { /* instrumentation must never break speech */ }
+}
 
 document.addEventListener("keydown", (e) => {
   if (e.key === "w" || e.key === "W") {
     e.preventDefault();
 
+    recordHelpRequestSafe("w", true); // turn is always known
     const turn = game.turn();
     speakText(turn === "w" ? "White's turn" : "Black's turn", { interrupt: true });
   }
@@ -211,6 +251,7 @@ document.addEventListener("keydown", (e) => {
     e.preventDefault();
 
     const text = getResultAnnouncement(game);
+    recordHelpRequestSafe("m", text !== null && text !== "");
     speakText(text || "Game not over.", { interrupt: false });
   }
 });
@@ -219,6 +260,9 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "z" || e.key === "Z") {
     e.preventDefault();
 
+    // A content-less request is still a request (3.2.6 precedent):
+    // recorded with hadUsableContent: false.
+    recordHelpRequestSafe("z", !!last_spoken_move_text);
     if (last_spoken_move_text) {
       speakText(`Last move: ${last_spoken_move_text}`, { interrupt: true });
     }
@@ -228,6 +272,7 @@ document.addEventListener("keydown", (e) => {
 document.addEventListener("keydown", (e) => {
   if (e.key === "i" || e.key === "I") {
     e.preventDefault();
+    recordHelpRequestSafe("i", latest_half_moves.length > 0);
     speakFullMoveList(latest_half_moves);
   }
 });
@@ -242,6 +287,14 @@ document.addEventListener("keydown", (e) => {
 document.addEventListener("keydown", (e) => {
   if (e.key === "s" || e.key === "S") {
     e.preventDefault();
+    // 3.3.3: usable content = the board element is readable; otherwise
+    // speakPosition() reports "Board not found." — the request is still
+    // recorded (hadUsableContent: false).
+    let boardReadable = false;
+    try {
+      boardReadable = BlindfoldSession.getBoardElement() !== null;
+    } catch (e2) { boardReadable = false; }
+    recordHelpRequestSafe("s", boardReadable);
     speakPosition();
   }
 });
@@ -251,8 +304,14 @@ function applyCurrentPieceSet() {
     applyPieceSet(base_url);
 }
 
-function setPieceSet(mode) {
+function setPieceSet(mode, source) {
+    const oldMode = piece_set;
     piece_set = mode;
     localStorage.setItem(PIECESET_KEY, piece_set);
     applyCurrentPieceSet();
+    // 3.3.2: record each reveal/hide transition with its source.
+    // Unchanged mode → the recorder no-ops (no state change, no event).
+    try {
+        visibilityRecorder.recordTransition(oldMode, mode, source === undefined ? 'api' : source);
+    } catch (e) { /* instrumentation must never break UX (3.2 SF-1 precedent) */ }
 }

@@ -1042,6 +1042,16 @@ describe('AC15 — diff discipline', () => {
       // lands after the pins were evolved (2.x/3.1 precedent).
       '.autodev/evidence/3.2.review.md',
       '.autodev/evidence/3.2.behavior.md',
+      // Honest cumulative evolution: 3.3 legitimately touches
+      // chess_utils.js + content.js; its files join the allowlists.
+      'tests/visibility.test.js',
+      '.autodev/evidence/3.3.contract.md',
+      '.autodev/evidence/3.3.build.md',
+      // Honest cumulative evolution: 3.3's review/behavior evidence
+      // lands after the pins were evolved (2.x/3.1/3.2 precedent).
+      '.autodev/evidence/3.3.review.md',
+      '.autodev/evidence/3.3.behavior.md',
+      '.autodev/evidence/3.3.domaudit.md',
       'tests/attempt_tracker.test.js',
       // Honest cumulative evolution (2.2–2.6 precedent): earlier tasks'
       // suites pin files 2.7 legitimately touches, so their pins evolve

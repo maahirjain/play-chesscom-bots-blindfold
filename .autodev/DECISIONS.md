@@ -316,3 +316,30 @@ Consequential engineering decisions with reasoning and evidence. Newest first.
   extracted in chess_utils.js (not named in the contract) to make the
   first-write-wins/reset logic unit-testable; content.js wires it to the
   input listener.
+
+## 3.3 visibility and assistance (PLAN.md §3.3)
+
+- **3.3.4 unsupported-coverage marking (explicit):** codebase survey found
+  zero references to Chess.com hints, assistance settings, or
+  engine-evaluation DOM in product code. The extension does not observe
+  Chess.com hints or assistance-setting changes, and no observer was built:
+  recording unreliably-observed "hints" would manufacture evidence. The
+  1.2 `assistanceSettings` conditions field is a session-level record, not
+  a DOM observation. If a V3 live pass finds a reliable DOM signal, this
+  marking is revisited (see 3.3.domaudit.md).
+- **Epistemic disclaimer (3.3.5):** extension visibility events
+  (`piece_visibility_changed`) record what the extension did to the board's
+  piece rendering. They do **not** prove the player had no other visual
+  information: Chess.com's own highlights, eval bar, arrows, a second
+  monitor, screen-reader output, or anything else outside the extension's
+  observation is invisible to these events. Any analysis treating "pieces
+  hidden" as "player saw nothing" is unsound.
+- **Help = spoken-assistance shortcuts only** (`w/m/z/i/s`); `j`
+  (navigation), `v` (visibility), `Escape` (3.4 speech cancellation) are
+  explicitly excluded. Content-less requests record `hadUsableContent:
+  false` — the request happened (3.2.6 precedent).
+- **`setPieceSet(mode, source)`:** source vocabulary
+  `init/keyboard/session_start/api`; unchanged mode emits nothing; board
+  re-render re-application emits nothing (no state change).
+- **3.2 SF-1 precedent applied:** all recorder calls in keydown handlers
+  are failure-isolated; instrumentation never breaks speech/UX.

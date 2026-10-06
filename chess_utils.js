@@ -42,6 +42,24 @@ BlindfoldSession.DISPATCH_FAILURE_REASONS = Object.freeze([
   'promotion_choice_missing'  // promotion window visible but no matching choice
 ]);
 
+// 3.3-owned event vocabulary (1.3 §2.2: each task owns its vocabulary).
+// piece visibility transitions and help-shortcut requests.
+BlindfoldSession.PIECE_VISIBILITY_CHANGED_EVENT_TYPE = 'piece_visibility_changed';
+BlindfoldSession.HELP_REQUESTED_EVENT_TYPE = 'help_requested';
+
+// 3.3.2: piece-set modes and transition source vocabulary (frozen).
+BlindfoldSession.PIECE_SETS = Object.freeze(['blindfold', 'neo']);
+BlindfoldSession.VISIBILITY_SOURCES = Object.freeze([
+  'init',          // page-load read from localStorage
+  'keyboard',      // v-key toggle
+  'session_start', // §5 session-start re-record
+  'api'            // any programmatic caller (default for bare setPieceSet)
+]);
+
+// 3.3.3: spoken-assistance ("help") shortcuts. j (navigation), v
+// (visibility), Escape (3.4 speech cancellation) are explicitly excluded.
+BlindfoldSession.HELP_SHORTCUTS = Object.freeze(['w', 'm', 'z', 'i', 's']);
+
 // Cross-module access (Node test pattern): the 1.4 payload factories live
 // on the merged globalThis.BlindfoldSession in tests; in the browser the
 // module-scoped BlindfoldSession IS the global. Read at call time.
@@ -313,6 +331,11 @@ function observePieceRenders(onChange) {
 function getBoardElement() {
     return document.querySelector("wc-chess-board");
 }
+
+// 3.3.3: board readability is the `s`-shortcut's "usable content" test.
+// Exported for content.js (makeMoveOnBoard 3.2 precedent); the module-local
+// binding keeps working for the existing callers.
+BlindfoldSession.getBoardElement = getBoardElement;
 
 // ------------------------------------------------------------------
 // Task 3.1: createHistoryTracker — reliable confirmed-history tracking.
@@ -981,6 +1004,42 @@ BlindfoldSession.requireValidAttemptMatchedRefs = requireValidAttemptMatchedRefs
 BlindfoldSession.requireValidAttemptUnconfirmedPayload = requireValidAttemptUnconfirmedPayload;
 BlindfoldSession.requireValidAttemptUnconfirmedRefs = requireValidAttemptUnconfirmedRefs;
 
+// 3.3.1/3.3.2 validators: piece_visibility_changed payload. `from` is null
+// only on the initial-state record (3.3.1); transitions require from !== to.
+function requireValidPieceVisibilityChangedPayload(payload) {
+  requireExactKeys(payload, ['from', 'to', 'source'],
+    'piece_visibility_changed payload');
+  if (payload.from !== null &&
+      BlindfoldSession.PIECE_SETS.indexOf(payload.from) === -1) {
+    throw new RangeError("piece_visibility_changed payload.from must be 'blindfold', 'neo', or null");
+  }
+  if (BlindfoldSession.PIECE_SETS.indexOf(payload.to) === -1) {
+    throw new RangeError("piece_visibility_changed payload.to must be 'blindfold' or 'neo'");
+  }
+  // Note: from === to is accepted here (well-formed); recordTransition
+  // treats it as a no-op returning null — no state change, no event.
+  if (BlindfoldSession.VISIBILITY_SOURCES.indexOf(payload.source) === -1) {
+    throw new RangeError('piece_visibility_changed payload.source must be a member of VISIBILITY_SOURCES');
+  }
+  return payload;
+}
+
+// 3.3.3 validator: help_requested payload. Refs are always null.
+function requireValidHelpRequestedPayload(payload) {
+  requireExactKeys(payload, ['shortcut', 'hadUsableContent'],
+    'help_requested payload');
+  if (BlindfoldSession.HELP_SHORTCUTS.indexOf(payload.shortcut) === -1) {
+    throw new RangeError('help_requested payload.shortcut must be a member of HELP_SHORTCUTS');
+  }
+  if (typeof payload.hadUsableContent !== 'boolean') {
+    throw new TypeError('help_requested payload.hadUsableContent must be a boolean');
+  }
+  return payload;
+}
+
+BlindfoldSession.requireValidPieceVisibilityChangedPayload = requireValidPieceVisibilityChangedPayload;
+BlindfoldSession.requireValidHelpRequestedPayload = requireValidHelpRequestedPayload;
+
 // ------------------------------------------------------------------
 // Task 3.2: createFirstEditCapture — 3.2.1 first-edit timestamp.
 //
@@ -1309,6 +1368,93 @@ function createAttemptTracker(options) {
 }
 
 BlindfoldSession.createAttemptTracker = createAttemptTracker;
+
+// ------------------------------------------------------------------
+// Task 3.3: createVisibilityRecorder — 3.3.1/3.3.2 piece-visibility
+// transitions and 3.3.3 help-shortcut requests.
+//
+// DOM-free; content.js wires it to setPieceSet and the w/m/z/i/s key
+// handlers. Emission is gated on non-empty sessionId AND gameId via
+// thunks (2.7/3.1/3.2 §5-seam precedent) — pre-§5 the recorder is inert:
+// no events, no throw. The returned eventIds are the stable references
+// 3.4.1 will link utterances to.
+function createVisibilityRecorder(options) {
+  var opts = options || {};
+  var getSessionId = opts.getSessionId;
+  var getGameId = opts.getGameId;
+  var getPieceSet = opts.getPieceSet;
+  var emitEvent = opts.emitEvent;
+  var BS = BlindfoldSession;
+  if (typeof getSessionId !== 'function') {
+    throw new TypeError('createVisibilityRecorder getSessionId must be a function');
+  }
+  if (typeof getGameId !== 'function') {
+    throw new TypeError('createVisibilityRecorder getGameId must be a function');
+  }
+  if (typeof getPieceSet !== 'function') {
+    throw new TypeError('createVisibilityRecorder getPieceSet must be a function');
+  }
+  if (typeof emitEvent !== 'function') {
+    throw new TypeError('createVisibilityRecorder emitEvent must be a function');
+  }
+
+  function isActive() {
+    var sid = getSessionId();
+    var gid = getGameId();
+    return typeof sid === 'string' && sid !== '' &&
+           typeof gid === 'string' && gid !== '';
+  }
+
+  function eventIdOf(result) {
+    return (result && typeof result.eventId === 'string') ? result.eventId : null;
+  }
+
+  // 3.3.2: a reveal/hide transition. from === to is a no-op returning
+  // null: no state change, no event (a same-mode setPieceSet call emits
+  // nothing; the observePieceRenders re-application path never calls
+  // setPieceSet at all).
+  function recordTransition(from, to, source) {
+    var payload = requireValidPieceVisibilityChangedPayload({
+      from: from, to: to, source: source
+    });
+    if (from === to) {
+      return null;
+    }
+    if (!isActive()) {
+      return null;
+    }
+    return eventIdOf(emitEvent(BS.PIECE_VISIBILITY_CHANGED_EVENT_TYPE, payload, null));
+  }
+
+  // 3.3.1: the initial-state record. from is null by contract; the
+  // current piece set is read at call time.
+  function recordInitial(source) {
+    return recordTransition(null, getPieceSet(), source);
+  }
+
+  // 3.3.3: a spoken-assistance shortcut request. Records the request
+  // itself (content-less requests record hadUsableContent: false — the
+  // request happened; the absence of content is the honest record). The
+  // utterance lifecycle is 3.4's scope.
+  function recordHelpRequest(shortcut, hadUsableContent) {
+    var payload = requireValidHelpRequestedPayload({
+      shortcut: shortcut, hadUsableContent: hadUsableContent
+    });
+    if (!isActive()) {
+      return null;
+    }
+    return eventIdOf(emitEvent(BS.HELP_REQUESTED_EVENT_TYPE, payload, null));
+  }
+
+  return {
+    recordTransition: recordTransition,
+    recordInitial: recordInitial,
+    recordHelpRequest: recordHelpRequest,
+    isActive: isActive
+  };
+}
+
+BlindfoldSession.createVisibilityRecorder = createVisibilityRecorder;
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = BlindfoldSession;
