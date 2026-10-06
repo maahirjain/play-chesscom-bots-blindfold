@@ -1646,6 +1646,20 @@ describe('AC7 — diff discipline and scope', () => {
       // after the pins are evolved (2.x/3.x/4.x/5.1-5.6 precedent).
       '.autodev/evidence/5.7.review.md',
       '.autodev/evidence/5.7.behavior.md',
+      // Honest cumulative evolution: 5.8 (optional timestamped
+      // note/moment marker) legitimately adds the moment_marker event
+      // type + requireValidMomentMarkerPayload validator + marker input
+      // + Mark button UI + click-handler wiring to session_controls.js
+      // (the specified deliverable; 5.7 reserved marker ownership to
+      // 5.8), adds its unit/integration tests, and records its
+      // evidence; its files join the allowlists. No new channel
+      // messages, stores, or permissions.
+      '.autodev/evidence/5.8.contract.md',
+      '.autodev/evidence/5.8.build.md',
+      // Honest cumulative evolution: 5.8's review/behavior evidence lands
+      // after the pins are evolved (2.x/3.x/4.x/5.1-5.7 precedent).
+      '.autodev/evidence/5.8.review.md',
+      '.autodev/evidence/5.8.behavior.md',
     ]);
     const stray = changed.filter((f) => !allowed.has(f));
     assert.deepEqual(stray, [],
@@ -1815,11 +1829,16 @@ describe('AC7 — diff discipline and scope', () => {
     assert.deepEqual(Array.from(msgs).sort(), expected.sort());
   });
 
-  it('session_controls.js emits no new event types and uses no chrome.* literal', () => {
+  it('session_controls.js emits only the 5.8 moment_marker event type and uses no chrome.* literal', () => {
     const src = fs.readFileSync(path.join(ROOT, 'session_controls.js'), 'utf8');
     const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
-    assert.ok(!/EVENT_TYPE/.test(code), 'no event types');
-    assert.ok(!/eventType/.test(code), 'no event emission');
+    // 5.8: exactly one event type (moment_marker) is the specified
+    // deliverable — 5.7's contract reserved marker ownership to 5.8.
+    // No other event types may appear.
+    const consts = code.match(/\b[A-Z][A-Z_]*EVENT_TYPE\b/g) || [];
+    const unique = [...new Set(consts)].sort();
+    assert.deepEqual(unique, ['MOMENT_MARKER_EVENT_TYPE'],
+      'only the 5.8 moment_marker event type, got: ' + unique.join(','));
     assert.ok(!/chrome\./.test(code), 'no chrome.* literal (transport is injected)');
   });
 
@@ -2090,6 +2109,211 @@ describe('5.7 — no auto-stop on game end', () => {
         assert.equal(observed.source, 'chess_rules');
         assert.equal(observed.result, '1-0');
         assert.equal(observed.terminationReason, 'checkmate');
+      } finally { h.stop(); }
+    });
+  });
+});
+
+describe('5.8 — moment marker', () => {
+  let savedDocument;
+  beforeEach(() => { savedDocument = globalThis.document; });
+  afterEach(() => {
+    if (savedDocument === undefined) delete globalThis.document;
+    else globalThis.document = savedDocument;
+    unpublishNS();
+  });
+
+  function findMarker(h) {
+    const input = h.element.children.find((c) =>
+      c.tagName === 'INPUT' && c._cls.indexOf('blindfold-moment-input') !== -1);
+    const button = h.element.children.find((c) =>
+      c.tagName === 'BUTTON' && c._cls.indexOf('blindfold-moment-mark') !== -1);
+    return { input, button };
+  }
+
+  function markerHarness() {
+    const BS = publishNS(freshModule());
+    globalThis.document = makeFakeDocument(true);
+    const opts = makeOpts();
+    let started = false;
+    opts._transport.handler = (env) => {
+      if (env.msg === 'recorder-ensure') return Promise.resolve({ ok: true, bootId: 'b', created: true });
+      if (env.msg === 'recorder-set-session') return Promise.resolve({ ok: true });
+      if (env.msg === 'recorder-start-streams') {
+        started = true;
+        return Promise.resolve({ ok: true, streams: {} });
+      }
+      if (env.msg === 'recorder-stop-streams') {
+        return Promise.resolve({ ok: true, streams: {}, finalized: true });
+      }
+      if (env.msg === 'recorder-get-status') {
+        if (!started) return Promise.resolve({ ok: false, error: 'no-session' });
+        return Promise.resolve({ ok: true, sessionId: 's', gameId: 'g', statuses: {} });
+      }
+      return Promise.resolve({ ok: false, error: 'unexpected' });
+    };
+    const h = BS.installSessionControls(stripInternal(opts));
+    return { BS, opts, h };
+  }
+
+  describe('AC1 — requireValidMomentMarkerPayload', () => {
+    it('accepts {note: null} (bare moment flag)', () => {
+      const BS = freshModule();
+      assert.deepEqual(BS.requireValidMomentMarkerPayload({ note: null }),
+        { note: null });
+    });
+
+    it('accepts {note: string}', () => {
+      const BS = freshModule();
+      assert.deepEqual(
+        BS.requireValidMomentMarkerPayload({ note: 'nice move' }),
+        { note: 'nice move' });
+    });
+
+    it('accepts a note at exactly the max length', () => {
+      const BS = freshModule();
+      const note = 'x'.repeat(BS.MOMENT_MARKER_NOTE_MAX_LENGTH);
+      assert.equal(
+        BS.requireValidMomentMarkerPayload({ note }).note.length,
+        BS.MOMENT_MARKER_NOTE_MAX_LENGTH);
+    });
+
+    it('rejects non-object payload (TypeError)', () => {
+      const BS = freshModule();
+      assert.throws(() => BS.requireValidMomentMarkerPayload(null),
+        TypeError);
+      assert.throws(() => BS.requireValidMomentMarkerPayload('note'),
+        TypeError);
+    });
+
+    it('rejects extra keys (TypeError)', () => {
+      const BS = freshModule();
+      assert.throws(
+        () => BS.requireValidMomentMarkerPayload({ note: null, extra: 1 }),
+        TypeError);
+    });
+
+    it('rejects non-string non-null note (TypeError)', () => {
+      const BS = freshModule();
+      assert.throws(
+        () => BS.requireValidMomentMarkerPayload({ note: 42 }),
+        TypeError);
+    });
+
+    it('rejects over-length note (RangeError, never silent truncation)', () => {
+      const BS = freshModule();
+      const note = 'x'.repeat(BS.MOMENT_MARKER_NOTE_MAX_LENGTH + 1);
+      assert.throws(
+        () => BS.requireValidMomentMarkerPayload({ note }),
+        RangeError);
+    });
+
+    it('exports MOMENT_MARKER_EVENT_TYPE as moment_marker', () => {
+      const BS = freshModule();
+      assert.equal(BS.MOMENT_MARKER_EVENT_TYPE, 'moment_marker');
+    });
+  });
+
+  describe('AC2/AC3/AC5 — marker UI behavior', () => {
+    it('AC3: marker affordance disabled while idle; click emits nothing', async () => {
+      const { opts, h } = markerHarness();
+      try {
+        await sleep(20); // boot adoption resolves idle
+        assert.equal(h.getPhase(), 'idle');
+        const { input, button } = findMarker(h);
+        assert.ok(input, 'marker input exists');
+        assert.ok(button, 'marker button exists');
+        assert.equal(input.disabled, true);
+        assert.equal(button.disabled, true);
+        const before = opts._sender.emitCalls.length;
+        button.click(); // disabled; handler re-checks phase
+        assert.equal(opts._sender.emitCalls.length, before,
+          'no event emitted while idle');
+      } finally { h.stop(); }
+    });
+
+    it('AC2: marker click during ACTIVE emits one moment_marker; input clears', async () => {
+      const { opts, h } = markerHarness();
+      try {
+        await sleep(20);
+        h.button.click(); // Start
+        await sleep(60);
+        assert.equal(h.getPhase(), 'active');
+        const { input, button } = findMarker(h);
+        assert.equal(input.disabled, false);
+        assert.equal(button.disabled, false);
+        input.value = '  brilliant sacrifice  ';
+        const before = opts._sender.emitCalls.length;
+        button.click();
+        const calls = opts._sender.emitCalls.slice(before);
+        assert.equal(calls.length, 1, 'exactly one event emitted');
+        const env = calls[0];
+        assert.equal(env.eventType, 'moment_marker');
+        assert.equal(env.sessionId, h.getSession().sessionId);
+        assert.equal(env.gameId, h.getSession().gameId);
+        assert.deepEqual(env.payload, { note: 'brilliant sacrifice' },
+          'note trimmed');
+        assert.equal(input.value, '', 'input cleared on success');
+      } finally { h.stop(); }
+    });
+
+    it('AC2: empty input emits moment_marker with {note: null}', async () => {
+      const { opts, h } = markerHarness();
+      try {
+        await sleep(20);
+        h.button.click();
+        await sleep(60);
+        const { button } = findMarker(h);
+        const before = opts._sender.emitCalls.length;
+        button.click(); // input empty
+        const calls = opts._sender.emitCalls.slice(before);
+        assert.equal(calls.length, 1);
+        assert.deepEqual(calls[0].payload, { note: null });
+      } finally { h.stop(); }
+    });
+
+    it('AC5: marker emission does not disturb session state', async () => {
+      const { opts, h } = markerHarness();
+      try {
+        await sleep(20);
+        h.button.click();
+        await sleep(60);
+        const sessBefore = h.getSession();
+        const { input, button } = findMarker(h);
+        input.value = 'test';
+        button.click();
+        await sleep(10);
+        assert.equal(h.getPhase(), 'active', 'phase stays active');
+        assert.deepEqual(h.getSession(), sessBefore, 'slots unchanged');
+        const stopMsgs = opts._transport.calls.filter(
+          (c) => c.msg === 'recorder-stop-streams');
+        assert.equal(stopMsgs.length, 0, 'no stop-channel message');
+      } finally { h.stop(); }
+    });
+  });
+
+  describe('AC4 — emit failure isolation', () => {
+    it('throwing sender does not break the control; text preserved; failure surfaced', async () => {
+      const { opts, h } = markerHarness();
+      try {
+        await sleep(20);
+        h.button.click();
+        await sleep(60);
+        assert.equal(h.getPhase(), 'active');
+        // Make the sender throw on next emit.
+        const origEmit = opts._sender.emit;
+        opts._sender.emit = () => { throw new Error('sender exploded'); };
+        const { input, button } = findMarker(h);
+        input.value = 'keep me';
+        button.click(); // must not throw
+        assert.equal(input.value, 'keep me',
+          'note text preserved on failure');
+        const title = button.getAttribute('title');
+        assert.ok(title && title.indexOf('marker-failed') === 0,
+          'failure surfaced honestly, got: ' + title);
+        assert.equal(h.getPhase(), 'active',
+          'control still functional after failure');
+        opts._sender.emit = origEmit;
       } finally { h.stop(); }
     });
   });

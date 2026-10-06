@@ -646,6 +646,17 @@ describe('AC6 — wiring and diff discipline', () => {
       // after the pins are evolved (2.x/3.x/4.x/5.1-5.6 precedent).
       '.autodev/evidence/5.7.review.md',
       '.autodev/evidence/5.7.behavior.md',
+      // Honest cumulative evolution: 5.8 (optional timestamped
+      // note/moment marker) legitimately adds the moment_marker event
+      // type + marker UI to session_controls.js, its test + evidence;
+      // its files join the allowlists. No new channel messages,
+      // stores, or permissions.
+      '.autodev/evidence/5.8.contract.md',
+      '.autodev/evidence/5.8.build.md',
+      // Honest cumulative evolution: 5.8's review/behavior evidence lands
+      // after the pins are evolved (2.x/3.x/4.x/5.1-5.7 precedent).
+      '.autodev/evidence/5.8.review.md',
+      '.autodev/evidence/5.8.behavior.md',
     ]);
     const stray = changed.filter((f) => !allowed.has(f));
     assert.deepEqual(stray, [],
@@ -709,6 +720,29 @@ describe('AC6 — wiring and diff discipline', () => {
       l.trim() === 'continue;' || l.includes('var text;') ||
       l.includes('text =') || l.includes('opts.sender') ||
       l.trim().startsWith('return;') || l.trim() === 'text;';
+    // Honest cumulative evolution: 5.8's moment marker adds the
+    // moment_marker event type + payload validator + marker input +
+    // Mark button UI + click-handler wiring. Its added lines are
+    // 5.8-keyworded or use the marker vocabulary.
+    const kw58 = (l) =>
+      l.includes('5.8') || l.includes('moment_marker') ||
+      l.includes('MOMENT_MARKER') || l.includes('MomentMarker') ||
+      l.includes('markerInput') || l.includes('markerButton') ||
+      l.includes('setMarkerEnabled') || l.includes('onMarkerClick') ||
+      l.includes('markerFailureLabel') || l.includes('marker-failed') ||
+      l.includes('blindfold-moment') || l.includes('payload.note') ||
+      l.includes('payload must') || l.includes('var note =') ||
+      l.includes('var keys =') || l.includes('Object.keys') ||
+      l.includes('etName') || l.includes('RangeError') ||
+      l.includes('Optional note for moment marker') ||
+      l.includes('var name =') || l.includes('e.name') ||
+      l.includes('isPlainObject(payload)') || l.includes('keys.length') ||
+      l.includes("keys[0]") || l.includes('typeof note') ||
+      l.includes('return payload;') || l.includes('if (!enabled)') ||
+      l.includes('CONTROL_PHASE_ACTIVE') || l.includes('var raw') ||
+      l.includes('var trimmed') || l.includes('activeSessionId') ||
+      l.includes('activeGameId') || l.includes("raw = ''") ||
+      l.includes('trimmed ===') || l.includes('payload: payload');
     const removed = diff.split('\n')
       .filter((l) => l.startsWith('-') && !l.startsWith('---'))
       .map((l) => l.slice(1).trim())
@@ -716,7 +750,7 @@ describe('AC6 — wiring and diff discipline', () => {
     const bad55 = added.filter((l) =>
       !(structural(l) || l.includes('onSessionStarted') || l.includes('5.3') ||
         l.trim() === 'extensionVersion: extensionVersion,' ||
-        kw55(l) || kw56(l) || removed.includes(l.trim())));
+        kw55(l) || kw56(l) || kw58(l) || removed.includes(l.trim())));
     assert.deepEqual(bad55, [], 'unexpected added lines in session_controls.js:\n' + bad55.join('\n'));
     const badRemoved = removed.filter((l) =>
       !(l === 'extensionVersion: extensionVersion' ||

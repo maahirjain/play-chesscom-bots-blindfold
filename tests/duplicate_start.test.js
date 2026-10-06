@@ -655,6 +655,17 @@ describe('AC7 — diff discipline', () => {
       // after the pins are evolved (2.x/3.x/4.x/5.1-5.6 precedent).
       '.autodev/evidence/5.7.review.md',
       '.autodev/evidence/5.7.behavior.md',
+      // Honest cumulative evolution: 5.8 (optional timestamped
+      // note/moment marker) legitimately adds the moment_marker event
+      // type + marker UI to session_controls.js, its test + evidence;
+      // its files join the allowlists. No new channel messages,
+      // stores, or permissions.
+      '.autodev/evidence/5.8.contract.md',
+      '.autodev/evidence/5.8.build.md',
+      // Honest cumulative evolution: 5.8's review/behavior evidence lands
+      // after the pins are evolved (2.x/3.x/4.x/5.1-5.7 precedent).
+      '.autodev/evidence/5.8.review.md',
+      '.autodev/evidence/5.8.behavior.md',
     ]);
     for (const f of changed) {
       assert.ok(allowed.has(f), `unexpected modified file: ${f}`);
@@ -678,7 +689,15 @@ describe('AC7 — diff discipline', () => {
     assert.ok(!found.some((f) => /DUPLICATE|SESSION_ACTIVE/.test(f)),
       'no new message constants for the refusal');
     const sc = fs.readFileSync(path.join(REPO, 'session_controls.js'), 'utf8');
-    assert.ok(!/EVENT_TYPE/.test(sc), 'no event types in session_controls.js');
+    // 5.8: exactly one event type (moment_marker) is the specified
+    // deliverable — 5.7's contract reserved marker ownership to 5.8.
+    const scStripped = sc
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/(^|\s)\/\/.*$/gm, '');
+    const scConsts = scStripped.match(/\b[A-Z][A-Z_]*EVENT_TYPE\b/g) || [];
+    assert.deepEqual([...new Set(scConsts)].sort(),
+      ['MOMENT_MARKER_EVENT_TYPE'],
+      'only the 5.8 moment_marker event type in session_controls.js');
   });
 
   it('PLAN.md is unmodified', () => {

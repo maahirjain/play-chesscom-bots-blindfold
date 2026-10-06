@@ -442,6 +442,48 @@ var BlindfoldSession = BlindfoldSession || {};
   }
 
   // ------------------------------------------------------------------
+  // 5.8: moment marker (PLAN.md §5.8) — optional timestamped note.
+  //
+  // One new event type, 'moment_marker'. The payload is
+  // {note: string|null} — the user's optional note text (trimmed by
+  // the UI layer; null for a bare moment flag). Timestamping is the
+  // sender pipeline's job (1.3.3: monotonicMs + clockSegmentId); 5.8
+  // adds no timing code.
+  //
+  // Strict validator, following the requireValidPermissionChangedPayload
+  // precedent: TypeError on wrong shape, RangeError on over-length
+  // note (never silent truncation — the UI surfaces the failure and
+  // preserves the text).
+  // ------------------------------------------------------------------
+
+  var MOMENT_MARKER_EVENT_TYPE = 'moment_marker';
+  var MOMENT_MARKER_NOTE_MAX_LENGTH = 500;
+
+  function requireValidMomentMarkerPayload(payload, eventTypeName) {
+    var etName = eventTypeName || MOMENT_MARKER_EVENT_TYPE;
+    if (!isPlainObject(payload)) {
+      throw new TypeError(etName + ' payload must be an object');
+    }
+    var keys = Object.keys(payload);
+    if (keys.length !== 1 || keys[0] !== 'note') {
+      throw new TypeError(
+        etName + ' payload must have exactly the keys: note');
+    }
+    var note = payload.note;
+    if (note !== null && typeof note !== 'string') {
+      throw new TypeError(
+        etName + ' payload.note must be a string or null');
+    }
+    if (typeof note === 'string' &&
+        note.length > MOMENT_MARKER_NOTE_MAX_LENGTH) {
+      throw new RangeError(
+        etName + ' payload.note must be at most ' +
+        MOMENT_MARKER_NOTE_MAX_LENGTH + ' characters');
+    }
+    return payload;
+  }
+
+  // ------------------------------------------------------------------
   // Installation: DOM + Start/Stop wiring.
   // ------------------------------------------------------------------
 
@@ -622,6 +664,31 @@ var BlindfoldSession = BlindfoldSession || {};
     } catch (e) { /* non-CSS DOM stub */ }
     cluster.appendChild(readinessEl);
 
+    // 5.8: moment marker (PLAN.md §5.8). Optional timestamped note —
+    // a compact text input + "Mark" button. Emits a single
+    // moment_marker event through the sender pipeline; timestamping
+    // is the pipeline's job. Disabled unless the session is ACTIVE
+    // (a marker with no sessionId is meaningless raw data).
+    // Never required: zero new steps in Start → play → Stop, never
+    // focused automatically, never prompts. No hotkey (kept minimal;
+    // all single-letter keys are taken by gameplay).
+    var markerInput = doc.createElement('input');
+    markerInput.type = 'text';
+    markerInput.className = 'blindfold-moment-input';
+    markerInput.setAttribute('placeholder', 'Note (optional)');
+    markerInput.setAttribute('aria-label',
+      'Optional note for moment marker');
+    markerInput.disabled = true;
+    cluster.appendChild(markerInput);
+
+    var markerButton = doc.createElement('button');
+    markerButton.type = 'button';
+    markerButton.className = 'blindfold-moment-mark';
+    markerButton.textContent = 'Mark';
+    markerButton.setAttribute('aria-label', 'Record moment marker');
+    markerButton.disabled = true;
+    cluster.appendChild(markerButton);
+
     // Anchor: the extension's own move-input UI (2.8 precedent), so the
     // cluster reads [Start][mic][screen][webcam] ahead of 2.8's saving
     // light — four lights total, PLAN §(c) step 4. Fixed-corner fallback
@@ -671,6 +738,64 @@ var BlindfoldSession = BlindfoldSession || {};
       } else {
         button.setAttribute('title', detailText);
       }
+    }
+
+    // 5.8: marker affordance enable/disable. Mirrors the ACTIVE phase:
+    // enabled only while a session is active. Disabling clears the
+    // input (no stale text carries into the next session) and any
+    // prior failure detail.
+    function setMarkerEnabled(enabled) {
+      markerInput.disabled = !enabled;
+      markerButton.disabled = !enabled;
+      if (!enabled) {
+        try { markerInput.value = ''; } catch (e) { /* non-input stub */ }
+        markerButton.removeAttribute('title');
+      }
+    }
+
+    function markerFailureLabel(e) {
+      var name = (e && typeof e.name === 'string' && e.name) ?
+        e.name : 'Error';
+      return 'marker-failed:' + name;
+    }
+
+    // 5.8: marker click. Reads the input, trims, emits one
+    // moment_marker via the sender (same pattern as emitPageStart).
+    // Failure-isolated (3.2 SF-1): a throwing sender or a validation
+    // failure never breaks the control; the text is preserved and the
+    // failure is surfaced honestly on the button title, never silently
+    // dropped. Success clears the input (the success signal).
+    function onMarkerClick() {
+      if (phase !== CONTROL_PHASE_ACTIVE) {
+        return; // disabled unless ACTIVE; defensive re-check
+      }
+      var raw;
+      try {
+        raw = markerInput.value;
+      } catch (e) {
+        raw = '';
+      }
+      var trimmed = (typeof raw === 'string') ? raw.trim() : '';
+      var payload = { note: trimmed === '' ? null : trimmed };
+      try {
+        requireValidMomentMarkerPayload(payload, MOMENT_MARKER_EVENT_TYPE);
+      } catch (e) {
+        markerButton.setAttribute('title', markerFailureLabel(e));
+        return;
+      }
+      try {
+        opts.sender.emit({
+          eventType: MOMENT_MARKER_EVENT_TYPE,
+          sessionId: activeSessionId,
+          gameId: activeGameId,
+          payload: payload
+        });
+      } catch (e) {
+        markerButton.setAttribute('title', markerFailureLabel(e));
+        return;
+      }
+      try { markerInput.value = ''; } catch (e) { /* non-input stub */ }
+      markerButton.removeAttribute('title');
     }
 
     function renderLight(kind, classified) {
@@ -937,6 +1062,7 @@ var BlindfoldSession = BlindfoldSession || {};
       setSlots(null, null);
       lastStartResults = {};
       resetReadiness();
+      setMarkerEnabled(false); // 5.8
       phase = CONTROL_PHASE_IDLE;
       setButton('Start', true, detailText, 'Start recording session');
     }
@@ -952,6 +1078,7 @@ var BlindfoldSession = BlindfoldSession || {};
       setSlots(null, null);
       lastStartResults = {};
       resetReadiness();
+      setMarkerEnabled(false); // 5.8
       phase = CONTROL_PHASE_IDLE;
       setButton('Start', true, detailText, 'Start recording session');
     }
@@ -1046,6 +1173,7 @@ var BlindfoldSession = BlindfoldSession || {};
           // as unknown" applies to conditions, not to the 1.1 metadata
           // category — so Start cannot proceed uncategorized.
           resetReadiness();
+          setMarkerEnabled(false); // 5.8
           phase = CONTROL_PHASE_IDLE;
           setButton('Start', true,
             factoriesOk ? 'no-category-selected' : 'record-build-failed',
@@ -1083,6 +1211,7 @@ var BlindfoldSession = BlindfoldSession || {};
             // abort without the recorder-side clear (nothing to clear).
             setSlots(null, null);
             resetReadiness();
+            setMarkerEnabled(false); // 5.8
             phase = CONTROL_PHASE_IDLE;
             setButton('Start', true, 'ensure-failed:' + reason,
               'Start recording session');
@@ -1137,6 +1266,7 @@ var BlindfoldSession = BlindfoldSession || {};
                 fieldsHandle.getDetectedConditions());
             } catch (e) {
               resetReadiness();
+              setMarkerEnabled(false); // 5.8
               phase = CONTROL_PHASE_IDLE;
               setButton('Start', true, 'record-build-failed',
                 'Start recording session');
@@ -1172,6 +1302,7 @@ var BlindfoldSession = BlindfoldSession || {};
               // local reset only (nothing to clear recorder-side).
               setSlots(null, null);
               resetReadiness();
+              setMarkerEnabled(false); // 5.8
               phase = CONTROL_PHASE_IDLE;
               setButton('Start', true, 'session-save-failed:' + serr,
                 'Start recording session');
@@ -1258,6 +1389,7 @@ var BlindfoldSession = BlindfoldSession || {};
           pageStartEmitted = true;
           phase = CONTROL_PHASE_ACTIVE;
           setButton('Stop', true, null, 'Stop recording session');
+          setMarkerEnabled(true); // 5.8: session active → marker available
           // 5.3: remembered-defaults capture — fired exactly once per
           // successful Start, at the phase → 'active' point, with the
           // selection object that was recorded (the same values
@@ -1356,6 +1488,7 @@ var BlindfoldSession = BlindfoldSession || {};
             lastStartResults = {};
             // 5.6: readiness resets with the session.
             resetReadiness();
+            setMarkerEnabled(false); // 5.8
             phase = CONTROL_PHASE_IDLE;
             setButton('Start', true, null, 'Start recording session');
             // 5.2: the form is re-enabled for the next game. The
@@ -1398,6 +1531,14 @@ var BlindfoldSession = BlindfoldSession || {};
       } catch (e) { /* unreachable by construction; fail-safe */ }
     });
 
+    // 5.8: marker button. Never throws into page code (3.2 SF-1);
+    // onMarkerClick is itself failure-isolated.
+    markerButton.addEventListener('click', function () {
+      try {
+        onMarkerClick();
+      } catch (e) { /* unreachable by construction; fail-safe */ }
+    });
+
     // ---- Boot adoption (4.1 refresh survival) -------------------------
     // One recorder-get-status at install: a surviving session is
     // adopted (button → Stop, polling on); {ok:false} → idle.
@@ -1425,6 +1566,7 @@ var BlindfoldSession = BlindfoldSession || {};
         setSlots(resp.sessionId, gid);
         phase = CONTROL_PHASE_ACTIVE;
         setButton('Stop', true, null, 'Stop recording session');
+        setMarkerEnabled(true); // 5.8: adopted session is active
         // 5.2: the adopted session's category shows in the disabled
         // form (contract §3.4). A missing echo → the honest disabled
         // "Unknown (adopted session)" label — never a remembered
@@ -1479,6 +1621,12 @@ var BlindfoldSession = BlindfoldSession || {};
   BlindfoldSession.READINESS_NOT_READY = READINESS_NOT_READY;
   BlindfoldSession.READINESS_UNKNOWN = READINESS_UNKNOWN;
   BlindfoldSession.computeReadiness = computeReadiness;
+  // 5.8: moment marker event type + payload validator.
+  BlindfoldSession.MOMENT_MARKER_EVENT_TYPE = MOMENT_MARKER_EVENT_TYPE;
+  BlindfoldSession.MOMENT_MARKER_NOTE_MAX_LENGTH =
+    MOMENT_MARKER_NOTE_MAX_LENGTH;
+  BlindfoldSession.requireValidMomentMarkerPayload =
+    requireValidMomentMarkerPayload;
   BlindfoldSession.installSessionControls = installSessionControls;
 })();
 

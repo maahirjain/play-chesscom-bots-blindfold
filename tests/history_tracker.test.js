@@ -1073,6 +1073,17 @@ describe('AC13 — diff discipline', () => {
       // after the pins are evolved (2.x/3.x/4.x/5.1-5.6 precedent).
       '.autodev/evidence/5.7.review.md',
       '.autodev/evidence/5.7.behavior.md',
+      // Honest cumulative evolution: 5.8 (optional timestamped
+      // note/moment marker) legitimately adds the moment_marker event
+      // type + marker UI to session_controls.js, its test + evidence;
+      // its files join the allowlists. No new channel messages,
+      // stores, or permissions.
+      '.autodev/evidence/5.8.contract.md',
+      '.autodev/evidence/5.8.build.md',
+      // Honest cumulative evolution: 5.8's review/behavior evidence lands
+      // after the pins are evolved (2.x/3.x/4.x/5.1-5.7 precedent).
+      '.autodev/evidence/5.8.review.md',
+      '.autodev/evidence/5.8.behavior.md',
     ]);
     for (const f of changed) {
       assert.ok(allowed.has(f), `unexpected modified file: ${f}`);
