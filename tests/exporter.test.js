@@ -299,21 +299,19 @@ describe('AC6 — diff discipline', () => {
       .map((l) => l.slice(3).trim())
       .filter((f) => f !== '' && !/^\.autodev\/evidence\/5\.\d/.test(f));
     assert.deepEqual(changed.sort(), [
-      // 6.1 was committed (7a23b3a); this pin now covers 6.2/6.3's
-      // working tree. 6.2 (export events.jsonl) and 6.3 (export
-      // media-sync.json) extend the 6.1 exporter.js module with pure
-      // builder functions; their evidence and DECISIONS.md entries
-      // join the allowlists. The 6.2/6.3 review/behavior evidence
-      // lands after the pins are evolved (2.x-6.1 precedent).
+      // 6.1–6.3 were committed (7a23b3a, f3bb3dd); this pin now covers
+      // 6.4/6.5's working tree. 6.4 (assemble chunks) and 6.5 (numbered
+      // files) extend the exporter.js module; their evidence and
+      // DECISIONS.md entries join the allowlists. The 6.4/6.5
+      // review/behavior evidence lands after the pins are evolved
+      // (2.x-6.3 precedent); combined 6.4+6.5 naming.
       '.autodev/DECISIONS.md',
-      '.autodev/evidence/6.2.build.md',
-      '.autodev/evidence/6.2.contract.md',
-      // 6.2/6.3's review/behavior evidence lands after the pins are
-      // evolved (2.x-6.1 precedent); combined 6.2+6.3 naming.
-      '.autodev/evidence/6.2+6.3.review.md',
-      '.autodev/evidence/6.2+6.3.behavior.md',
-      '.autodev/evidence/6.3.build.md',
-      '.autodev/evidence/6.3.contract.md',
+      '.autodev/evidence/6.4.build.md',
+      '.autodev/evidence/6.4.contract.md',
+      '.autodev/evidence/6.4+6.5.review.md',
+      '.autodev/evidence/6.4+6.5.behavior.md',
+      '.autodev/evidence/6.5.build.md',
+      '.autodev/evidence/6.5.contract.md',
       'exporter.js',
       'tests/exporter.test.js',
       ...[
@@ -881,5 +879,484 @@ describe('6.3 AC6 — purity and strict validation', () => {
       nowUtcIso: function () { return '2026-10-06T22:00:00.000Z'; }
     };
     assert.equal(BS.buildMediaSyncJson(args), BS.buildMediaSyncJson(args));
+  });
+});
+
+// ------------------------------------------------------------------
+// 6.4 — assembleSegmentChunks (PLAN.md §6.4).
+// ------------------------------------------------------------------
+
+function fixtureChunk(segmentId, chunkIndex, byteArray, overrides) {
+  var rec = {
+    segmentId: segmentId,
+    chunkIndex: chunkIndex,
+    receivedAtUtc: '2026-10-06T20:00:00.000Z',
+    receivedAtMonotonicMs: 1000 + chunkIndex,
+    timecodeMs: chunkIndex * 1000,
+    data: new Blob([new Uint8Array(byteArray)])
+  };
+  var k;
+  for (k in (overrides || {})) {
+    if (Object.prototype.hasOwnProperty.call(overrides || {}, k)) {
+      rec[k] = overrides[k];
+    }
+  }
+  return rec;
+}
+
+function concatParts(parts) {
+  return Promise.all(parts.map(function (p) { return p.arrayBuffer(); }))
+    .then(function (abs) {
+      var total = abs.reduce(function (n, ab) { return n + ab.byteLength; }, 0);
+      var out = new Uint8Array(total);
+      var off = 0;
+      abs.forEach(function (ab) {
+        out.set(new Uint8Array(ab), off);
+        off += ab.byteLength;
+      });
+      return out;
+    });
+}
+
+// Independent CRC-32 (not via exporter internals) for cross-checking.
+function independentCrc32(byteArrays) {
+  var table = new Array(256);
+  var n, k, c;
+  for (n = 0; n < 256; n++) {
+    c = n;
+    for (k = 0; k < 8; k++) {
+      c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    }
+    table[n] = c >>> 0;
+  }
+  var state = 0xFFFFFFFF;
+  var i, j, bytes;
+  for (i = 0; i < byteArrays.length; i++) {
+    bytes = byteArrays[i];
+    for (j = 0; j < bytes.length; j++) {
+      state = table[(state ^ bytes[j]) & 0xFF] ^ (state >>> 8);
+    }
+  }
+  return ((state ^ 0xFFFFFFFF) >>> 0);
+}
+
+describe('6.4 AC1 — byte-concatenation in chunkIndex order', () => {
+  it('assembles N chunks to concatenated bytes in input order', async () => {
+    var chunks = [
+      fixtureChunk('s1', 0, [0x1A, 0x45, 0xDF, 0xA3]),
+      fixtureChunk('s1', 1, [0x42, 0x86]),
+      fixtureChunk('s1', 2, [0x81, 0x01, 0x42, 0xF7])
+    ];
+    var r = await BS.assembleSegmentChunks({ chunks: chunks });
+    var bytes = await concatParts(r.parts);
+    assert.deepEqual(Array.from(bytes),
+      [0x1A, 0x45, 0xDF, 0xA3, 0x42, 0x86, 0x81, 0x01, 0x42, 0xF7]);
+    assert.equal(r.byteLength, 10);
+    assert.equal(r.chunkCount, 3);
+  });
+
+  it('processes input order as given (trusts 6.6 key-order guarantee)', async () => {
+    // Deliberately out-of-order input: assembled in INPUT order,
+    // per contract §3 (6.6 owns ordering via the key-range read).
+    var chunks = [
+      fixtureChunk('s1', 2, [0x03]),
+      fixtureChunk('s1', 0, [0x01]),
+      fixtureChunk('s1', 1, [0x02])
+    ];
+    var r = await BS.assembleSegmentChunks({ chunks: chunks });
+    var bytes = await concatParts(r.parts);
+    assert.deepEqual(Array.from(bytes), [0x03, 0x01, 0x02]);
+  });
+});
+
+describe('6.4 AC2 — zero transcoding', () => {
+  it('output bytes are byte-identical to input chunk bytes', async () => {
+    // Synthetic WebM-like pattern: init segment + clusters.
+    var init = [0x1A, 0x45, 0xDF, 0xA3, 0x42, 0x86, 0x81, 0x01];
+    var cluster1 = [0x1F, 0x43, 0xB6, 0x75, 0x01, 0x02, 0x03];
+    var cluster2 = [0x1F, 0x43, 0xB6, 0x75, 0x04, 0x05, 0x06, 0x07];
+    var chunks = [
+      fixtureChunk('s1', 0, init),
+      fixtureChunk('s1', 1, cluster1),
+      fixtureChunk('s1', 2, cluster2)
+    ];
+    var r = await BS.assembleSegmentChunks({ chunks: chunks });
+    var bytes = await concatParts(r.parts);
+    assert.deepEqual(Array.from(bytes), init.concat(cluster1, cluster2));
+    // No headers added, no bytes transformed: length is exact sum.
+    assert.equal(r.byteLength, init.length + cluster1.length + cluster2.length);
+  });
+});
+
+describe('6.4 AC3 — CRC-32 correctness', () => {
+  it('empty input yields crc32 0', async () => {
+    var r = await BS.assembleSegmentChunks({ chunks: [] });
+    assert.equal(r.crc32, 0);
+  });
+
+  it('"123456789" yields 0xCBF43926 (standard vector)', async () => {
+    var s = '123456789';
+    var bytes = [];
+    var i;
+    for (i = 0; i < s.length; i++) {
+      bytes.push(s.charCodeAt(i));
+    }
+    var r = await BS.assembleSegmentChunks({
+      chunks: [fixtureChunk('s1', 0, bytes)]
+    });
+    assert.equal(r.crc32, 0xCBF43926);
+  });
+
+  it('multi-chunk incremental CRC equals single-buffer CRC', async () => {
+    var a = [1, 2, 3, 4, 5];
+    var b = [6, 7, 8];
+    var c = [9, 10, 11, 12];
+    var multi = await BS.assembleSegmentChunks({
+      chunks: [
+        fixtureChunk('s1', 0, a),
+        fixtureChunk('s1', 1, b),
+        fixtureChunk('s1', 2, c)
+      ]
+    });
+    var single = await BS.assembleSegmentChunks({
+      chunks: [fixtureChunk('s1', 0, a.concat(b, c))]
+    });
+    assert.equal(multi.crc32, single.crc32);
+    assert.equal(multi.crc32, independentCrc32([a, b, c]));
+  });
+});
+
+describe('6.4 AC4 — streaming shape', () => {
+  it('returns one Blob per chunk, not one merged Blob', async () => {
+    var chunks = [
+      fixtureChunk('s1', 0, [1, 2]),
+      fixtureChunk('s1', 1, [3, 4, 5]),
+      fixtureChunk('s1', 2, [6])
+    ];
+    var r = await BS.assembleSegmentChunks({ chunks: chunks });
+    assert.equal(r.parts.length, 3);
+    assert.equal(r.parts.length, chunks.length);
+    // Each part is the original chunk Blob (same reference, same size).
+    assert.equal(r.parts[0], chunks[0].data);
+    assert.equal(r.parts[1].size, 3);
+    assert.equal(r.parts[2].size, 1);
+  });
+});
+
+describe('6.4 AC5 — malformed input fails closed', () => {
+  it('non-object args rejects with TypeError', async () => {
+    await assert.rejects(BS.assembleSegmentChunks(null), TypeError);
+    await assert.rejects(BS.assembleSegmentChunks('x'), TypeError);
+  });
+
+  it('non-array chunks rejects with TypeError', async () => {
+    await assert.rejects(BS.assembleSegmentChunks({ chunks: 'nope' }), TypeError);
+  });
+
+  it('missing data rejects with TypeError naming the chunkIndex', async () => {
+    var chunks = [fixtureChunk('s1', 0, [1], { data: null })];
+    await assert.rejects(
+      BS.assembleSegmentChunks({ chunks: chunks }),
+      function (e) {
+        return e instanceof TypeError && /chunkIndex 0/.test(e.message) &&
+          /data/.test(e.message);
+      });
+  });
+
+  it('non-Blob data rejects with TypeError', async () => {
+    var chunks = [fixtureChunk('s1', 3, [1], { data: { size: 1 } })];
+    await assert.rejects(
+      BS.assembleSegmentChunks({ chunks: chunks }),
+      function (e) {
+        return e instanceof TypeError && /chunkIndex 3/.test(e.message);
+      });
+  });
+
+  it('duplicate chunkIndex rejects with TypeError', async () => {
+    var chunks = [
+      fixtureChunk('s1', 0, [1]),
+      fixtureChunk('s1', 0, [2])
+    ];
+    await assert.rejects(
+      BS.assembleSegmentChunks({ chunks: chunks }),
+      function (e) {
+        return e instanceof TypeError && /duplicate chunkIndex 0/.test(e.message);
+      });
+  });
+
+  it('negative chunkIndex rejects with TypeError', async () => {
+    var chunks = [fixtureChunk('s1', -1, [1])];
+    await assert.rejects(BS.assembleSegmentChunks({ chunks: chunks }), TypeError);
+  });
+});
+
+describe('6.4 AC6 — gaps are honest', () => {
+  it('chunks [0, 2, 5] assemble without error or re-indexing', async () => {
+    var chunks = [
+      fixtureChunk('s1', 0, [0xAA]),
+      fixtureChunk('s1', 2, [0xBB]),
+      fixtureChunk('s1', 5, [0xCC])
+    ];
+    var r = await BS.assembleSegmentChunks({ chunks: chunks });
+    assert.equal(r.chunkCount, 3);
+    assert.equal(r.parts.length, 3);
+    var bytes = await concatParts(r.parts);
+    assert.deepEqual(Array.from(bytes), [0xAA, 0xBB, 0xCC]);
+  });
+});
+
+describe('6.4 AC7 — empty input', () => {
+  it('empty chunks yields zeroed result without throwing', async () => {
+    var r = await BS.assembleSegmentChunks({ chunks: [] });
+    assert.deepEqual(r.parts, []);
+    assert.equal(r.byteLength, 0);
+    assert.equal(r.crc32, 0);
+    assert.equal(r.chunkCount, 0);
+  });
+});
+
+// ------------------------------------------------------------------
+// 6.5 — nameSegmentFiles (PLAN.md §6.5).
+// ------------------------------------------------------------------
+
+function fixtureNamingRecord(overrides) {
+  var base = {
+    segmentId: 'seg-1',
+    streamKind: 'microphone',
+    segmentNumber: 1,
+    fileExtension: '.webm',
+    actualMimeType: 'audio/webm;codecs=opus',
+    createdAtUtc: '2026-10-06T20:00:00.000Z'
+  };
+  var k;
+  for (k in (overrides || {})) {
+    if (Object.prototype.hasOwnProperty.call(overrides || {}, k)) {
+      base[k] = overrides[k];
+    }
+  }
+  return base;
+}
+
+describe('6.5 AC1 — finalized segments use segmentNumber verbatim', () => {
+  it('segmentNumber 1 -> microphone-001.webm', () => {
+    var r = BS.nameSegmentFiles({
+      manifestRecords: [fixtureNamingRecord({})]
+    });
+    assert.equal(r.bySegmentId['seg-1'], 'microphone-001.webm');
+    assert.equal(r.files[0].segmentNumber, 1);
+  });
+
+  it('segmentNumber 12 -> microphone-012.webm; 1000 stays 1000', () => {
+    var r = BS.nameSegmentFiles({
+      manifestRecords: [
+        fixtureNamingRecord({ segmentId: 'a', segmentNumber: 12 }),
+        fixtureNamingRecord({ segmentId: 'b', segmentNumber: 1000 })
+      ]
+    });
+    assert.equal(r.bySegmentId['a'], 'microphone-012.webm');
+    assert.equal(r.bySegmentId['b'], 'microphone-1000.webm');
+  });
+});
+
+describe('6.5 AC2 — unfinalized sessions number chronologically', () => {
+  it('three null-numbered segments -> 001, 002, 003 in createdAtUtc order', () => {
+    var r = BS.nameSegmentFiles({
+      manifestRecords: [
+        fixtureNamingRecord({
+          segmentId: 'late', streamKind: 'screen', segmentNumber: null,
+          fileExtension: '.webm', actualMimeType: 'video/webm',
+          createdAtUtc: '2026-10-06T20:02:00.000Z'
+        }),
+        fixtureNamingRecord({
+          segmentId: 'early', streamKind: 'screen', segmentNumber: null,
+          fileExtension: '.webm', actualMimeType: 'video/webm',
+          createdAtUtc: '2026-10-06T20:00:00.000Z'
+        }),
+        fixtureNamingRecord({
+          segmentId: 'mid', streamKind: 'screen', segmentNumber: null,
+          fileExtension: '.webm', actualMimeType: 'video/webm',
+          createdAtUtc: '2026-10-06T20:01:00.000Z'
+        })
+      ]
+    });
+    assert.equal(r.bySegmentId['early'], 'screen-001.webm');
+    assert.equal(r.bySegmentId['mid'], 'screen-002.webm');
+    assert.equal(r.bySegmentId['late'], 'screen-003.webm');
+    // Effective numbers are the on-the-fly labels.
+    assert.deepEqual(r.files.map(function (f) { return f.segmentNumber; }), [1, 2, 3]);
+  });
+});
+
+describe('6.5 AC3 — mixed finalized/unfinalized fills gaps', () => {
+  it('numbers {1, 3} + one null -> null gets 002, no collision', () => {
+    var r = BS.nameSegmentFiles({
+      manifestRecords: [
+        fixtureNamingRecord({ segmentId: 's1', segmentNumber: 1 }),
+        fixtureNamingRecord({ segmentId: 's3', segmentNumber: 3 }),
+        fixtureNamingRecord({
+          segmentId: 'sx', segmentNumber: null,
+          createdAtUtc: '2026-10-06T20:05:00.000Z'
+        })
+      ]
+    });
+    assert.equal(r.bySegmentId['s1'], 'microphone-001.webm');
+    assert.equal(r.bySegmentId['sx'], 'microphone-002.webm');
+    assert.equal(r.bySegmentId['s3'], 'microphone-003.webm');
+  });
+});
+
+describe('6.5 AC4 — per-kind independence', () => {
+  it('microphone and screen each number from 001', () => {
+    var r = BS.nameSegmentFiles({
+      manifestRecords: [
+        fixtureNamingRecord({ segmentId: 'm1', streamKind: 'microphone', segmentNumber: 1 }),
+        fixtureNamingRecord({
+          segmentId: 'v1', streamKind: 'screen', segmentNumber: 1,
+          fileExtension: '.webm', actualMimeType: 'video/webm'
+        }),
+        fixtureNamingRecord({ segmentId: 'm2', streamKind: 'microphone', segmentNumber: 2 })
+      ]
+    });
+    assert.equal(r.bySegmentId['m1'], 'microphone-001.webm');
+    assert.equal(r.bySegmentId['m2'], 'microphone-002.webm');
+    assert.equal(r.bySegmentId['v1'], 'screen-001.webm');
+  });
+});
+
+describe('6.5 AC5 — extension resolution', () => {
+  it('manifest fileExtension used verbatim', () => {
+    var r = BS.nameSegmentFiles({
+      manifestRecords: [fixtureNamingRecord({ fileExtension: '.mp4' })]
+    });
+    assert.equal(r.bySegmentId['seg-1'], 'microphone-001.mp4');
+  });
+
+  it('null fileExtension + audio/webm -> .webm', () => {
+    var r = BS.nameSegmentFiles({
+      manifestRecords: [fixtureNamingRecord({
+        fileExtension: null, actualMimeType: 'audio/webm'
+      })]
+    });
+    assert.equal(r.bySegmentId['seg-1'], 'microphone-001.webm');
+  });
+
+  it('null fileExtension + video/mp4 -> .mp4', () => {
+    var r = BS.nameSegmentFiles({
+      manifestRecords: [fixtureNamingRecord({
+        streamKind: 'screen', fileExtension: null,
+        actualMimeType: 'video/mp4;codecs=avc1'
+      })]
+    });
+    assert.equal(r.bySegmentId['seg-1'], 'screen-001.mp4');
+  });
+
+  it('null fileExtension + audio/mp4 -> .m4a', () => {
+    var r = BS.nameSegmentFiles({
+      manifestRecords: [fixtureNamingRecord({
+        fileExtension: null, actualMimeType: 'audio/mp4'
+      })]
+    });
+    assert.equal(r.bySegmentId['seg-1'], 'microphone-001.m4a');
+  });
+
+  it('both null -> TypeError naming the segmentId', () => {
+    assert.throws(function () {
+      BS.nameSegmentFiles({
+        manifestRecords: [fixtureNamingRecord({
+          segmentId: 'badseg', fileExtension: null, actualMimeType: null
+        })]
+      });
+    }, function (e) {
+      return e instanceof TypeError && /badseg/.test(e.message);
+    });
+  });
+
+  it('unrecognized mimeType -> TypeError', () => {
+    assert.throws(function () {
+      BS.nameSegmentFiles({
+        manifestRecords: [fixtureNamingRecord({
+          segmentId: 'weird', fileExtension: null,
+          actualMimeType: 'application/octet-stream'
+        })]
+      });
+    }, TypeError);
+  });
+});
+
+describe('6.5 AC6 — malformed input fails closed', () => {
+  it('non-array manifestRecords throws TypeError', () => {
+    assert.throws(function () {
+      BS.nameSegmentFiles({ manifestRecords: 'nope' });
+    }, TypeError);
+  });
+
+  it('missing segmentId throws TypeError', () => {
+    assert.throws(function () {
+      BS.nameSegmentFiles({
+        manifestRecords: [fixtureNamingRecord({ segmentId: '' })]
+      });
+    }, TypeError);
+  });
+
+  it('duplicate segmentId throws TypeError', () => {
+    assert.throws(function () {
+      BS.nameSegmentFiles({
+        manifestRecords: [
+          fixtureNamingRecord({ segmentId: 'dup' }),
+          fixtureNamingRecord({ segmentId: 'dup' })
+        ]
+      });
+    }, function (e) {
+      return e instanceof TypeError && /duplicate segmentId/.test(e.message);
+    });
+  });
+
+  it('non-positive segmentNumber throws TypeError', () => {
+    assert.throws(function () {
+      BS.nameSegmentFiles({
+        manifestRecords: [fixtureNamingRecord({ segmentNumber: 0 })]
+      });
+    }, TypeError);
+    assert.throws(function () {
+      BS.nameSegmentFiles({
+        manifestRecords: [fixtureNamingRecord({ segmentNumber: -2 })]
+      });
+    }, TypeError);
+  });
+
+  it('duplicate finalized segmentNumber within a kind throws TypeError', () => {
+    assert.throws(function () {
+      BS.nameSegmentFiles({
+        manifestRecords: [
+          fixtureNamingRecord({ segmentId: 'd1', segmentNumber: 1 }),
+          fixtureNamingRecord({ segmentId: 'd2', segmentNumber: 1 })
+        ]
+      });
+    }, function (e) {
+      return e instanceof TypeError && /duplicate segmentNumber/.test(e.message);
+    });
+  });
+});
+
+describe('6.5 AC7 — empty input', () => {
+  it('empty manifestRecords yields empty mapping', () => {
+    var r = BS.nameSegmentFiles({ manifestRecords: [] });
+    assert.deepEqual(r.files, []);
+    assert.deepEqual(r.bySegmentId, {});
+  });
+});
+
+describe('6.5 AC8 — determinism', () => {
+  it('shuffled input yields identical output', () => {
+    var recs = [
+      fixtureNamingRecord({ segmentId: 'a', segmentNumber: 2 }),
+      fixtureNamingRecord({ segmentId: 'b', segmentNumber: null }),
+      fixtureNamingRecord({ segmentId: 'c', segmentNumber: 1 })
+    ];
+    var r1 = BS.nameSegmentFiles({ manifestRecords: recs });
+    var r2 = BS.nameSegmentFiles({
+      manifestRecords: [recs[2], recs[0], recs[1]]
+    });
+    assert.deepEqual(r1, r2);
   });
 });

@@ -541,6 +541,14 @@ var BlindfoldSession = BlindfoldSession || {};
     if (kaO !== kbO) {
       return kaO - kbO;
     }
+    // Tiebreaker for unknown kinds: group by kind name so
+    // nameSegmentFiles' per-kind usedNumbers tracking never resets
+    // between segments of the same unknown kind (which would cause
+    // filename collisions). Unreachable in practice (chunk_writer
+    // validates streamKind at intake), but fail-safe.
+    if (ka === -1 && kb === -1 && a.streamKind !== b.streamKind) {
+      return a.streamKind < b.streamKind ? -1 : 1;
+    }
     var na = (a.segmentNumber === null || a.segmentNumber === undefined) ? null : a.segmentNumber;
     var nb = (b.segmentNumber === null || b.segmentNumber === undefined) ? null : b.segmentNumber;
     if (na === null && nb !== null) {
@@ -690,6 +698,279 @@ var BlindfoldSession = BlindfoldSession || {};
   }
 
   BlindfoldSession.buildMediaSyncJson = buildMediaSyncJson;
+
+  // --- 6.4: chunk assembly ---
+
+  // CRC-32 (ISO 3309, the ZIP/STORE checksum), table-driven.
+  // Generated once at module load; the table is constant data.
+  var CRC32_TABLE = (function () {
+    var table = new Array(256);
+    var n, k, c;
+    for (n = 0; n < 256; n++) {
+      c = n;
+      for (k = 0; k < 8; k++) {
+        c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+      }
+      table[n] = c >>> 0;
+    }
+    return table;
+  })();
+
+  // Incremental CRC-32 state. `state` is the raw (pre-final-XOR)
+  // accumulator: starts at 0xFFFFFFFF, final value is
+  // (state ^ 0xFFFFFFFF) >>> 0. Updating per chunk keeps JS-heap at
+  // O(largest chunk), never O(file).
+  function crc32Update(state, bytes) {
+    var c = state >>> 0;
+    var i;
+    for (i = 0; i < bytes.length; i++) {
+      c = CRC32_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+    }
+    return c >>> 0;
+  }
+
+  function crc32Finalize(state) {
+    return ((state ^ 0xFFFFFFFF) >>> 0);
+  }
+
+  function isBlobLike(v) {
+    return v !== null && (typeof v === 'object' || typeof v === 'function') &&
+      typeof v.arrayBuffer === 'function' && typeof v.size === 'number';
+  }
+
+  function requireValidChunk(chunk, index) {
+    var label = 'exporter: chunks[' + index + ']';
+    if (!isPlainObject(chunk)) {
+      throw new TypeError(label + ' must be a chunk object');
+    }
+    var ci = chunk.chunkIndex;
+    if (typeof ci === 'number') {
+      label += ' (chunkIndex ' + ci + ')';
+    }
+    if (typeof ci !== 'number' || Math.floor(ci) !== ci || ci < 0) {
+      throw new TypeError(label + ' has a corrupt chunkIndex (must be a non-negative integer)');
+    }
+    if (!isBlobLike(chunk.data)) {
+      throw new TypeError(label + ' has missing or non-Blob data');
+    }
+    return ci;
+  }
+
+  // 6.4: assemble one segment's stored chunks into the original-format
+  // media file, without transcoding.
+  //
+  // args: { chunks } — media_chunks rows for ONE segment, in
+  // [segmentId, chunkIndex] key order (6.6's orchestration reads them
+  // via the compound-key range). May be empty.
+  //
+  // Returns { parts, byteLength, crc32, chunkCount } where parts is
+  // one Blob per chunk (in input order), byteLength is the total
+  // bytes, crc32 is the incremental CRC-32 of the concatenated bytes,
+  // and chunkCount is chunks.length.
+  //
+  // Byte-concatenation, zero transcoding: the output bytes are exactly
+  // the stored chunk payloads. Gaps in chunkIndex are honest (the
+  // 4.8 writer reserves indexes synchronously; a failed write leaves a
+  // gap) — concatenated as-is, never invented or re-indexed. The
+  // function trusts 6.6's key-order guarantee and processes chunks in
+  // input order (documented; AC1 pins this).
+  //
+  // Async only because Blob.arrayBuffer() is asynchronous — this is
+  // data access, not architectural I/O. No IndexedDB, no clock, no
+  // ID minting. Throws TypeError on malformed input.
+  function assembleSegmentChunks(args) {
+    if (!isPlainObject(args)) {
+      return Promise.reject(new TypeError('exporter: args must be an object'));
+    }
+    if (!Array.isArray(args.chunks)) {
+      return Promise.reject(new TypeError('exporter: chunks must be an array'));
+    }
+    var chunks = args.chunks;
+    var seen = {};
+    var i, ci;
+    try {
+      for (i = 0; i < chunks.length; i++) {
+        ci = requireValidChunk(chunks[i], i);
+        if (seen[ci]) {
+          throw new TypeError('exporter: chunks has a duplicate chunkIndex ' + ci);
+        }
+        seen[ci] = true;
+      }
+    } catch (e) {
+      return Promise.reject(e);
+    }
+
+    var parts = new Array(chunks.length);
+    var state = 0xFFFFFFFF;
+    var byteLength = 0;
+    var p = Promise.resolve();
+    chunks.forEach(function (chunk, idx) {
+      p = p.then(function () {
+        return chunk.data.arrayBuffer();
+      }).then(function (ab) {
+        var bytes = new Uint8Array(ab);
+        state = crc32Update(state, bytes);
+        byteLength += bytes.length;
+        // Push the ORIGINAL Blob (not a copy): the bytes live in the
+        // browser's blob storage; JS-heap holds only the reference.
+        // The ArrayBuffer is released after this tick.
+        parts[idx] = chunk.data;
+      });
+    });
+    return p.then(function () {
+      return {
+        parts: parts,
+        byteLength: byteLength,
+        crc32: crc32Finalize(state),
+        chunkCount: chunks.length
+      };
+    });
+  }
+
+  BlindfoldSession.assembleSegmentChunks = assembleSegmentChunks;
+  // Exported for 6.6's ZIP writer (streaming data descriptors) and tests.
+  BlindfoldSession.EXPORTER_CRC32_TABLE = CRC32_TABLE;
+
+  // --- 6.5: numbered files ---
+
+  // Extension derivation from actualMimeType, mirroring
+  // format_support.js's extensionForMimeType (exporter.js stays
+  // dependency-free; chunk_writer.js owns the canonical list).
+  function extensionForMimeType(mimeType) {
+    if (typeof mimeType !== 'string') {
+      return null;
+    }
+    if (mimeType.indexOf('video/webm') === 0 || mimeType.indexOf('audio/webm') === 0) {
+      return '.webm';
+    }
+    if (mimeType.indexOf('video/mp4') === 0) {
+      return '.mp4';
+    }
+    if (mimeType.indexOf('audio/mp4') === 0) {
+      return '.m4a';
+    }
+    return null;
+  }
+
+  function requireValidNamingRecords(records) {
+    requireValidManifestRecords(records);
+    var seenIds = {};
+    var i, r;
+    for (i = 0; i < records.length; i++) {
+      r = records[i];
+      var label = 'exporter: manifestRecords[' + i + ']';
+      if (typeof r.segmentId !== 'string' || r.segmentId === '') {
+        throw new TypeError(label + ' must have a non-empty string segmentId');
+      }
+      if (seenIds[r.segmentId]) {
+        throw new TypeError(label + ' has a duplicate segmentId ' + r.segmentId);
+      }
+      seenIds[r.segmentId] = true;
+      var sn = r.segmentNumber;
+      if (sn !== null && sn !== undefined) {
+        if (typeof sn !== 'number' || Math.floor(sn) !== sn || sn <= 0) {
+          throw new TypeError(label + ' has a corrupt segmentNumber (must be a positive integer or null)');
+        }
+      }
+    }
+    return records;
+  }
+
+  function resolveSegmentExtension(record) {
+    var label = 'exporter: segment ' + record.segmentId;
+    var ext = record.fileExtension;
+    if (typeof ext === 'string' && ext.charAt(0) === '.') {
+      return ext;
+    }
+    var derived = extensionForMimeType(record.actualMimeType);
+    if (derived !== null) {
+      return derived;
+    }
+    throw new TypeError(label + ' has no usable fileExtension or actualMimeType (format unknowable)');
+  }
+
+  function padSegmentNumber(n) {
+    var s = String(n);
+    while (s.length < 3) {
+      s = '0' + s;
+    }
+    return s;
+  }
+
+  // 6.5: assign a deterministic export filename to every manifest segment.
+  //
+  // args: { manifestRecords } — recording_manifest rows for the
+  // session (via bySessionId; 6.6's orchestration reads them). May be
+  // empty.
+  //
+  // Returns { files, bySegmentId } where files is
+  // [{segmentId, filename, streamKind, segmentNumber}] in 6.3's
+  // deterministic order (grouped by kind), segmentNumber is the
+  // EFFECTIVE number used in the filename (real or on-the-fly), and
+  // bySegmentId maps segmentId → filename (feeds 6.3's segmentFiles
+  // input and 6.6's ZIP entry names).
+  //
+  // Numbering: {streamKind}-{NNN}{ext}, NNN zero-padded to minimum 3
+  // digits, per streamKind. Finalized segments use 4.13's
+  // segmentNumber verbatim; unfinalized segments (null) get the
+  // smallest unused positive integers in sort order. The on-the-fly
+  // numbers are export-time labels only — never persisted (readonly
+  // rule). Duplicate finalized numbers within a kind are corrupt
+  // (4.13 assigns unique 1-based numbers) → TypeError, never a
+  // silent filename collision.
+  //
+  // Pure and synchronous. No I/O, no clock, no ID minting. Throws
+  // TypeError on malformed input.
+  function nameSegmentFiles(args) {
+    if (!isPlainObject(args)) {
+      throw new TypeError('exporter: args must be an object');
+    }
+    var records = requireValidNamingRecords(args.manifestRecords);
+
+    // 6.3's deterministic order (kind → segmentNumber nulls-last →
+    // createdAtUtc → segmentId), so filenames and media-sync.json agree.
+    var sorted = records.slice().sort(compareSegments);
+
+    var files = [];
+    var bySegmentId = {};
+    var i, r, kind;
+    var currentKind = null;
+    var usedNumbers = {};
+    for (i = 0; i < sorted.length; i++) {
+      r = sorted[i];
+      kind = r.streamKind;
+      if (kind !== currentKind) {
+        currentKind = kind;
+        usedNumbers = {};
+      }
+      var sn = r.segmentNumber;
+      var effective;
+      if (sn !== null && sn !== undefined) {
+        if (usedNumbers[sn]) {
+          throw new TypeError('exporter: duplicate segmentNumber ' + sn +
+            ' for streamKind ' + kind + ' (segmentId ' + r.segmentId + ')');
+        }
+        effective = sn;
+      } else {
+        effective = 1;
+        while (usedNumbers[effective]) {
+          effective++;
+        }
+      }
+      usedNumbers[effective] = true;
+      var filename = kind + '-' + padSegmentNumber(effective) + resolveSegmentExtension(r);
+      files.push({
+        segmentId: r.segmentId,
+        filename: filename,
+        streamKind: kind,
+        segmentNumber: effective
+      });
+      bySegmentId[r.segmentId] = filename;
+    }
+    return { files: files, bySegmentId: bySegmentId };
+  }
+
+  BlindfoldSession.nameSegmentFiles = nameSegmentFiles;
 })();
 
 // Node test shim. importScripts() consumers use the BlindfoldSession

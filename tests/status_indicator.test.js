@@ -1039,6 +1039,14 @@ describe('AC10–AC12 — diff discipline and scope', () => {
       '.autodev/evidence/6.2+6.3.review.md',
       '.autodev/evidence/6.2+6.3.behavior.md',
       '.autodev/evidence/6.3.contract.md',
+      '.autodev/evidence/6.4.contract.md',
+      '.autodev/evidence/6.4.build.md',
+      '.autodev/evidence/6.5.contract.md',
+      '.autodev/evidence/6.5.build.md',
+      // 6.4+6.5 review/behavior use combined naming (reviewer/verifier
+      // wrote single files for the pair, 6.2+6.3 precedent).
+      '.autodev/evidence/6.4+6.5.review.md',
+      '.autodev/evidence/6.4+6.5.behavior.md',
       '.autodev/evidence/6.3.build.md',
       
       

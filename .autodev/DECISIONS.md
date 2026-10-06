@@ -1330,3 +1330,20 @@ Consequential engineering decisions with reasoning and evidence. Newest first.
 - **Open questions resolved:** flush-timeout attribution is kind-level (applied to every segment of that kind, labeled by kind key — the finalizer has no segment-level precision); offset not rounded (golden test pins `1000500.5`).
 - **Deterministic ordering:** kind → segmentNumber (nulls last) → createdAtUtc → segmentId. Unfinalized segments listed, never omitted. `filename: null` for unmapped segments; counts `null` (not zero) when chunkStats absent.
 - **V1: 14/14 new** (AC1 golden shape + ordering, AC2 gaps, AC3 absent-verdict, AC4 missing-anchor, AC5 unfinalized, AC6 purity/validation). No new messages/event types/stores/permissions. PLAN.md unmodified.
+
+## 6.4 — Assemble stored chunks into original-format media files without transcoding
+
+- **Pure async `assembleSegmentChunks({chunks})`** in exporter.js (6.1–6.3 precedent). Byte-concatenation in input order (trusts 6.6's key-order guarantee; documented). Zero transcoding — output bytes are exactly the stored chunk payloads.
+- **Streaming via Blob parts + incremental CRC-32:** returns `{parts: Blob[], byteLength, crc32, chunkCount}`. One Blob per chunk (original references, not copies); CRC updated per chunk so JS-heap is O(largest chunk), never O(file). CRC-32 (ISO 3309) pinned against standard vectors (empty → 0, "123456789" → 0xCBF43926). Precomputed CRC feeds 6.6's ZIP data descriptors (flag bit 3).
+- **Gaps are honest, not errors:** chunkIndex gaps (e.g. [0, 2, 5]) concatenate as-is; no invention, interpolation, or re-indexing. Empty input → zeroed result (not an error).
+- **Fail-closed:** non-array/missing data/non-Blob/duplicate chunkIndex/negative chunkIndex → TypeError naming the chunk.
+- **Documented limitation:** 4.13's split pieces may lack container init data (mid-stream chunks re-keyed without modification) — the assembly is honest concatenation but may not play standalone. 6.4 does NOT fabricate init data.
+- **V1: 14 new tests** (AC1 concatenation order, AC2 zero-transcoding with WebM-like pattern, AC3 CRC vectors, AC4 streaming shape, AC5 malformed inputs, AC6 gaps, AC7 empty). Node 24's native Blob used (no polyfill needed). No new messages/event types/stores/permissions. PLAN.md unmodified.
+
+## 6.5 — Use numbered files for interrupted recordings
+
+- **Pure sync `nameSegmentFiles({manifestRecords})`** in exporter.js. Returns `{files: [{segmentId, filename, streamKind, segmentNumber}], bySegmentId}`. Filenames `{streamKind}-{NNN}{ext}` (e.g. `microphone-001.webm`), zero-padded min 3 digits, per-kind numbering.
+- **Unified numbering rule:** 4.13's `segmentNumber` used verbatim where present; nulls get smallest unused positive integers in 6.3's deterministic sort order (kind → segmentNumber nulls-last → createdAtUtc → segmentId). All-null → chronological 1..N; mixed → gap-filling. Never collides, never reuses. On-the-fly numbers are export-time labels only (never persisted).
+- **Extension resolution:** manifest `fileExtension` (must start with '.') → derive from `actualMimeType` (video/webm|audio/webm → .webm; video/mp4 → .mp4; audio/mp4 → .m4a; mirrors format_support.js) → TypeError naming segmentId if both unusable.
+- **Builder judgment:** duplicate finalized `segmentNumber` within a kind → TypeError (4.13 assigns unique 1-based numbers; silent collision would violate the "never collides" guarantee). Not explicitly in contract; documented as defensive.
+- **V1: 17 new tests** (AC1 verbatim numbering, AC2 chronological on-the-fly, AC3 gap-filling, AC4 per-kind independence, AC5 extension resolution incl. all mime mappings, AC6 malformed inputs, AC7 empty, AC8 determinism). No new messages/event types/stores/permissions. PLAN.md unmodified.
