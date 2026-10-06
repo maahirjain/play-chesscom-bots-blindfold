@@ -188,8 +188,16 @@
       ]
     },
     "1.4": {
-      "commit": null,
-      "status": "PENDING"
+      "status": "DONE",
+      "commit": "9ddaccf",
+      "verification": "V1 PASS (93/93 node --test; 124/124 accumulated 1.1-1.3 regression; adversarial review APPROVE_WITH_DEFECTS -> 2 repairs verified by targeted re-review APPROVE; independent behavioral verification BEHAVIOR_VERIFIED); V2 PASS (headless-Chrome renderer smoke)",
+      "deferred": [
+        "canonical FEN stream copy -> 6.1",
+        "stream-fold helper -> 3.1/7.2",
+        "envelope assembly with refs -> 2.4/2.7",
+        "checkpoint emission conditions -> 3.1/6.1",
+        "event-type registration at runtime -> 1.3 registry"
+      ]
     },
     "2.1": {
       "commit": null,
