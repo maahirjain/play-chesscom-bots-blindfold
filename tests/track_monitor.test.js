@@ -787,7 +787,11 @@ describe('AC5 — vocabulary discipline', () => {
   });
 
   it('content scripts are byte-identical to HEAD (no gameplay change)', () => {
-    const out = execSync('git diff HEAD --stat -- content.js chess_utils.js sounds.js status_indicator.js',
+    // Honest cumulative evolution (5.1): content.js + chess_utils.js leave
+    // this pin — 5.1 legitimately wires the Start/Stop install into
+    // content.js and adds the additive getLastObservedEnd getter to
+    // chess_utils.js (pinned in tests/session_controls.test.js AC7).
+    const out = execSync('git diff HEAD --stat -- sounds.js status_indicator.js',
       { cwd: REPO }).toString();
     assert.equal(out.trim(), '', 'content scripts must be untouched by 4.9');
   });
@@ -1038,6 +1042,31 @@ describe('AC8 — changed-files discipline', () => {
       // lands after the pins were evolved (2.x/3.x/4.1-4.13 precedent).
       '.autodev/evidence/4.14.review.md',
       '.autodev/evidence/4.14.behavior.md',
+      // Honest cumulative evolution: 5.1 (compact Start/Stop control +
+      // per-stream health lights) legitimately adds session_controls.js
+      // (the in-page control cluster + pure classifyStreamStatus), wires
+      // the install into content.js, adds session_identity.js (ID minting)
+      // and session_controls.js to the manifest content_scripts list,
+      // captures ownerTabId + echoes gameId in recorder.js, adds the
+      // SW-side recorder-ensure handler to recording_host.js, adds the
+      // additive getLastObservedEnd getter to chess_utils.js (the Stop
+      // seam for the observed game_ended reason), adds additive classes
+      // to overlay.css, records the ## 5.1 decisions, and adds its test
+      // + evidence; its files join the allowlists.
+      'session_controls.js',
+      'tests/session_controls.test.js',
+      'manifest.json',
+      'content.js',
+      'overlay.css',
+      'chess_utils.js',
+      'recorder.js',
+      'recording_host.js',
+      '.autodev/evidence/5.1.contract.md',
+      '.autodev/evidence/5.1.build.md',
+      // Honest cumulative evolution: 5.1's review/behavior evidence lands
+      // after the pins were evolved (2.x/3.x/4.x precedent).
+      '.autodev/evidence/5.1.review.md',
+      '.autodev/evidence/5.1.behavior.md',
     ]);
     for (const f of changed) {
       assert.ok(allowed.has(f), `unexpected modified file: ${f}`);

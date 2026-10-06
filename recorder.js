@@ -267,6 +267,12 @@ var BlindfoldSession = BlindfoldSession || {};
     var sessionId = null;
     var gameId = null;
 
+    // 5.1 additive seam (5.5 consumes it): the content-script tab that
+    // owns the active session, captured from the message sender at
+    // set-session time. Null when no session is active or the sender
+    // carried no tab. No behavior change otherwise.
+    var ownerTabId = null;
+
     // Per-document event emission state: one clock anchor (lazy), one
     // sourceSeq counter, and the set of sessionIds already anchored —
     // the sender.js (2.3) lazy-anchor pattern, minus the queue/retry
@@ -353,7 +359,7 @@ var BlindfoldSession = BlindfoldSession || {};
       // selector becomes {ok:false} data, never a broken listener and
       // never a dropped liveness pong (3.2 SF-1 precedent).
       if (message.msg === MSG_SET_SESSION) {
-        return handleSetSession(message, sendResponse);
+        return handleSetSession(message, sender, sendResponse);
       }
       if (message.msg === MSG_MIC_LIST ||
           message.msg === MSG_MIC_SELECT ||
@@ -1357,6 +1363,11 @@ var BlindfoldSession = BlindfoldSession || {};
             return {
               ok: true,
               sessionId: sessionId,
+              // 5.1 additive (open question #2 closure): the reloaded
+              // control adopts the surviving session's gameId from this
+              // echo. Null when no game is set — honest unknown.
+              gameId: (typeof gameId === 'string' && gameId !== '') ?
+                gameId : null,
               queriedAtUtc: nowUtcIso(),
               statuses: statuses
             };
@@ -1474,7 +1485,7 @@ var BlindfoldSession = BlindfoldSession || {};
       return true;
     }
 
-    function handleSetSession(message, sendResponse) {
+    function handleSetSession(message, sender, sendResponse) {
       var sid = message.sessionId;
       var gid = message.gameId;
       if (!((typeof sid === 'string' && sid !== '') || sid === null) ||
@@ -1486,6 +1497,12 @@ var BlindfoldSession = BlindfoldSession || {};
       }
       sessionId = sid;
       gameId = gid;
+      // 5.1: capture the owning tab for 5.5's duplicate-Start guard.
+      // sender.tab is present for content-script senders; absent for
+      // extension pages/devtools. Clearing the session clears ownership.
+      var tabId = (sender && sender.tab &&
+        typeof sender.tab.id === 'number') ? sender.tab.id : null;
+      ownerTabId = (sid === null) ? null : tabId;
       // A newly activated session announces the current selection once,
       // so the session's event stream carries the selection state (the
       // boot-time restore and any pre-session user selection were inert
@@ -1655,7 +1672,10 @@ var BlindfoldSession = BlindfoldSession || {};
       // channel).
       getStreamStatusReader: getStreamStatusReader,
       restoreDevices: restoreDevices,
-      getSession: function () { return { sessionId: sessionId, gameId: gameId }; }
+      getSession: function () { return { sessionId: sessionId, gameId: gameId }; },
+      // 5.1: the owning content-script tab id (5.5's seam). Null when no
+      // session is active.
+      getOwnerTabId: function () { return ownerTabId; }
     };
   }
 

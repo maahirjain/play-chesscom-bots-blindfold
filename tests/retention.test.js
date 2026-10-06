@@ -93,6 +93,10 @@ describe('AC1 — no auto-deletion exists', () => {
     // Honest cumulative evolution: 4.11 appends sync_flash.js to the
     // manifest content_scripts js list per its contract (the visible
     // sync-marker flash) — it joins the load surface and the scan.
+    // Honest cumulative evolution: 5.1 adds session_controls.js to the
+    // manifest content_scripts js list per its contract (the in-page
+    // Start/Stop + per-stream lights) — it joins the load surface and
+    // the scan. (session_identity.js was already listed.)
     assert.deepEqual(PRODUCT_FILES, [
       'capture_broker.js',
       'chess_utils.js',
@@ -104,6 +108,7 @@ describe('AC1 — no auto-deletion exists', () => {
       'recording_host.js',
       'sender.js',
       'session_conditions.js',
+      'session_controls.js',
       'session_identity.js',
       'session_store.js',
       'sounds.js',
@@ -585,6 +590,31 @@ describe('AC4 — diff discipline', () => {
       // lands after the pins were evolved (2.x/3.x/4.1-4.13 precedent).
       '.autodev/evidence/4.14.review.md',
       '.autodev/evidence/4.14.behavior.md',
+      // Honest cumulative evolution: 5.1 (compact Start/Stop control +
+      // per-stream health lights) legitimately adds session_controls.js
+      // (the in-page control cluster + pure classifyStreamStatus), wires
+      // the install into content.js, adds session_identity.js (ID minting)
+      // and session_controls.js to the manifest content_scripts list,
+      // captures ownerTabId + echoes gameId in recorder.js, adds the
+      // SW-side recorder-ensure handler to recording_host.js, adds the
+      // additive getLastObservedEnd getter to chess_utils.js (the Stop
+      // seam for the observed game_ended reason), adds additive classes
+      // to overlay.css, records the ## 5.1 decisions, and adds its test
+      // + evidence; its files join the allowlists.
+      'session_controls.js',
+      'tests/session_controls.test.js',
+      'manifest.json',
+      'content.js',
+      'overlay.css',
+      'chess_utils.js',
+      'recorder.js',
+      'recording_host.js',
+      '.autodev/evidence/5.1.contract.md',
+      '.autodev/evidence/5.1.build.md',
+      // Honest cumulative evolution: 5.1's review/behavior evidence lands
+      // after the pins were evolved (2.x/3.x/4.x precedent).
+      '.autodev/evidence/5.1.review.md',
+      '.autodev/evidence/5.1.behavior.md',
     ]);
     for (const f of changed) {
       assert.ok(allowed.has(f), `unexpected modified file: ${f}`);
@@ -620,6 +650,12 @@ describe('AC4 — diff discipline', () => {
     // 4.5's format_support.js, 4.11's sync_marker.js/sync_flash.js)
     // are skipped: they have no HEAD content to differ from, and their
     // scan coverage comes from the deletion-primitive / TTL scans above.
+    // Honest cumulative evolution (5.1): session_controls.js is a new
+    // file (no HEAD content to differ from — same skip rule); 5.1
+    // legitimately modifies content.js (install wiring), chess_utils.js
+    // (additive getLastObservedEnd), recording_host.js (recorder-ensure),
+    // manifest.json (content_scripts list), and overlay.css (additive
+    // classes) — all already in or joining the skip set below.
     const changedByTasks = new Set(['chess_utils.js', 'content.js',
                                     'manifest.json', 'sounds.js', 'sw.js',
                                     'recording_host.js', 'recorder.js',
@@ -627,6 +663,8 @@ describe('AC4 — diff discipline', () => {
                                     'capture_selection.js', 'db.js',
                                     'format_support.js', 'sync_marker.js',
                                     'sync_flash.js',
+                                    'session_controls.js',
+                                    'overlay.css',
                                     'capture_broker.js']);
     for (const f of PRODUCT_FILES) {
       if (changedByTasks.has(f)) continue;

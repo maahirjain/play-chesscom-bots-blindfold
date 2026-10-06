@@ -37,3 +37,60 @@ wc-chess-board .piece {
   z-index: 2147483647;
   font-size: 18px;
 }
+
+/* Task 5.1: compact Start/Stop control + per-stream health lights.
+   Additive classes only — no changes to existing rules. The cluster
+   anchors adjacent to the extension's move input (fixed-corner fallback
+   when the input anchor is absent), reading [Start][mic][screen][webcam]
+   ahead of 2.8's saving light — four lights total, PLAN §(c) step 4.
+   Light colors follow the 2.8 palette: green = healthy, amber = degraded
+   (facts present, never smoothed away), red = failed, gray = idle,
+   blue = finalized, dark gray = unknown (never green). */
+.blindfold-session-controls {
+  display: inline-block;
+  margin-left: 6px;
+  vertical-align: middle;
+  user-select: none;
+}
+.blindfold-session-startstop {
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 2px 10px;
+  margin-right: 6px;
+  border: 1px solid #888;
+  border-radius: 3px;
+  background: #f5f5f5;
+  color: #222;
+  cursor: pointer;
+  vertical-align: middle;
+}
+.blindfold-session-startstop:disabled {
+  cursor: default;
+  opacity: 0.75;
+}
+.blindfold-stream-light {
+  display: inline-block;
+  font-size: 14px;
+  line-height: 1;
+  margin-left: 4px;
+  vertical-align: middle;
+  cursor: default;
+  user-select: none;
+}
+.blindfold-stream-off-idle { color: #bbb; }
+.blindfold-stream-failed-not-started { color: #d33; }
+.blindfold-stream-recording-healthy { color: #2fae4e; }
+.blindfold-stream-recording-degraded { color: #e0a800; }
+.blindfold-stream-stopped-finalizing { color: #e0a800; }
+.blindfold-stream-finalized { color: #3a7bd5; }
+.blindfold-stream-unknown { color: #666; }
+.blindfold-session-controls-fallback {
+  position: fixed;
+  right: 12px;
+  bottom: 44px;
+  z-index: 2147483647;
+  font-size: 18px;
+  background: rgba(255, 255, 255, 0.9);
+  padding: 4px 8px;
+  border-radius: 4px;
+}

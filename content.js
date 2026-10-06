@@ -297,6 +297,28 @@ if (!document.getElementById("blindfold-chess-move-input")) {
 // otherwise). Never throws into page code.
 BlindfoldSession.installStatusIndicator(BlindfoldSession.sender);
 
+// Task 5.1 (PLAN.md §5.1): compact Start/Stop control + per-stream health
+// lights. Installed next to the 2.8 indicator (same anchor/fallback
+// precedent). Never throws into page code: the install itself is guarded,
+// and every async path inside is failure-isolated (3.2 SF-1).
+try {
+  BlindfoldSession.installSessionControls({
+    sender: BlindfoldSession.sender,
+    sendRecorderMessage: function (envelope) {
+      return chrome.runtime.sendMessage(envelope);
+    },
+    gameLifecycleRecorder: gameLifecycleRecorder,
+    // 5.10's completion seam: the full recorder-stop-streams response
+    // (including flushTimedOut) arrives here. 5.10 owns the
+    // export-complete presentation; 5.1 only defines the handoff.
+    onStopComplete: function (stopResponse) {
+      if (typeof BlindfoldSession.onSessionStopComplete === 'function') {
+        BlindfoldSession.onSessionStopComplete(stopResponse);
+      }
+    }
+  });
+} catch (installErr) { /* session UI must never break gameplay */ }
+
 document.addEventListener("keydown", (e) => {
     if (e.key == "j" || e.key == "J") {
         e.preventDefault();

@@ -1623,6 +1623,19 @@ function createGameLifecycleRecorder(options) {
   // each source records at most once per game.
   var endedBySource = { chess_rules: false, chesscom_dialog: false, stop: false };
 
+  // 5.1 additive: the last OBSERVED (non-manual) game ending for the
+  // current game — {source, result, terminationReason} (frozen) or null.
+  // §5's Stop control passes the observed reason/result to
+  // recordStopTermination (contract §3.4: null reason unless a game_ended
+  // was already observed). The 'stop' source is manual and never feeds
+  // back into itself. Re-armed by resetEnded() when §5 mints a new game
+  // identity. Read-only: no behavior change to any existing path.
+  var lastObservedEnd = null;
+
+  function getLastObservedEnd() {
+    return lastObservedEnd;
+  }
+
   function isActive() {
     var sid = getSessionId();
     var gid = getGameId();
@@ -1684,6 +1697,14 @@ function createGameLifecycleRecorder(options) {
     var id = eventIdOf(emitEvent(NS14.GAME_ENDED_EVENT_TYPE, payload, refs));
     if (id !== null) {
       endedBySource[source] = true;
+      // 5.1: remember the observed ending (manual 'stop' excluded).
+      if (source === 'chess_rules' || source === 'chesscom_dialog') {
+        lastObservedEnd = Object.freeze({
+          source: source,
+          result: payload.result,
+          terminationReason: payload.terminationReason
+        });
+      }
     }
     return id;
   }
@@ -1736,6 +1757,8 @@ function createGameLifecycleRecorder(options) {
     endedBySource.chess_rules = false;
     endedBySource.chesscom_dialog = false;
     endedBySource.stop = false;
+    // 5.1: a new game identity re-arms the observed-ending memory too.
+    lastObservedEnd = null;
   }
 
   return {
@@ -1746,6 +1769,8 @@ function createGameLifecycleRecorder(options) {
     recordDialogEnded: recordDialogEnded,
     recordStopTermination: recordStopTermination,
     resetEnded: resetEnded,
+    // 5.1 additive (read-only).
+    getLastObservedEnd: getLastObservedEnd,
     isActive: isActive
   };
 }

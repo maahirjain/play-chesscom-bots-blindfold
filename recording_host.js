@@ -328,6 +328,30 @@ var BlindfoldSession = BlindfoldSession || {};
         }
         return false; // announcement needs no ack
       }
+      // 5.1: SW-side ensure for the Start control. Only the SW can call
+      // chrome.offscreen.createDocument; the content script is the Start
+      // origin and cannot ensure the document itself. Without this,
+      // Start's recorder messages would go to a non-existent listener
+      // and fail silently — the exact masquerade §4.14 exists to prevent.
+      // Delegates to the existing idempotent ensureRecordingContext():
+      // {ok:true, bootId, created} or {ok:false, reason}. Never throws
+      // into the listener (3.2 SF-1 precedent).
+      if (message.msg === 'recorder-ensure') {
+        Promise.resolve()
+          .then(function () { return ensureRecordingContext(); })
+          .then(function (res) {
+            try {
+              sendResponse(isPlainObject(res) ? res :
+                { ok: false, reason: 'internal-error' });
+            } catch (e) { /* channel closed; nothing more to do */ }
+          }, function (err) {
+            try {
+              sendResponse({ ok: false,
+                reason: (err && err.message) || 'ensure-failed' });
+            } catch (e) { /* channel closed; nothing more to do */ }
+          });
+        return true; // async sendResponse
+      }
       // 4.3 SW-leg: the offscreen capture selector's broker client asks
       // the SW for chrome.* results. Each answers asynchronously with
       // plain data ({ok:true,...} or {ok:false, error}); a missing

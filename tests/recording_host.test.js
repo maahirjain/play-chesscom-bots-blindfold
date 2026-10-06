@@ -580,6 +580,13 @@ describe('AC2 — manifest permission change', () => {
     // empty again; while the 4.11 change is uncommitted, the only
     // permitted delta is that js-list addition (the 4.5 SF-1 precedent:
     // the strict check runs only when a diff exists).
+    //
+    // Honest cumulative evolution (5.1): 5.1 legitimately adds
+    // session_identity.js (UUID-v4 minting) and session_controls.js
+    // (the in-page Start/Stop + per-stream lights) to the
+    // content_scripts js list per its contract. While the 5.1 change is
+    // uncommitted, the permitted delta is the js-list additions only —
+    // no permission or other manifest changes.
     const diff = execSync('git diff HEAD -- manifest.json', { cwd: REPO }).toString();
     if (diff.trim() === '') {
       return;
@@ -588,13 +595,19 @@ describe('AC2 — manifest permission change', () => {
       execSync('git show HEAD:manifest.json', { cwd: REPO }).toString());
     const workManifest = JSON.parse(
       fs.readFileSync(path.join(REPO, 'manifest.json'), 'utf8'));
-    assert.deepEqual(
-      workManifest.content_scripts[0].js,
-      headManifest.content_scripts[0].js.concat(['sync_flash.js']),
-      'uncommitted manifest.json delta must be exactly the 4.11 js-list addition');
-    headManifest.content_scripts[0].js = workManifest.content_scripts[0].js;
+    const headJs = headManifest.content_scripts[0].js;
+    const workJs = workManifest.content_scripts[0].js;
+    const added = workJs.filter((f) => headJs.indexOf(f) === -1);
+    const removed = headJs.filter((f) => workJs.indexOf(f) === -1);
+    assert.deepEqual(removed, [], 'manifest js list: no removals permitted');
+    assert.ok(added.every((f) =>
+      f === 'sync_flash.js' || f === 'session_identity.js' ||
+      f === 'session_controls.js'),
+      'uncommitted manifest.json js-list delta must be exactly the ' +
+      '4.11/5.1 additions, got: ' + JSON.stringify(added));
+    headManifest.content_scripts[0].js = workJs;
     assert.deepEqual(workManifest, headManifest,
-      'manifest.json differs beyond the 4.11 sync_flash.js addition');
+      'manifest.json differs beyond the 4.11/5.1 js-list additions');
   });
 });
 
@@ -607,7 +620,13 @@ describe('AC6 — diff discipline', () => {
     // legitimately bumps DB_VERSION 1 → 2 and adds the
     // recording_manifest store (see its pin in
     // tests/format_support.test.js).
-    for (const f of ['content.js', 'chess_utils.js', 'sounds.js', 'lifecycle.js',
+    // Honest cumulative evolution (5.1): content.js leaves this list —
+    // 5.1 legitimately wires the Start/Stop control install into
+    // content.js (pinned in tests/session_controls.test.js AC7:
+    // the diff is only the install block). chess_utils.js leaves this
+    // list — 5.1 legitimately adds the additive getLastObservedEnd
+    // getter (also pinned in tests/session_controls.test.js AC7).
+    for (const f of ['sounds.js', 'lifecycle.js',
                      'sender.js', 'status_indicator.js', 'event_envelope.js',
                      'session_identity.js', 'session_conditions.js',
                      'game_records.js', 'writer.js', 'session_store.js']) {
@@ -876,6 +895,31 @@ describe('AC6 — diff discipline', () => {
       // lands after the pins were evolved (2.x/3.x/4.1-4.13 precedent).
       '.autodev/evidence/4.14.review.md',
       '.autodev/evidence/4.14.behavior.md',
+      // Honest cumulative evolution: 5.1 (compact Start/Stop control +
+      // per-stream health lights) legitimately adds session_controls.js
+      // (the in-page control cluster + pure classifyStreamStatus), wires
+      // the install into content.js, adds session_identity.js (ID minting)
+      // and session_controls.js to the manifest content_scripts list,
+      // captures ownerTabId + echoes gameId in recorder.js, adds the
+      // SW-side recorder-ensure handler to recording_host.js, adds the
+      // additive getLastObservedEnd getter to chess_utils.js (the Stop
+      // seam for the observed game_ended reason), adds additive classes
+      // to overlay.css, records the ## 5.1 decisions, and adds its test
+      // + evidence; its files join the allowlists.
+      'session_controls.js',
+      'tests/session_controls.test.js',
+      'manifest.json',
+      'content.js',
+      'overlay.css',
+      'chess_utils.js',
+      'recorder.js',
+      'recording_host.js',
+      '.autodev/evidence/5.1.contract.md',
+      '.autodev/evidence/5.1.build.md',
+      // Honest cumulative evolution: 5.1's review/behavior evidence lands
+      // after the pins were evolved (2.x/3.x/4.x precedent).
+      '.autodev/evidence/5.1.review.md',
+      '.autodev/evidence/5.1.behavior.md',
     ]);
     for (const f of changed) {
       assert.ok(allowed.has(f), `unexpected modified file: ${f}`);
@@ -886,5 +930,55 @@ describe('AC6 — diff discipline', () => {
     const head = execSync('git show HEAD:PLAN.md', { cwd: REPO, stdio: 'pipe' }).toString();
     const current = fs.readFileSync(path.join(REPO, 'PLAN.md'), 'utf8');
     assert.strictEqual(current, head, 'PLAN.md is human-owned and must not change');
+  });
+});
+
+// ------------------------------------------------------------------
+// 5.1 — SW-side recorder-ensure handler.
+// ------------------------------------------------------------------
+describe('recording_host.js — recorder-ensure (5.1)', () => {
+  function driveEnsure(host, message) {
+    return new Promise((resolve) => {
+      const r = host.onRuntimeMessage(
+        Object.assign({ kind: 'recorder', v: 1, msg: 'recorder-ensure' }, message || {}),
+        {}, resolve);
+      if (r === false) resolve(undefined); // no async response
+    });
+  }
+
+  it('creates the document when absent and answers {ok:true, bootId, created:true}', async () => {
+    const chromeNs = mockChrome(); // hasDoc false
+    const host = BS_HOST.createRecordingHost(chromeNs);
+    const resp = await driveEnsure(host);
+    assert.equal(resp.ok, true);
+    assert.equal(resp.created, true);
+    assert.equal(resp.bootId, chromeNs.state.pongBootId);
+    assert.equal(chromeNs.state.createCalls, 1);
+  });
+
+  it('re-discovers a surviving document without creating ({created:false})', async () => {
+    const chromeNs = mockChrome({ hasDoc: true });
+    const host = BS_HOST.createRecordingHost(chromeNs);
+    const resp = await driveEnsure(host);
+    assert.equal(resp.ok, true);
+    assert.equal(resp.created, false);
+    assert.equal(chromeNs.state.createCalls, 0);
+  });
+
+  it('answers {ok:false, reason} when offscreen is unavailable — never throws', async () => {
+    const chromeNs = mockChrome({ noOffscreen: true, noRuntime: true });
+    const host = BS_HOST.createRecordingHost(chromeNs);
+    const resp = await driveEnsure(host);
+    assert.equal(resp.ok, false);
+    assert.equal(typeof resp.reason, 'string');
+  });
+
+  it('concurrent ensures collapse onto one creation', async () => {
+    const chromeNs = mockChrome();
+    const host = BS_HOST.createRecordingHost(chromeNs);
+    const [r1, r2] = await Promise.all([driveEnsure(host), driveEnsure(host)]);
+    assert.equal(r1.ok, true);
+    assert.equal(r2.ok, true);
+    assert.equal(chromeNs.state.createCalls, 1);
   });
 });

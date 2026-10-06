@@ -1141,3 +1141,80 @@ Consequential engineering decisions with reasoning and evidence. Newest first.
   `{ok:false}` mapping, MANIFEST_KEYS 18, DB_VERSION 2, double-query
   determinism, and diff discipline (22 suites evolved with
   justification comments).
+
+## 5.1 — Compact Start/Stop control and per-stream health lights
+
+- **In-page control, not a browser-action popup.** PLAN §(c) steps 3/4/7
+  (click Start, wait for the four indicators, click Stop) all happen on
+  the game page mid-play — a popup closes on focus loss. The 2.8 contract
+  §3.7 already rejected a popup for the status surface. The 2.8 saving
+  light keeps working; 5.1's cluster (Start/Stop button + mic/screen/
+  webcam lights) sits beside it: four lights total, exactly PLAN §(c)
+  step 4.
+- **No-smoothing discipline carried from 4.14.** `classifyStreamStatus`
+  is pure: lifecycle × adverse facts → the closed 7-state set
+  (off-idle, failed-not-started, recording-healthy, recording-degraded,
+  stopped-finalizing, finalized, unknown). The chunk-stalled-with-
+  recorderState-'recording' masquerade case stays recording-degraded
+  (amber), never green; `detail` carries raw fact strings as the
+  tooltip. "Ready" is not defined here — 5.6 owns the required-set
+  policy.
+- **New SW-side message `recorder-ensure`** (in the existing
+  {kind:'recorder', v:1} envelope; SW-side vocabulary 5→6). Only the SW
+  can call chrome.offscreen.createDocument; without it Start's messages
+  would go to a non-existent listener and fail silently — the exact
+  masquerade §4.14 exists to prevent. No new offscreen-document
+  messages: offscreen MSG_* stays at 24.
+- **Open question closures.**
+  1. Session-metadata persistence: there is no SW-side session intake
+     message, content scripts cannot reach extension IDB, and
+     createSessionMetadata requires a category in
+     {baseline,training,evaluation} (no 'unknown' exists — fabricating
+     one would violate 1.2.3). So 5.1 does NOT write session_metadata;
+     session start is recorded through the sender event stream
+     (emitPageStart, the 2.7 seam). The metadata record is 5.2's
+     (category selection).
+  2. GameId adoption on boot: the recorder now echoes `gameId`
+     (additive, null when unset) in the recorder-get-status response;
+     the reloaded control adopts {sessionId, gameId} honestly.
+  3. 5.10 seam shape: `onStopComplete(stopResponse)` callback option on
+     installSessionControls (default no-op) + `handle.getLastStopResponse()`.
+     The FULL recorder-stop-streams response — including flushTimedOut —
+     is handed over (the Section 4 audit carry-forward); content.js's
+     install forwards to `BlindfoldSession.onSessionStopComplete` when
+     present, which 5.10 will own.
+- **Additive chess_utils.js getter** (`getLastObservedEnd`, a documented
+  AC7 deviation): the 3.5.4 seam requires "null reason unless a
+  game_ended was already observed". The observed ending is recorder
+  state, so the getter lives on createGameLifecycleRecorder —
+  read-only, set only for the observed sources (chess_rules,
+  chesscom_dialog; never manual 'stop'), re-armed by resetEnded().
+- **Additive recorder.js seams**: `ownerTabId` captured from
+  sender.tab.id at set-session time (5.5's duplicate-Start guard seam;
+  exposed via getOwnerTabId(); cleared when the session clears),
+  plus the gameId echo above. No behavior change otherwise.
+- **Stop-channel failure never silently reverts to idle** (contract
+  §3.4.5): the control stays in 'stopping' with the honest failure as
+  the button detail; the button stays enabled so the stop can be
+  retried.
+- **Boot adoption** (4.1 refresh survival): one recorder-get-status at
+  install; {ok:true, sessionId} adopts (no new IDs minted, polling
+  starts); {ok:false} → idle.
+- **Known interim gap** (contract §6, 5.5-owned): between 5.1 and 5.5,
+  a second tab's set-session could overwrite the active session
+  identity — 5.1 provides the local interlock + ownerTabId; 5.5 owns
+  the cross-tab refusal policy.
+- **Manual termination-reason UI is unassigned by PLAN's task list**:
+  5.1 passes null (unknown) per 3.5.4 — a §5 follow-up for owner
+  decision, not a 5.1 defect.
+- **V1: 43/43** (new tests/session_controls.test.js). Classifier truth
+  table incl. the masquerade case; install guards; Start order
+  (ensure → set-session → start-streams → slots + emitPageStart +
+  poll); per-stream failure isolation; honest ensure/channel aborts;
+  Stop with observed-reason passthrough; flushTimedOut handoff;
+  stop-failure no-silent-idle + retry; throwing onStopComplete
+  isolation; boot adoption incl. null-gameId honesty; diff discipline
+  (content.js diff = install block only; recorder.js = ownerTabId +
+  gameId echo; recording_host.js = recorder-ensure; chess_utils.js =
+  getter; offscreen MSG_* still 24; SW-side envelope vocabulary 6).
+  ~30 earlier suites' pins evolved with justification comments.

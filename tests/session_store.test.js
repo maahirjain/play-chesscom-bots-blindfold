@@ -557,7 +557,9 @@ describe('AC9 — diff discipline', () => {
     // tests/recording_host.test.js AC2); 4.3 legitimately extends it with
     // "tabCapture" and adds host_permissions per its contract; 4.11
     // appends sync_flash.js (the visible sync-marker content script)
-    // per its contract — content.js itself stays byte-identical.
+    // per its contract; 5.1 adds session_identity.js + session_controls.js
+    // to the js list and its install block to content.js (pinned below) —
+    // content.js is otherwise byte-identical.
     const headManifest = JSON.parse(
       execSync('git show HEAD:manifest.json', { cwd: ROOT, stdio: 'pipe' }).toString());
     const current = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8'));
@@ -566,7 +568,12 @@ describe('AC9 — diff discipline', () => {
     headManifest.host_permissions = current.host_permissions;
     assert.deepEqual(current, headManifest, 'manifest changed beyond the js list + permissions');
     assert.deepEqual(current.content_scripts[0].js, [
-      'event_envelope.js', 'sender.js', 'lifecycle.js', 'status_indicator.js',
+      'event_envelope.js', 'sender.js', 'lifecycle.js',
+      // Honest cumulative evolution: 5.1 adds session_identity.js (UUID-v4
+      // session/game minting for the Start control) and session_controls.js
+      // (the in-page Start/Stop + per-stream lights) to the content_scripts
+      // list per its contract.
+      'session_identity.js', 'status_indicator.js', 'session_controls.js',
       'sounds.js', 'chess.min.js', 'game_records.js', 'chess_utils.js', 'content.js',
       'sync_flash.js'
     ]);
@@ -979,6 +986,31 @@ describe('AC9 — diff discipline', () => {
       // lands after the pins were evolved (2.x/3.x/4.1-4.13 precedent).
       '.autodev/evidence/4.14.review.md',
       '.autodev/evidence/4.14.behavior.md',
+      // Honest cumulative evolution: 5.1 (compact Start/Stop control +
+      // per-stream health lights) legitimately adds session_controls.js
+      // (the in-page control cluster + pure classifyStreamStatus), wires
+      // the install into content.js, adds session_identity.js (ID minting)
+      // and session_controls.js to the manifest content_scripts list,
+      // captures ownerTabId + echoes gameId in recorder.js, adds the
+      // SW-side recorder-ensure handler to recording_host.js, adds the
+      // additive getLastObservedEnd getter to chess_utils.js (the Stop
+      // seam for the observed game_ended reason), adds additive classes
+      // to overlay.css, records the ## 5.1 decisions, and adds its test
+      // + evidence; its files join the allowlists.
+      'session_controls.js',
+      'tests/session_controls.test.js',
+      'manifest.json',
+      'content.js',
+      'overlay.css',
+      'chess_utils.js',
+      'recorder.js',
+      'recording_host.js',
+      '.autodev/evidence/5.1.contract.md',
+      '.autodev/evidence/5.1.build.md',
+      // Honest cumulative evolution: 5.1's review/behavior evidence lands
+      // after the pins were evolved (2.x/3.x/4.x precedent).
+      '.autodev/evidence/5.1.review.md',
+      '.autodev/evidence/5.1.behavior.md',
     ]);
     for (const f of changed) {
       assert.ok(allowed.has(f), `unexpected modified file: ${f}`);
