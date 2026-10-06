@@ -51,8 +51,10 @@ describe('AC1 — manifest entry', () => {
     // Honest cumulative evolution: 4.1 adds the "offscreen" permission for
     // the dedicated recording context (PLAN.md §4.1); 4.3 adds
     // "tabCapture" plus host_permissions for the chess.com game tab
-    // (PLAN.md §4.3). Nothing else.
-    assert.deepStrictEqual(manifest.permissions, ['offscreen', 'tabCapture']);
+    // (PLAN.md §4.3). Honest cumulative evolution: 5.3 adds "storage"
+    // per its contract (the selection_memory.js chrome.storage.local
+    // adapter for remembered defaults). Nothing else.
+    assert.deepStrictEqual(manifest.permissions, ['offscreen', 'tabCapture', 'storage']);
     assert.deepStrictEqual(manifest.host_permissions, ['https://www.chess.com/*']);
     assert.ok(!('content_security_policy' in manifest));
     assert.strictEqual(manifest.version, '1.0.0');
@@ -167,7 +169,10 @@ describe('AC4/AC6 — diff is exactly the background block', () => {
     // legitimately inserts the "permissions": ["offscreen"] block after
     // background per its contract; 4.3 legitimately extends it to
     // ["offscreen", "tabCapture"] per its contract (host_permissions is
-    // appended at the tail, pinned separately). The cumulative invariant:
+    // appended at the tail, pinned separately); 5.3 legitimately extends
+    // it to ["offscreen", "tabCapture", "storage"] per its contract (the
+    // selection_memory.js chrome.storage.local adapter for remembered
+    // defaults). The cumulative invariant:
     // the head is exactly these five keys, so no other permissions/CSP/
     // version changes can sneak in.
     const head = manifestRaw.slice(0, newContentIdx);
@@ -180,7 +185,7 @@ describe('AC4/AC6 — diff is exactly the background block', () => {
       '    "background": {\n' +
       '        "service_worker": "sw.js"\n' +
       '    },\n' +
-      '    "permissions": ["offscreen", "tabCapture"],\n' +
+      '    "permissions": ["offscreen", "tabCapture", "storage"],\n' +
       '    ',
       'manifest head changed beyond the background + permissions blocks'
     );

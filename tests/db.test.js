@@ -237,6 +237,9 @@ describe('Static guards (AC2/AC4)', () => {
     // (exact value pinned in tests/recording_host.test.js); 4.3
     // legitimately extends permissions with "tabCapture" and adds
     // host_permissions ["https://www.chess.com/*"] per its contract.
+    // Honest cumulative evolution: 5.3 legitimately appends "storage"
+    // per its contract (the selection_memory.js chrome.storage.local
+    // adapter for remembered defaults).
     // The cumulative invariant: nothing else in the manifest changed.
     const atHead = JSON.parse(execSync('git show HEAD:manifest.json', { cwd: ROOT }).toString());
     const onDisk = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8'));
@@ -244,7 +247,7 @@ describe('Static guards (AC2/AC4)', () => {
     atHead.permissions = onDisk.permissions;
     atHead.host_permissions = onDisk.host_permissions;
     assert.deepEqual(onDisk, atHead);
-    assert.deepStrictEqual(onDisk.permissions, ['offscreen', 'tabCapture']);
+    assert.deepStrictEqual(onDisk.permissions, ['offscreen', 'tabCapture', 'storage']);
     assert.deepStrictEqual(onDisk.host_permissions, ['https://www.chess.com/*']);
   });
 });
