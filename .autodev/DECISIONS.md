@@ -1313,3 +1313,20 @@ Consequential engineering decisions with reasoning and evidence. Newest first.
 - **Contract deviation (documented):** the contract said training fields come "verbatim from metadata", but the 1.1 metadata record carries only identity+versions+category — `trainingApproach`/`verbalScaffolding` are 1.2 conditions fields. Builder reads them from `conditions.{field}.value` (null when absent).
 - **gameStartingFen precedence:** contract listed a conditions-FEN fallback, but the 1.2 record has no FEN field in the current schema. Implemented: optional `gameStartingFens` input (6.6 extracts from game_started event payloads per game_records.js's rule) → null.
 - **V1: 16/16** (golden shape + byte-stability, null-honesty, no-fabrication incl. failed-verdict refusal, purity/strict validation, multi-game, diff discipline). **V2: new `sw-exporter.js` 8/8** (real SW: seed via real DB paths → build → IDs match byte-for-byte). Pin evolutions: 29 allowlist files; repaired stale pins for `section-5.audit.md` (never allowlisted after creation) and `section-6.architecture.md`. No new channel messages, event types, stores, or permissions. PLAN.md unmodified.
+
+## 6.2 — Export events.jsonl in persistent append order
+
+- **Pure `buildEventsJsonl({events})`** in exporter.js (6.1 precedent). Sorts by `appendSeq` ascending (the persistent append order from §1.3.4); one `JSON.stringify(event)` per line + trailing newline; empty input → empty string.
+- **Preservation property, not a filter:** the builder adds no keys, removes no keys, computes no metrics (no durations/counts/wall-clock derivations). `move_confirmed` events gain no FEN/SAN/PGN; legitimate stored positions (`game_started` FEN, 1.4.4 recovery checkpoints) pass through verbatim.
+- **Corrupt appendSeq fails closed:** null/non-integer/negative/duplicate → TypeError naming the event (never silently skipped, reordered, or invented). 6.6's orchestration surfaces this as an honest export error.
+- **Byte-stable** via the envelope's frozen key order (event_envelope.js EVENT_KEYS) — required for 6.7's repeatability proof.
+- **V1: 8/8 new** (AC1 ordering incl. anti-correlated sourceSeq/monotonicMs, AC2 verbatim passthrough, AC3 no-metrics/no-filtering, AC4 malformed inputs, AC5 byte-stability). No new messages/event types/stores/permissions. PLAN.md unmodified.
+
+## 6.3 — Export media-sync.json with filenames, formats, anchors, offsets, known gaps
+
+- **Pure `buildMediaSyncJson({manifestRecords, clockAnchors, stopVerdict, segmentFiles, chunkStats, nowUtcIso})`** in exporter.js. Exact contract §3 schema, stable key order, 2-space pretty-print.
+- **The ONE computed value:** `mediaStartWallUtcMs` via the timecode.js canonical formula `anchor.utcEpochMs + (streamStartedAtMonotonicMs - anchor.monotonicMs)` (PLAN §6.3 "segment offsets" + §(a) "alignment offsets/timecodes" require it). Null when anchor missing or inputs unusable — never a guess, never rounded. Everything else is verbatim-copied.
+- **Known gaps, two layers:** session-level `knownGaps` echoes 5.10's warning vocabulary verbatim (`<kind>-flush-timed-out`, `<N>-events-undelivered`, `<kind>-failed:<error>`, `<kind>:missing-stream-result`, `stop-response-malformed`, `flush-result-unknown`); absent verdict → `['stop-verdict-unavailable']` (never fabricated 'complete'). Per-segment `gaps`: fixed vocabulary (`unfinalized`, `flush-timed-out`, `stream-failed`, `chunks-after-finalize:<N>`, `missing-clock-anchor`, `missing-stream-start-time`).
+- **Open questions resolved:** flush-timeout attribution is kind-level (applied to every segment of that kind, labeled by kind key — the finalizer has no segment-level precision); offset not rounded (golden test pins `1000500.5`).
+- **Deterministic ordering:** kind → segmentNumber (nulls last) → createdAtUtc → segmentId. Unfinalized segments listed, never omitted. `filename: null` for unmapped segments; counts `null` (not zero) when chunkStats absent.
+- **V1: 14/14 new** (AC1 golden shape + ordering, AC2 gaps, AC3 absent-verdict, AC4 missing-anchor, AC5 unfinalized, AC6 purity/validation). No new messages/event types/stores/permissions. PLAN.md unmodified.

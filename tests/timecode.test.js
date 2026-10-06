@@ -728,6 +728,19 @@ describe('AC8 — changed-files discipline', () => {
       // after the pins are evolved (2.x-5.x precedent).
       '.autodev/evidence/6.1.review.md',
       '.autodev/evidence/6.1.behavior.md',
+      // Honest cumulative evolution: 6.2 (export events.jsonl) and
+      // 6.3 (export media-sync.json) extend the 6.1 exporter.js module
+      // with pure builder functions; their evidence files join the
+      // allowlists. No new channel messages, event types, stores, or
+      // permissions in 6.2/6.3.
+      '.autodev/evidence/6.2.contract.md',
+      '.autodev/evidence/6.2.build.md',
+      '.autodev/evidence/6.2+6.3.review.md',
+      '.autodev/evidence/6.2+6.3.behavior.md',
+      '.autodev/evidence/6.3.contract.md',
+      '.autodev/evidence/6.3.build.md',
+      
+      
     ]);
     const out = execSync('git diff HEAD --name-only', { cwd: REPO })
       .toString().trim();

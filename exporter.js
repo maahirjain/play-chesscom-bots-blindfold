@@ -340,6 +340,356 @@ var BlindfoldSession = BlindfoldSession || {};
   BlindfoldSession.buildMetadataJson = buildMetadataJson;
   // Exported for tests and for 6.6's orchestration (failed-verdict check).
   BlindfoldSession.EXPORTER_STREAM_KINDS = STREAM_KINDS;
+
+  // --- 6.2: events.jsonl ---
+
+  // An event's appendSeq is the persistent append order (PLAN §1.3.4).
+  // The 2.4 writer assigns it transactionally on every stored row, so
+  // null/non-integer/negative/duplicate values are corrupt data —
+  // surfaced as TypeError per the corruption-honesty rule, never
+  // silently skipped, reordered, or invented.
+  function requireValidAppendSeq(event, index) {
+    var label = 'exporter: events[' + index + ']';
+    var id = isPlainObject(event) && typeof event.eventId === 'string' ?
+      event.eventId : null;
+    if (id !== null) {
+      label += ' (eventId ' + id + ')';
+    }
+    if (!isPlainObject(event)) {
+      throw new TypeError(label + ' must be an event object');
+    }
+    var seq = event.appendSeq;
+    if (typeof seq !== 'number' || Math.floor(seq) !== seq || seq < 0) {
+      throw new TypeError(label + ' has a corrupt appendSeq (must be a non-negative integer)');
+    }
+    return seq;
+  }
+
+  // 6.2: build the exact events.jsonl string for the export bundle.
+  //
+  // args: { events } — the session's stored event rows (may be empty).
+  //
+  // Returns one JSON.stringify(event) per line in appendSeq ascending
+  // order, joined by '\n' with a trailing '\n' (empty input → empty
+  // string). Verbatim passthrough: the builder adds no keys, removes
+  // no keys, reorders no keys, and computes no metrics. The envelope
+  // key order is stable (event_envelope.js EVENT_KEYS), so output is
+  // byte-stable for 6.7's repeatability. Throws TypeError on
+  // malformed input (including corrupt/duplicate appendSeq).
+  function buildEventsJsonl(args) {
+    if (!isPlainObject(args)) {
+      throw new TypeError('exporter: args must be an object');
+    }
+    if (!Array.isArray(args.events)) {
+      throw new TypeError('exporter: events must be an array');
+    }
+    var events = args.events;
+    var seqs = new Array(events.length);
+    var seen = {};
+    var i, seq;
+    for (i = 0; i < events.length; i++) {
+      seq = requireValidAppendSeq(events[i], i);
+      if (seen[seq]) {
+        throw new TypeError('exporter: events has a duplicate appendSeq ' + seq);
+      }
+      seen[seq] = true;
+      seqs[i] = seq;
+    }
+    var order = new Array(events.length);
+    for (i = 0; i < order.length; i++) {
+      order[i] = i;
+    }
+    order.sort(function (a, b) { return seqs[a] - seqs[b]; });
+    var lines = new Array(events.length);
+    for (i = 0; i < order.length; i++) {
+      lines[i] = JSON.stringify(events[order[i]]);
+    }
+    return lines.length === 0 ? '' : lines.join('\n') + '\n';
+  }
+
+  BlindfoldSession.buildEventsJsonl = buildEventsJsonl;
+
+  // --- 6.3: media-sync.json ---
+
+  function requireValidClockAnchors(clockAnchors) {
+    if (!Array.isArray(clockAnchors)) {
+      throw new TypeError('exporter: clockAnchors must be an array');
+    }
+    var i, a;
+    for (i = 0; i < clockAnchors.length; i++) {
+      a = clockAnchors[i];
+      if (!isPlainObject(a) || typeof a.segmentId !== 'string' ||
+          typeof a.utcEpochMs !== 'number' || typeof a.monotonicMs !== 'number') {
+        throw new TypeError('exporter: clockAnchors[' + i + '] must be {segmentId, utcEpochMs, monotonicMs}');
+      }
+    }
+    return clockAnchors;
+  }
+
+  function requireValidSegmentFiles(segmentFiles) {
+    if (segmentFiles === null || segmentFiles === undefined) {
+      return null;
+    }
+    if (!isPlainObject(segmentFiles)) {
+      throw new TypeError('exporter: segmentFiles must be a plain object or null');
+    }
+    var k;
+    for (k in segmentFiles) {
+      if (Object.prototype.hasOwnProperty.call(segmentFiles, k)) {
+        var v = segmentFiles[k];
+        if (v !== null && (typeof v !== 'string' || v === '')) {
+          throw new TypeError('exporter: segmentFiles[' + k + '] must be a non-empty string or null');
+        }
+      }
+    }
+    return segmentFiles;
+  }
+
+  function requireValidChunkStats(chunkStats) {
+    if (chunkStats === null || chunkStats === undefined) {
+      return null;
+    }
+    if (!isPlainObject(chunkStats)) {
+      throw new TypeError('exporter: chunkStats must be a plain object or null');
+    }
+    var k, e;
+    for (k in chunkStats) {
+      if (Object.prototype.hasOwnProperty.call(chunkStats, k)) {
+        e = chunkStats[k];
+        if (!isPlainObject(e)) {
+          throw new TypeError('exporter: chunkStats[' + k + '] must be an object');
+        }
+        if (e.chunkCount !== null && e.chunkCount !== undefined &&
+            (typeof e.chunkCount !== 'number' || Math.floor(e.chunkCount) !== e.chunkCount ||
+             e.chunkCount < 0)) {
+          throw new TypeError('exporter: chunkStats[' + k + '].chunkCount must be a non-negative integer or null');
+        }
+        if (e.chunksAfterFinalize !== null && e.chunksAfterFinalize !== undefined &&
+            (typeof e.chunksAfterFinalize !== 'number' ||
+             Math.floor(e.chunksAfterFinalize) !== e.chunksAfterFinalize ||
+             e.chunksAfterFinalize < 0)) {
+          throw new TypeError('exporter: chunkStats[' + k + '].chunksAfterFinalize must be a non-negative integer or null');
+        }
+      }
+    }
+    return chunkStats;
+  }
+
+  function isUsableNumber(v) {
+    return typeof v === 'number' && isFinite(v);
+  }
+
+  function isUsableIso(v) {
+    return typeof v === 'string' && v !== '';
+  }
+
+  // The ONE computed value in media-sync.json: the wall-clock time of
+  // this segment's media-time zero (the 4.6 start() call time, per
+  // 4.12 §3.1: timecode 0 ≈ streamStartedAtMonotonicMs). Formula is
+  // the timecode.js canonical wallUtcMs:
+  //   anchor.utcEpochMs + (streamStartedAtMonotonicMs - anchor.monotonicMs)
+  // null when the anchor is missing or either side is unusable —
+  // unknown is null, never a guess. Never rounded (rounding is a lossy
+  // transformation; analysis code rounds if it wants to).
+  function computeMediaStartWallUtcMs(anchor, streamStartedAtMonotonicMs) {
+    if (anchor === null || !isUsableNumber(streamStartedAtMonotonicMs)) {
+      return null;
+    }
+    if (!isUsableNumber(anchor.utcEpochMs) || !isUsableNumber(anchor.monotonicMs)) {
+      return null;
+    }
+    return anchor.utcEpochMs + (streamStartedAtMonotonicMs - anchor.monotonicMs);
+  }
+
+  // Per-segment known gaps (contract §4.2, fixed vocabulary).
+  // flushTimedOut / stream failure are kind-level facts from the stop
+  // response — applied to every segment of that kind (labeled by the
+  // kind key), never misattributed to a single segment.
+  function buildSegmentGaps(record, anchor, streamResults, chunkStatsFor) {
+    var gaps = [];
+    if (record.segmentNumber === null || record.segmentNumber === undefined) {
+      gaps.push('unfinalized');
+    }
+    var kindResult = isPlainObject(streamResults) && isPlainObject(streamResults[record.streamKind]) ?
+      streamResults[record.streamKind] : null;
+    if (kindResult !== null) {
+      if (kindResult.ok === false) {
+        gaps.push('stream-failed');
+      } else if (kindResult.flushTimedOut === true) {
+        gaps.push('flush-timed-out');
+      }
+    }
+    var caf = chunkStatsFor !== null && isUsableNumber(chunkStatsFor.chunksAfterFinalize) ?
+      chunkStatsFor.chunksAfterFinalize : null;
+    if (caf !== null && caf > 0) {
+      gaps.push('chunks-after-finalize:' + caf);
+    }
+    if (record.clockSegmentId !== null && record.clockSegmentId !== undefined && anchor === null) {
+      gaps.push('missing-clock-anchor');
+    }
+    if (!isUsableNumber(record.streamStartedAtMonotonicMs)) {
+      gaps.push('missing-stream-start-time');
+    }
+    return gaps;
+  }
+
+  function compareSegments(a, b) {
+    var ka = STREAM_KINDS.indexOf(a.streamKind);
+    var kb = STREAM_KINDS.indexOf(b.streamKind);
+    var kaO = ka === -1 ? STREAM_KINDS.length : ka;
+    var kbO = kb === -1 ? STREAM_KINDS.length : kb;
+    if (kaO !== kbO) {
+      return kaO - kbO;
+    }
+    var na = (a.segmentNumber === null || a.segmentNumber === undefined) ? null : a.segmentNumber;
+    var nb = (b.segmentNumber === null || b.segmentNumber === undefined) ? null : b.segmentNumber;
+    if (na === null && nb !== null) {
+      return 1;
+    }
+    if (na !== null && nb === null) {
+      return -1;
+    }
+    if (na !== null && nb !== null && na !== nb) {
+      return na - nb;
+    }
+    if (a.createdAtUtc !== b.createdAtUtc) {
+      return a.createdAtUtc < b.createdAtUtc ? -1 : 1;
+    }
+    if (a.segmentId !== b.segmentId) {
+      return a.segmentId < b.segmentId ? -1 : 1;
+    }
+    return 0;
+  }
+
+  function buildSyncSegment(record, anchor, streamResults, segmentFiles, chunkStatsFor) {
+    var finalized = record.segmentNumber !== null && record.segmentNumber !== undefined;
+    var filename = (segmentFiles !== null &&
+      Object.prototype.hasOwnProperty.call(segmentFiles, record.segmentId)) ?
+      segmentFiles[record.segmentId] : null;
+    if (filename === undefined) {
+      filename = null;
+    }
+    var chunkStatsEntry = chunkStatsFor !== null ? chunkStatsFor : null;
+    return {
+      segmentId: record.segmentId,
+      streamKind: record.streamKind,
+      segmentNumber: finalized ? record.segmentNumber : null,
+      filename: filename,
+      format: isUsableIso(record.actualMimeType) ? record.actualMimeType : null,
+      fileExtension: isUsableIso(record.fileExtension) ? record.fileExtension : null,
+      finalized: finalized,
+      finalizedAtUtc: isUsableIso(record.finalizedAtUtc) ? record.finalizedAtUtc : null,
+      createdAtUtc: isUsableIso(record.createdAtUtc) ? record.createdAtUtc : null,
+      streamStartedAtUtc: isUsableIso(record.streamStartedAtUtc) ? record.streamStartedAtUtc : null,
+      streamStartedAtMonotonicMs: isUsableNumber(record.streamStartedAtMonotonicMs) ?
+        record.streamStartedAtMonotonicMs : null,
+      clockSegmentId: (typeof record.clockSegmentId === 'string' && record.clockSegmentId !== '') ?
+        record.clockSegmentId : null,
+      clockAnchor: anchor === null ? null : {
+        segmentId: anchor.segmentId,
+        utcEpochMs: anchor.utcEpochMs,
+        monotonicMs: anchor.monotonicMs
+      },
+      mediaStartWallUtcMs: computeMediaStartWallUtcMs(anchor, record.streamStartedAtMonotonicMs),
+      chunkCount: chunkStatsEntry !== null && isUsableNumber(chunkStatsEntry.chunkCount) ?
+        chunkStatsEntry.chunkCount : null,
+      chunksAfterFinalize: chunkStatsEntry !== null && isUsableNumber(chunkStatsEntry.chunksAfterFinalize) ?
+        chunkStatsEntry.chunksAfterFinalize : null,
+      gaps: buildSegmentGaps(record, anchor, streamResults, chunkStatsEntry)
+    };
+  }
+
+  // 6.3: build the exact media-sync.json string for the export bundle.
+  //
+  // args: {
+  //   manifestRecords,  // recording_manifest rows for the session (required, may be empty)
+  //   clockAnchors,     // [{segmentId, utcEpochMs, monotonicMs}] from clock_anchor events (required, may be empty)
+  //   stopVerdict,      // 5.10 retained verdict or null (optional; absent → 'unknown', never 'complete')
+  //   segmentFiles,     // {segmentId: filename} from 6.5's namer (optional)
+  //   chunkStats,       // {segmentId: {chunkCount, chunksAfterFinalize}} from 6.6 (optional)
+  //   nowUtcIso         // optional injected clock for exportedAtUtc (test seam)
+  // }
+  //
+  // Returns the pretty-printed (2-space) media-sync.json string with
+  // stable key order and deterministic segment ordering (byte-stable
+  // for 6.7's repeatability). The ONE computed value is
+  // mediaStartWallUtcMs (timecode.js canonical formula); everything
+  // else is copied verbatim. Throws TypeError on malformed input;
+  // throws plain Error when the stop verdict is 'failed'.
+  function buildMediaSyncJson(args) {
+    if (!isPlainObject(args)) {
+      throw new TypeError('exporter: args must be an object');
+    }
+    var manifestRecords = requireValidManifestRecords(args.manifestRecords);
+    var clockAnchors = requireValidClockAnchors(
+      args.clockAnchors === undefined ? [] : args.clockAnchors);
+    var stopVerdict = requireValidStopVerdict(
+      args.stopVerdict === undefined ? null : args.stopVerdict);
+    var segmentFiles = requireValidSegmentFiles(
+      args.segmentFiles === undefined ? null : args.segmentFiles);
+    var chunkStats = requireValidChunkStats(
+      args.chunkStats === undefined ? null : args.chunkStats);
+    var nowUtcIso = args.nowUtcIso === undefined ? defaultNowUtcIso : args.nowUtcIso;
+    if (typeof nowUtcIso !== 'function') {
+      throw new TypeError('exporter: nowUtcIso must be a function');
+    }
+    var exportedAtUtc = nowUtcIso();
+    if (typeof exportedAtUtc !== 'string' || exportedAtUtc === '') {
+      throw new TypeError('exporter: nowUtcIso must return a non-empty string');
+    }
+
+    // 'failed' is a real verdict the orchestration must refuse, not an
+    // unknown — fail-closed like 6.1's session-not-complete.
+    if (stopVerdict !== null && stopVerdict.verdict === 'failed') {
+      throw new Error('exporter: session-not-complete (stop verdict is failed)');
+    }
+
+    var anchorsBySegment = {};
+    var i, a;
+    for (i = 0; i < clockAnchors.length; i++) {
+      a = clockAnchors[i];
+      anchorsBySegment[a.segmentId] = a;
+    }
+
+    var stopResp = (stopVerdict !== null && isPlainObject(stopVerdict.stopResp)) ?
+      stopVerdict.stopResp : null;
+    var streamResults = (stopResp !== null && isPlainObject(stopResp.streams)) ?
+      stopResp.streams : {};
+
+    var knownGaps;
+    var verdictEcho;
+    if (stopVerdict === null) {
+      knownGaps = ['stop-verdict-unavailable'];
+      verdictEcho = 'unknown';
+    } else {
+      knownGaps = Array.isArray(stopVerdict.warnings) ? stopVerdict.warnings.slice() : [];
+      verdictEcho = stopVerdict.verdict;
+    }
+
+    var sorted = manifestRecords.slice().sort(compareSegments);
+    var segments = new Array(sorted.length);
+    var r, anchor, statsFor;
+    for (i = 0; i < sorted.length; i++) {
+      r = sorted[i];
+      anchor = (typeof r.clockSegmentId === 'string' && r.clockSegmentId !== '' &&
+        Object.prototype.hasOwnProperty.call(anchorsBySegment, r.clockSegmentId)) ?
+        anchorsBySegment[r.clockSegmentId] : null;
+      statsFor = (chunkStats !== null &&
+        Object.prototype.hasOwnProperty.call(chunkStats, r.segmentId)) ?
+        chunkStats[r.segmentId] : null;
+      segments[i] = buildSyncSegment(r, anchor, streamResults, segmentFiles, statsFor);
+    }
+
+    var doc = {
+      segments: segments,
+      knownGaps: knownGaps,
+      stopVerdict: verdictEcho,
+      exportedAtUtc: exportedAtUtc
+    };
+    return JSON.stringify(doc, null, 2);
+  }
+
+  BlindfoldSession.buildMediaSyncJson = buildMediaSyncJson;
 })();
 
 // Node test shim. importScripts() consumers use the BlindfoldSession

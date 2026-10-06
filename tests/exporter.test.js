@@ -299,24 +299,23 @@ describe('AC6 — diff discipline', () => {
       .map((l) => l.slice(3).trim())
       .filter((f) => f !== '' && !/^\.autodev\/evidence\/5\.\d/.test(f));
     assert.deepEqual(changed.sort(), [
+      // 6.1 was committed (7a23b3a); this pin now covers 6.2/6.3's
+      // working tree. 6.2 (export events.jsonl) and 6.3 (export
+      // media-sync.json) extend the 6.1 exporter.js module with pure
+      // builder functions; their evidence and DECISIONS.md entries
+      // join the allowlists. The 6.2/6.3 review/behavior evidence
+      // lands after the pins are evolved (2.x-6.1 precedent).
       '.autodev/DECISIONS.md',
-      '.autodev/evidence/6.1.build.md',
-      '.autodev/evidence/6.1.contract.md',
-      // 6.1's review/behavior evidence lands after the pins are
-      // evolved (2.x/3.x/4.x/5.x precedent).
-      '.autodev/evidence/6.1.review.md',
-      '.autodev/evidence/6.1.behavior.md',
-      '.autodev/evidence/section-5.audit.md',
-      '.autodev/evidence/section-6.architecture.md',
+      '.autodev/evidence/6.2.build.md',
+      '.autodev/evidence/6.2.contract.md',
+      // 6.2/6.3's review/behavior evidence lands after the pins are
+      // evolved (2.x-6.1 precedent); combined 6.2+6.3 naming.
+      '.autodev/evidence/6.2+6.3.review.md',
+      '.autodev/evidence/6.2+6.3.behavior.md',
+      '.autodev/evidence/6.3.build.md',
+      '.autodev/evidence/6.3.contract.md',
       'exporter.js',
       'tests/exporter.test.js',
-      // Honest cumulative evolution: 6.1 (generate metadata.json from
-      // stored context and observed completion status) legitimately
-      // adds the new SW-side exporter.js module (pure buildMetadataJson
-      // builder; 6.6 owns the orchestration/permission/message), its
-      // test file, and its evidence; its files join the allowlists.
-      // No new channel messages, event types, stores, or permissions
-      // in 6.1.
       ...[
         'tests/attempt_tracker.test.js',
         'tests/audio_policy.test.js',
@@ -365,5 +364,522 @@ describe('AC6 — diff discipline', () => {
   it('PLAN.md is unmodified', () => {
     const diff = execSync('git diff HEAD -- PLAN.md', { cwd: REPO }).toString();
     assert.equal(diff.trim(), '');
+  });
+});
+
+// ------------------------------------------------------------------
+// 6.2 — events.jsonl (PLAN.md §6.2).
+// ------------------------------------------------------------------
+//
+// Pure buildEventsJsonl({events}): one JSON.stringify per line in
+// appendSeq ascending order. Verbatim passthrough — no added/removed/
+// reordered keys, no computed metrics, no position filtering.
+
+function fixtureEvent(appendSeq, overrides) {
+  var base = {
+    eventId: 'eeeeeeee-' + String(1000 + appendSeq).slice(1) +
+      '-4' + String(appendSeq).padStart(3, '0') + '-8111-aaaaaaaaaaaa',
+    eventType: 'move_confirmed',
+    sessionId: SID,
+    gameId: GID1,
+    sourceContext: 'content',
+    sourceSeq: appendSeq * 7,   // deliberately not correlated with appendSeq
+    clockSegmentId: null,
+    monotonicMs: 1000 + appendSeq * 13.7,  // deliberately not correlated
+    appendSeq: appendSeq,
+    refs: null,
+    payload: { moveUci: 'e2e4' }
+  };
+  var k;
+  for (k in overrides) {
+    if (Object.prototype.hasOwnProperty.call(overrides, k)) {
+      base[k] = overrides[k];
+    }
+  }
+  return base;
+}
+
+describe('6.2 AC1 — appendSeq ordering', () => {
+  it('exports in strict appendSeq ascending order regardless of input order', () => {
+    var events = [
+      fixtureEvent(5),
+      fixtureEvent(1),
+      fixtureEvent(3),
+      fixtureEvent(0),
+      fixtureEvent(2),
+      fixtureEvent(4)
+    ];
+    var out = BS.buildEventsJsonl({ events: events });
+    var lines = out.split('\n').filter(function (l) { return l !== ''; });
+    assert.equal(lines.length, 6);
+    var seqs = lines.map(function (l) { return JSON.parse(l).appendSeq; });
+    assert.deepEqual(seqs, [0, 1, 2, 3, 4, 5]);
+  });
+
+  it('orders by appendSeq, not by sourceSeq or monotonicMs', () => {
+    // sourceSeq and monotonicMs are deliberately anti-correlated with
+    // appendSeq in the fixture; a naive sort would misorder them.
+    var events = [
+      fixtureEvent(2, { sourceSeq: 100, monotonicMs: 99999 }),
+      fixtureEvent(0, { sourceSeq: 300, monotonicMs: 1 }),
+      fixtureEvent(1, { sourceSeq: 200, monotonicMs: 50000 })
+    ];
+    var out = BS.buildEventsJsonl({ events: events });
+    var seqs = out.split('\n').filter(function (l) { return l !== ''; })
+      .map(function (l) { return JSON.parse(l).appendSeq; });
+    assert.deepEqual(seqs, [0, 1, 2]);
+  });
+});
+
+describe('6.2 AC2 — verbatim passthrough', () => {
+  it('every output line deep-equals the input event with identical key order', () => {
+    var events = [
+      fixtureEvent(0, { eventType: 'game_started', payload: { startingFen: FEN1 } }),
+      fixtureEvent(1, { payload: { moveUci: 'g1f3', note: 'unicode ✓ test' } }),
+      fixtureEvent(2, { refs: { replyTo: SID }, payload: null })
+    ];
+    var out = BS.buildEventsJsonl({ events: events });
+    var lines = out.split('\n').filter(function (l) { return l !== ''; });
+    assert.equal(lines.length, 3);
+    var i;
+    for (i = 0; i < events.length; i++) {
+      assert.deepEqual(JSON.parse(lines[i]), events[i]);
+      // Key order preserved (byte-stable serialization).
+      assert.equal(
+        lines[i].indexOf('"eventId"'),
+        JSON.stringify(events[i]).indexOf('"eventId"'));
+    }
+  });
+
+  it('trailing newline present; empty input yields empty string', () => {
+    var out = BS.buildEventsJsonl({ events: [fixtureEvent(0)] });
+    assert.ok(out.endsWith('\n'));
+    assert.equal(BS.buildEventsJsonl({ events: [] }), '');
+  });
+});
+
+describe('6.2 AC3 — no metrics, no position filtering', () => {
+  it('move_confirmed events gain no fen/san/pgn/moveNumber/durationMs keys', () => {
+    var events = [fixtureEvent(0), fixtureEvent(1)];
+    var out = BS.buildEventsJsonl({ events: events });
+    var lines = out.split('\n').filter(function (l) { return l !== ''; });
+    lines.forEach(function (l) {
+      var parsed = JSON.parse(l);
+      ['fen', 'san', 'pgn', 'moveNumber', 'durationMs'].forEach(function (k) {
+        assert.ok(!(k in parsed), 'no added ' + k);
+        assert.ok(!(parsed.payload !== null && k in parsed.payload),
+          'no added payload.' + k);
+      });
+    });
+  });
+
+  it('legitimate stored positions (game_started FEN, recovery checkpoint) survive verbatim', () => {
+    var checkpoint = {
+      eventType: 'history_revision',
+      fen: FEN1,
+      checkpointSeq: 42
+    };
+    var events = [
+      fixtureEvent(0, { eventType: 'game_started', payload: { startingFen: FEN1 } }),
+      fixtureEvent(1, { eventType: 'history_checkpoint', payload: checkpoint })
+    ];
+    var out = BS.buildEventsJsonl({ events: events });
+    var lines = out.split('\n').filter(function (l) { return l !== ''; });
+    assert.equal(JSON.parse(lines[0]).payload.startingFen, FEN1);
+    assert.deepEqual(JSON.parse(lines[1]).payload, checkpoint);
+  });
+});
+
+describe('6.2 AC4 — malformed input fails closed', () => {
+  it('non-array events throws TypeError', () => {
+    assert.throws(function () { BS.buildEventsJsonl({ events: null }); }, TypeError);
+    assert.throws(function () { BS.buildEventsJsonl({}); }, TypeError);
+    assert.throws(function () { BS.buildEventsJsonl('x'); }, TypeError);
+  });
+
+  it('corrupt appendSeq throws TypeError naming the event', () => {
+    var bad = [fixtureEvent(0), fixtureEvent(1, { appendSeq: null })];
+    assert.throws(function () { BS.buildEventsJsonl({ events: bad }); }, function (e) {
+      return e instanceof TypeError && /appendSeq/.test(e.message);
+    });
+    assert.throws(function () {
+      BS.buildEventsJsonl({ events: [fixtureEvent(0, { appendSeq: -1 })] });
+    }, TypeError);
+    assert.throws(function () {
+      BS.buildEventsJsonl({ events: [fixtureEvent(0, { appendSeq: 1.5 })] });
+    }, TypeError);
+    assert.throws(function () {
+      BS.buildEventsJsonl({ events: [fixtureEvent(0, { appendSeq: 'x' })] });
+    }, TypeError);
+  });
+
+  it('duplicate appendSeq throws TypeError (never silently reordered)', () => {
+    var dup = [fixtureEvent(0), fixtureEvent(0, { payload: { moveUci: 'd2d4' } })];
+    assert.throws(function () { BS.buildEventsJsonl({ events: dup }); }, function (e) {
+      return e instanceof TypeError && /duplicate/.test(e.message);
+    });
+  });
+
+  it('non-object event throws TypeError', () => {
+    assert.throws(function () {
+      BS.buildEventsJsonl({ events: [fixtureEvent(0), 42] });
+    }, TypeError);
+  });
+});
+
+describe('6.2 AC5 — byte-stability', () => {
+  it('same fixture serialized twice is byte-identical', () => {
+    var events = [
+      fixtureEvent(2, { payload: { moveUci: 'e7e5' } }),
+      fixtureEvent(0, { eventType: 'game_started', payload: { startingFen: FEN1 } }),
+      fixtureEvent(1, { payload: { moveUci: 'g1f3' } })
+    ];
+    assert.equal(
+      BS.buildEventsJsonl({ events: events }),
+      BS.buildEventsJsonl({ events: events }));
+  });
+});
+
+// ------------------------------------------------------------------
+// 6.3 — media-sync.json (PLAN.md §6.3).
+// ------------------------------------------------------------------
+//
+// Pure buildMediaSyncJson: manifest facts verbatim, ONE computed value
+// (mediaStartWallUtcMs via the timecode.js canonical formula), known
+// gaps in two layers, deterministic segment ordering.
+
+var SEG1 = 'dddddddd-1111-4111-8111-dddddddddddd';
+var SEG2 = 'eeeeeeee-2222-4222-8222-eeeeeeeeeeee';
+var SEG3 = 'ffffffff-3333-4333-8333-ffffffffffff';
+
+function fixtureManifestRecord(overrides) {
+  var base = {
+    segmentId: SEG1,
+    sessionId: SID,
+    gameId: GID1,
+    streamKind: 'microphone',
+    requestedMimeType: 'audio/webm',
+    actualMimeType: 'audio/webm;codecs=opus',
+    fileExtension: '.webm',
+    createdAtUtc: '2026-10-06T20:00:00.000Z',
+    streamStartedAtUtc: '2026-10-06T20:00:01.000Z',
+    streamStartedAtMonotonicMs: 1000.5,
+    effectiveDeviceId: null,
+    audioTrackPresent: true,
+    videoTrackPresent: false,
+    screenAudioContent: null,
+    micAudioContent: 'mic',
+    clockSegmentId: 'anchor-seg-1',
+    segmentNumber: 0,
+    finalizedAtUtc: '2026-10-06T21:00:00.000Z'
+  };
+  var k;
+  for (k in overrides) {
+    if (Object.prototype.hasOwnProperty.call(overrides, k)) {
+      base[k] = overrides[k];
+    }
+  }
+  return base;
+}
+
+function fixtureAnchor() {
+  return { segmentId: 'anchor-seg-1', utcEpochMs: 1000000, monotonicMs: 500 };
+}
+
+function fixtureSyncStopVerdict(overrides) {
+  var base = {
+    stopResp: {
+      ok: true,
+      markerId: null,
+      finalizedAtUtc: '2026-10-06T21:00:00.000Z',
+      streams: {
+        microphone: { ok: true, segments: [], flushTimedOut: false },
+        screen: { ok: true, segments: [], flushTimedOut: false },
+        webcam: { ok: true, segments: [], flushTimedOut: false }
+      }
+    },
+    flushResult: { delivered: 42, pending: 0 },
+    verdict: 'complete',
+    warnings: []
+  };
+  if (overrides) {
+    var k;
+    for (k in overrides) {
+      if (Object.prototype.hasOwnProperty.call(overrides, k)) {
+        base[k] = overrides[k];
+      }
+    }
+  }
+  return base;
+}
+
+describe('6.3 AC1 — golden media-sync.json shape', () => {
+  it('fixture with two kinds x two segments produces the exact schema', () => {
+    var records = [
+      fixtureManifestRecord({
+        segmentId: SEG1, streamKind: 'microphone', segmentNumber: 0
+      }),
+      fixtureManifestRecord({
+        segmentId: SEG2, streamKind: 'webcam', segmentNumber: null,
+        finalizedAtUtc: null, clockSegmentId: 'anchor-seg-1'
+      }),
+      fixtureManifestRecord({
+        segmentId: SEG3, streamKind: 'microphone', segmentNumber: 1,
+        createdAtUtc: '2026-10-06T20:30:00.000Z'
+      })
+    ];
+    var anchors = [fixtureAnchor()];
+    var verdict = fixtureSyncStopVerdict({
+      verdict: 'complete-with-warnings',
+      warnings: ['webcam-flush-timed-out'],
+      stopResp: {
+        ok: true,
+        markerId: null,
+        finalizedAtUtc: '2026-10-06T21:00:00.000Z',
+        streams: {
+          microphone: { ok: true, segments: [], flushTimedOut: false },
+          screen: { ok: true, segments: [], flushTimedOut: false },
+          webcam: { ok: true, segments: [], flushTimedOut: true }
+        }
+      }
+    });
+    var segmentFiles = {};
+    segmentFiles[SEG1] = 'microphone-001.webm';
+    segmentFiles[SEG2] = 'webcam-001.webm';
+    segmentFiles[SEG3] = 'microphone-002.webm';
+    var chunkStats = {};
+    chunkStats[SEG1] = { chunkCount: 10, chunksAfterFinalize: 0 };
+
+    var out = BS.buildMediaSyncJson({
+      manifestRecords: records,
+      clockAnchors: anchors,
+      stopVerdict: verdict,
+      segmentFiles: segmentFiles,
+      chunkStats: chunkStats,
+      nowUtcIso: function () { return '2026-10-06T22:00:00.000Z'; }
+    });
+    var doc = JSON.parse(out);
+
+    // Deterministic ordering: kind (microphone, screen, webcam) →
+    // segmentNumber (nulls last) → createdAtUtc → segmentId.
+    assert.deepEqual(doc.segments.map(function (s) { return s.segmentId; }),
+      [SEG1, SEG3, SEG2]);
+
+    var mic0 = doc.segments[0];
+    assert.equal(mic0.segmentId, SEG1);
+    assert.equal(mic0.streamKind, 'microphone');
+    assert.equal(mic0.segmentNumber, 0);
+    assert.equal(mic0.filename, 'microphone-001.webm');
+    assert.equal(mic0.format, 'audio/webm;codecs=opus');
+    assert.equal(mic0.fileExtension, '.webm');
+    assert.equal(mic0.finalized, true);
+    assert.equal(mic0.finalizedAtUtc, '2026-10-06T21:00:00.000Z');
+    assert.deepEqual(mic0.clockAnchor, fixtureAnchor());
+    // Canonical formula: 1000000 + (1000.5 - 500) = 1000500.5 (no rounding).
+    assert.equal(mic0.mediaStartWallUtcMs, 1000500.5);
+    assert.equal(mic0.chunkCount, 10);
+    assert.equal(mic0.chunksAfterFinalize, 0);
+    assert.deepEqual(mic0.gaps, []);
+
+    var web = doc.segments[2];
+    assert.equal(web.segmentId, SEG2);
+    assert.equal(web.finalized, false);
+    assert.equal(web.segmentNumber, null);
+    assert.equal(web.filename, 'webcam-001.webm');
+    assert.deepEqual(web.gaps, ['unfinalized', 'flush-timed-out']);
+
+    assert.deepEqual(doc.knownGaps, ['webcam-flush-timed-out']);
+    assert.equal(doc.stopVerdict, 'complete-with-warnings');
+    assert.equal(doc.exportedAtUtc, '2026-10-06T22:00:00.000Z');
+  });
+
+  it('empty manifest records yields an empty segments array', () => {
+    var out = BS.buildMediaSyncJson({
+      manifestRecords: [],
+      clockAnchors: [],
+      stopVerdict: fixtureSyncStopVerdict(),
+      nowUtcIso: function () { return '2026-10-06T22:00:00.000Z'; }
+    });
+    var doc = JSON.parse(out);
+    assert.deepEqual(doc.segments, []);
+    assert.deepEqual(doc.knownGaps, []);
+    assert.equal(doc.stopVerdict, 'complete');
+  });
+});
+
+describe('6.3 AC2 — known gaps', () => {
+  it('flushTimedOut, undelivered events, and stream failure all surface verbatim', () => {
+    var records = [
+      fixtureManifestRecord({ segmentId: SEG1, streamKind: 'microphone', segmentNumber: 0 }),
+      fixtureManifestRecord({
+        segmentId: SEG2, streamKind: 'screen', segmentNumber: 0,
+        clockSegmentId: 'anchor-seg-1'
+      })
+    ];
+    var verdict = fixtureSyncStopVerdict({
+      verdict: 'complete-with-warnings',
+      warnings: ['webcam-flush-timed-out', '3-events-undelivered', 'screen-failed:boom'],
+      stopResp: {
+        ok: true, markerId: null, finalizedAtUtc: null,
+        streams: {
+          microphone: { ok: true, segments: [], flushTimedOut: false },
+          screen: { ok: false, segments: [], error: 'boom' },
+          webcam: { ok: true, segments: [], flushTimedOut: true }
+        }
+      },
+      flushResult: { delivered: 39, pending: 3 }
+    });
+    var chunkStats = {};
+    chunkStats[SEG1] = { chunkCount: 5, chunksAfterFinalize: 2 };
+
+    var doc = JSON.parse(BS.buildMediaSyncJson({
+      manifestRecords: records,
+      clockAnchors: [fixtureAnchor()],
+      stopVerdict: verdict,
+      segmentFiles: null,
+      chunkStats: chunkStats,
+      nowUtcIso: function () { return '2026-10-06T22:00:00.000Z'; }
+    }));
+
+    assert.deepEqual(doc.knownGaps,
+      ['webcam-flush-timed-out', '3-events-undelivered', 'screen-failed:boom']);
+    var mic = doc.segments[0];
+    assert.deepEqual(mic.gaps, ['chunks-after-finalize:2']);
+    assert.equal(mic.filename, null);  // absent mapping → null, honest
+    var screen = doc.segments[1];
+    assert.deepEqual(screen.gaps, ['stream-failed']);
+  });
+});
+
+describe('6.3 AC3 — absent stop verdict degrades honestly', () => {
+  it('stop-verdict-unavailable, stopVerdict unknown, per-segment facts still export', () => {
+    var records = [fixtureManifestRecord({ segmentId: SEG1 })];
+    var doc = JSON.parse(BS.buildMediaSyncJson({
+      manifestRecords: records,
+      clockAnchors: [fixtureAnchor()],
+      stopVerdict: null,
+      nowUtcIso: function () { return '2026-10-06T22:00:00.000Z'; }
+    }));
+    assert.deepEqual(doc.knownGaps, ['stop-verdict-unavailable']);
+    assert.equal(doc.stopVerdict, 'unknown');
+    assert.equal(doc.segments[0].segmentId, SEG1);
+    assert.equal(doc.segments[0].mediaStartWallUtcMs, 1000500.5);
+  });
+});
+
+describe('6.3 AC4 — missing clock anchor', () => {
+  it('null anchor, null offset, missing-clock-anchor gap — never fabricated', () => {
+    var records = [fixtureManifestRecord({
+      segmentId: SEG1,
+      clockSegmentId: 'anchor-that-does-not-exist'
+    })];
+    var doc = JSON.parse(BS.buildMediaSyncJson({
+      manifestRecords: records,
+      clockAnchors: [fixtureAnchor()],
+      stopVerdict: fixtureSyncStopVerdict(),
+      nowUtcIso: function () { return '2026-10-06T22:00:00.000Z'; }
+    }));
+    var seg = doc.segments[0];
+    assert.equal(seg.clockAnchor, null);
+    assert.equal(seg.mediaStartWallUtcMs, null);
+    assert.ok(seg.gaps.indexOf('missing-clock-anchor') !== -1);
+  });
+
+  it('null clockSegmentId is not a gap (anchor simply not linked)', () => {
+    var records = [fixtureManifestRecord({
+      segmentId: SEG1, clockSegmentId: null
+    })];
+    var doc = JSON.parse(BS.buildMediaSyncJson({
+      manifestRecords: records,
+      clockAnchors: [],
+      stopVerdict: fixtureSyncStopVerdict(),
+      nowUtcIso: function () { return '2026-10-06T22:00:00.000Z'; }
+    }));
+    var seg = doc.segments[0];
+    assert.equal(seg.clockAnchor, null);
+    assert.equal(seg.mediaStartWallUtcMs, null);
+    assert.ok(seg.gaps.indexOf('missing-clock-anchor') === -1);
+  });
+});
+
+describe('6.3 AC5 — unfinalized segments are listed, not omitted', () => {
+  it('segmentNumber null → finalized false, unfinalized gap, filename still mapped', () => {
+    var records = [fixtureManifestRecord({
+      segmentId: SEG1, segmentNumber: null, finalizedAtUtc: null
+    })];
+    var segmentFiles = {};
+    segmentFiles[SEG1] = 'microphone-001.webm';
+    var doc = JSON.parse(BS.buildMediaSyncJson({
+      manifestRecords: records,
+      clockAnchors: [fixtureAnchor()],
+      stopVerdict: fixtureSyncStopVerdict(),
+      segmentFiles: segmentFiles,
+      nowUtcIso: function () { return '2026-10-06T22:00:00.000Z'; }
+    }));
+    var seg = doc.segments[0];
+    assert.equal(seg.finalized, false);
+    assert.equal(seg.segmentNumber, null);
+    assert.deepEqual(seg.gaps, ['unfinalized']);
+    assert.equal(seg.filename, 'microphone-001.webm');
+  });
+});
+
+describe('6.3 AC6 — purity and strict validation', () => {
+  it('inputs are not mutated', () => {
+    var records = [fixtureManifestRecord({ segmentId: SEG1 })];
+    var anchors = [fixtureAnchor()];
+    var verdict = fixtureSyncStopVerdict();
+    var snapshot = JSON.stringify({ records: records, anchors: anchors, verdict: verdict });
+    BS.buildMediaSyncJson({
+      manifestRecords: records,
+      clockAnchors: anchors,
+      stopVerdict: verdict,
+      nowUtcIso: function () { return '2026-10-06T22:00:00.000Z'; }
+    });
+    assert.equal(JSON.stringify({ records: records, anchors: anchors, verdict: verdict }), snapshot);
+  });
+
+  it('TypeError on malformed inputs', () => {
+    assert.throws(function () {
+      BS.buildMediaSyncJson({ manifestRecords: 'x' });
+    }, TypeError);
+    assert.throws(function () {
+      BS.buildMediaSyncJson({ manifestRecords: [{ segmentId: SEG1 }] });
+    }, TypeError);  // missing streamKind
+    assert.throws(function () {
+      BS.buildMediaSyncJson({
+        manifestRecords: [fixtureManifestRecord({})],
+        clockAnchors: [{ segmentId: 'a' }]
+      });
+    }, TypeError);  // malformed anchor
+    assert.throws(function () {
+      BS.buildMediaSyncJson({
+        manifestRecords: [fixtureManifestRecord({})],
+        stopVerdict: { verdict: 'bogus' }
+      });
+    }, TypeError);
+  });
+
+  it('failed verdict throws plain Error (fail-closed)', () => {
+    assert.throws(function () {
+      BS.buildMediaSyncJson({
+        manifestRecords: [fixtureManifestRecord({})],
+        stopVerdict: { verdict: 'failed' },
+        nowUtcIso: function () { return '2026-10-06T22:00:00.000Z'; }
+      });
+    }, function (e) {
+      return e instanceof Error && !(e instanceof TypeError) &&
+        /session-not-complete/.test(e.message);
+    });
+  });
+
+  it('same fixture serialized twice is byte-identical', () => {
+    var args = {
+      manifestRecords: [fixtureManifestRecord({ segmentId: SEG1 })],
+      clockAnchors: [fixtureAnchor()],
+      stopVerdict: fixtureSyncStopVerdict(),
+      nowUtcIso: function () { return '2026-10-06T22:00:00.000Z'; }
+    };
+    assert.equal(BS.buildMediaSyncJson(args), BS.buildMediaSyncJson(args));
   });
 });
