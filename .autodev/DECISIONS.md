@@ -632,3 +632,48 @@ Consequential engineering decisions with reasoning and evidence. Newest first.
 - **V2 finding:** the offscreen document loads `db.js` and writes the
   manifest direct to the extension-owned IDB (4.1's direct-IDB path) —
   proven readable from the SW, same origin, same partition.
+
+## 4.6 stream start
+
+- **4.5 §2 amendment: 4.6 mints the segmentId, not 4.10.** 4.5's contract
+  said "4.10 assigns segmentIds," but the manifest record must be written
+  *at stream start* and its keyPath *is* `segmentId` — a record cannot be
+  written without its key. 4.6 mints uuid-v4 segmentIds at stream start;
+  4.10 links clock anchors to these IDs instead of minting new ones; 4.13
+  mints only post-discontinuity segments. (Flagged for the section-4
+  auditor by the 4.6 contract itself.)
+- **`MANIFEST_KEYS` 8 → 13 is deliberate, not drift.** 4.5's exact-keys
+  validator was the mechanism that *forced* this to be a deliberate
+  decision: 4.6 widens the shape with nullable start-time fields
+  (`streamStartedAtUtc`, `streamStartedAtMonotonicMs`,
+  `audioTrackPresent`, `videoTrackPresent`, `captureMode`) that later
+  tasks fill without another silent widening. The exact-keys convention
+  holds — any future widening must be equally deliberate (4.10/4.12/4.13).
+- **4.6 = plumbing, 4.7 = audio-content policy.** 4.6 passes through
+  whatever audio tracks acquisition yields and records their presence
+  (`audioTrackPresent` per stream); 4.7 verifies game-audio content,
+  bleed, and mix policy. No AudioContext, no track merging in 4.6 —
+  V1-pinned separateness (three streams, three recorders).
+- **`recorder.start()` with NO timeslice; `ondataavailable` unset.** 4.6
+  owns starting the recorders; 4.8 owns all data availability
+  (`requestData()` polling recommended over timeslices). The
+  `getActiveStreams()` registry (`{stream, recorder, segmentId}`) is the
+  seam 4.8/4.9/4.13 consume.
+- **Screen-mode picker honesty.** Whether `getDisplayMedia` works in a
+  hidden offscreen document was genuinely unknown; probed empirically —
+  it resolved under headless/fake-ui, so V2 exercised the real
+  screen-mode path. On a real headed device the picker may need
+  transient activation; the `picker-unavailable` degradation (honest,
+  V1-pinned) is the answer, not a fabricated workaround. AC12 (real
+  device) stays deferred to §7.
+- **Failure isolation is per-stage and leak-free.** Five failure stages
+  (verify-formats → acquire-stream → construct-recorder → start-recorder
+  → write-manifest); one stream's failure never blocks the others;
+  partial tracks are stopped; a manifest-write failure stops the live
+  recorder (no orphans, no record-without-recorder). `recorder.js`
+  references zero media-capture APIs — the starter reads document
+  globals lazily — so the 4.1/4.2/4.3 boundary pins pass unmodified.
+- **V2-found real bug:** the document-global `getDisplayMedia` fallback
+  returned the method unbound → `TypeError: Illegal invocation` in the
+  real document (V1's injected fakes never caught it). Repaired to a
+  bound caller + V1 regression test.

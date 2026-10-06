@@ -130,6 +130,9 @@ var BlindfoldSession = BlindfoldSession || {};
   // staleness. No session gating: device capability, not session data;
   // emits nothing.
   var MSG_FORMATS = 'recorder-get-formats';
+  // 4.6 stream start (PLAN.md §4.6). §5 drives it at Start; the response
+  // carries per-stream outcomes. Session-gated (no session → no-session).
+  var MSG_START_STREAMS = 'recorder-start-streams';
 
   // Source context stamped on every event this document emits (1.3's
   // SOURCE_CONTEXTS already includes 'recording_context').
@@ -356,6 +359,11 @@ var BlindfoldSession = BlindfoldSession || {};
       // like every other command (3.2 SF-1 precedent).
       if (message.msg === MSG_FORMATS) {
         return handleFormatCommand(message, sendResponse);
+      }
+      // 4.6: start the three recording streams. Session-gated inside
+      // the starter (no session → {ok:false, error:'no-session'}).
+      if (message.msg === MSG_START_STREAMS) {
+        return handleStartStreams(message, sendResponse);
       }
       return false; // unknown msg: ignore, no response
     }
@@ -716,6 +724,66 @@ var BlindfoldSession = BlindfoldSession || {};
       });
     }
 
+    // ----------------------------------------------------------------
+    // 4.6: stream starter — acquires and starts the three recording
+    // streams (mic, screen/tab, webcam), writing the manifest record per
+    // stream with the real negotiated MIME type and actual start times.
+    // ----------------------------------------------------------------
+
+    var streamStarter = null;
+    function getStreamStarter() {
+      if (streamStarter === null) {
+        var BS = shared();
+        if (typeof BS.createStreamStarter !== 'function') {
+          throw new Error('recorder: createStreamStarter is unavailable');
+        }
+        if (o.streamStarter !== undefined && o.streamStarter !== null) {
+          streamStarter = o.streamStarter;
+        } else {
+          // Media-capture APIs (navigator.mediaDevices.getUserMedia,
+          // getDisplayMedia, MediaRecorder) are NOT referenced here:
+          // stream_starter.js reads them lazily from the document
+          // globals in the offscreen document (the 4.1 boundary —
+          // recorder.js and recording_host.js reference no media-capture
+          // APIs, V1-pinned). recorder.js wires only selectors, broker,
+          // format support, session thunks, clocks, and uuid.
+          streamStarter = BS.createStreamStarter({
+            micSelector: getMicSelector(),
+            cameraSelector: getCameraSelector(),
+            captureSelector: getCaptureSelector(),
+            broker: o.broker !== undefined ? o.broker : createBrokerClient(),
+            formatSupport: getFormatSupport(),
+            getSessionId: function () { return sessionId; },
+            getGameId: function () { return gameId; },
+            nowUtcIso: o.selectorClock,
+            perfNowMs: (typeof o.perfNowMs === 'function') ?
+              o.perfNowMs : perfNowMs,
+            newUuidV4: newUuidV4
+          });
+        }
+      }
+      return streamStarter;
+    }
+
+    // 'recorder-start-streams' → {ok, streams:{microphone,screen,webcam}}
+    // (or top-level {ok:false, error} guards). Failure-isolated like
+    // every other command (3.2 SF-1 precedent): the starter returns data,
+    // never throws across the channel.
+    function handleStartStreams(message, sendResponse) {
+      var starter;
+      try {
+        starter = getStreamStarter();
+      } catch (e) {
+        try {
+          sendResponse(toChannelError(e));
+        } catch (w) { /* ignore */ }
+        return false;
+      }
+      return respondAsync(Promise.resolve().then(function () {
+        return starter.startStreams();
+      }), sendResponse, toChannelError);
+    }
+
     function handleCaptureCommand(message, sendResponse) {
       var sel;
       try {
@@ -973,6 +1041,9 @@ var BlindfoldSession = BlindfoldSession || {};
       // 4.5 surface (Node tests drive these directly; 4.6 calls
       // getFormatSupport().recordSegmentFormat at stream start).
       getFormatSupport: getFormatSupport,
+      // 4.6 surface (Node tests drive these directly; §5 drives the
+      // recorder-start-streams channel message).
+      getStreamStarter: getStreamStarter,
       restoreDevices: restoreDevices,
       getSession: function () { return { sessionId: sessionId, gameId: gameId }; }
     };
@@ -1005,6 +1076,7 @@ var BlindfoldSession = BlindfoldSession || {};
   BlindfoldSession.RECORDER_MSG_CAPTURE_QUERY_PERMISSION = MSG_CAPTURE_QUERY_PERMISSION;
   BlindfoldSession.RECORDER_MSG_CAPTURE_GET_STREAM_ID = MSG_CAPTURE_GET_STREAM_ID;
   BlindfoldSession.RECORDER_MSG_GET_FORMATS = MSG_FORMATS;
+  BlindfoldSession.RECORDER_MSG_START_STREAMS = MSG_START_STREAMS;
   BlindfoldSession.RECORDER_SOURCE_CONTEXT = RECORDER_SOURCE_CONTEXT;
   BlindfoldSession.isRecorderMessage = isRecorderMessage;
   BlindfoldSession.createOffscreenRecorder = createOffscreenRecorder;

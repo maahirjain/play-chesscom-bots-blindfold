@@ -296,6 +296,24 @@ describe('AC4 — diff discipline', () => {
       // evidence lands after the pins were evolved (2.x/3.x/4.1-4.4 precedent).
       '.autodev/evidence/4.5.review.md',
       '.autodev/evidence/4.5.behavior.md',
+      // Honest cumulative evolution: 4.6 (stream start plumbing)
+      // legitimately adds stream_starter.js, routes
+      // recorder-start-streams through recorder.js/recorder.html, adds
+      // device_selection.recordDefault, widens format_support.js's
+      // recording-manifest fields, and adds its test + evidence; its
+      // files join the allowlists.
+      'stream_starter.js',
+      'device_selection.js',
+      'format_support.js',
+      'recorder.js',
+      'recorder.html',
+      'tests/stream_starter.test.js',
+      '.autodev/evidence/4.6.contract.md',
+      '.autodev/evidence/4.6.build.md',
+      // Honest cumulative evolution: 4.6's review/behavior evidence lands
+      // after the pins were evolved (2.x/3.x/4.1-4.5 precedent).
+      '.autodev/evidence/4.6.review.md',
+      '.autodev/evidence/4.6.behavior.md',
       // Honest cumulative evolution: 4.3's review/behavior evidence lands
       // after the pins were evolved (2.x/3.x/4.1/4.2 precedent).
       '.autodev/evidence/4.3.review.md',

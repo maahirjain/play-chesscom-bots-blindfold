@@ -224,6 +224,12 @@ describe('AC4 — extensionForMimeType', () => {
 // ------------------------------------------------------------------
 
 describe('AC5 — requireValidManifestRecord', () => {
+  // Honest cumulative evolution (4.6): the 4.5 §2 contract amendment
+  // widens the manifest record with six 4.6-owned fields (the record is
+  // written at stream start; 4.6 mints segmentId and records the actual
+  // start times). The 4.6 fields default to null here — the widened
+  // validator requires the keys present, and recordSegmentFormat still
+  // accepts the 4.5 call shape by nulling absent fields.
   function validRecord(overrides) {
     return Object.assign({
       segmentId: SEG,
@@ -233,7 +239,13 @@ describe('AC5 — requireValidManifestRecord', () => {
       requestedMimeType: 'video/webm;codecs=vp9,opus',
       actualMimeType: 'video/webm;codecs=vp9,opus',
       fileExtension: '.webm',
-      createdAtUtc: '2026-10-06T00:00:00.000Z'
+      createdAtUtc: '2026-10-06T00:00:00.000Z',
+      // 4.6-owned (nullable):
+      streamStartedAtUtc: null,
+      streamStartedAtMonotonicMs: null,
+      effectiveDeviceId: null,
+      audioTrackPresent: null,
+      videoTrackPresent: null
     }, overrides || {});
   }
 
@@ -244,7 +256,7 @@ describe('AC5 — requireValidManifestRecord', () => {
     });
   }
 
-  it('accepts a valid 4.5-owned record', () => {
+  it('accepts a valid record (4.5 shape + 4.6-widened fields)', () => {
     const fs = makeFs();
     assert.deepEqual(fs.requireValidManifestRecord(validRecord()), validRecord());
   });
@@ -331,7 +343,13 @@ describe('AC6 — recordSegmentFormat', () => {
       requestedMimeType: 'video/webm;codecs=vp9,opus',
       actualMimeType: 'video/webm;codecs=vp9,opus',
       fileExtension: '.webm',
-      createdAtUtc: '2026-10-06T00:00:00.000Z'
+      createdAtUtc: '2026-10-06T00:00:00.000Z',
+      // 4.6-owned fields default to null when the 4.5 call shape is used.
+      streamStartedAtUtc: null,
+      streamStartedAtMonotonicMs: null,
+      effectiveDeviceId: null,
+      audioTrackPresent: null,
+      videoTrackPresent: null
     });
   });
 
@@ -516,6 +534,24 @@ describe('AC8 — diff discipline', () => {
       // after the pins were evolved (2.x/3.x/4.1-4.4 precedent).
       '.autodev/evidence/4.5.review.md',
       '.autodev/evidence/4.5.behavior.md',
+      // Honest cumulative evolution: 4.6 (stream start plumbing)
+      // legitimately adds stream_starter.js, routes
+      // recorder-start-streams through recorder.js/recorder.html, adds
+      // device_selection.recordDefault, widens format_support.js's
+      // recording-manifest fields, and adds its test + evidence; its
+      // files join the allowlists.
+      'stream_starter.js',
+      'device_selection.js',
+      'format_support.js',
+      'recorder.js',
+      'recorder.html',
+      'tests/stream_starter.test.js',
+      '.autodev/evidence/4.6.contract.md',
+      '.autodev/evidence/4.6.build.md',
+      // Honest cumulative evolution: 4.6's review/behavior evidence lands
+      // after the pins were evolved (2.x/3.x/4.1-4.5 precedent).
+      '.autodev/evidence/4.6.review.md',
+      '.autodev/evidence/4.6.behavior.md',
       '.autodev/DECISIONS.md',
       // Cumulative evolution: earlier suites' diff-discipline allowlists
       // are evolved by this task with justification comments.

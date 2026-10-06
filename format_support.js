@@ -79,11 +79,16 @@ var BlindfoldSession = BlindfoldSession || {};
     ]
   };
 
-  // The eight 4.5-owned manifest fields (contract §2 field-ownership
-  // table). 4.10 (clockAnchor), 4.12 (timecode/offsets), and 4.13
-  // (status, finalizedAtUtc) own their fields and widen this validator
-  // when they add them — the exact-keys convention rejects anything
-  // else, so the widening is deliberate, not a silent break.
+  // The eight 4.5-owned manifest fields, plus the six 4.6-owned fields
+  // (contract §2 field-ownership table; 4.6's deliberate widening per the
+  // 4.5 §2 amendment — the manifest record is written at stream start and
+  // its keyPath is segmentId, so 4.6 mints it and adds the actual start
+  // times). The 4.6 fields are nullable so 4.5's write API keeps its
+  // shape; 4.6's stream starter always provides real values (V1-pinned).
+  // 4.10 (clockAnchor), 4.12 (timecode/offsets), and 4.13 (status,
+  // finalizedAtUtc) own their fields and widen this validator when they
+  // add them — the exact-keys convention rejects anything else, so the
+  // widening is deliberate, not a silent break.
   var MANIFEST_KEYS = [
     'segmentId',
     'sessionId',
@@ -92,7 +97,13 @@ var BlindfoldSession = BlindfoldSession || {};
     'requestedMimeType',
     'actualMimeType',
     'fileExtension',
-    'createdAtUtc'
+    'createdAtUtc',
+    // 4.6-owned:
+    'streamStartedAtUtc',
+    'streamStartedAtMonotonicMs',
+    'effectiveDeviceId',
+    'audioTrackPresent',
+    'videoTrackPresent'
   ];
 
   var FILE_EXTENSIONS = ['.webm', '.mp4', '.m4a'];
@@ -158,6 +169,28 @@ var BlindfoldSession = BlindfoldSession || {};
       }
     }
     return obj;
+  }
+
+  // Small 4.6 helpers (AGENTS.md error conventions).
+  function requireNonEmptyString(value, what) {
+    if (typeof value !== 'string' || value === '') {
+      throw new TypeError(what + ' must be a non-empty string');
+    }
+    return value;
+  }
+
+  function requireFiniteNumber(value, what) {
+    if (typeof value !== 'number' || !isFinite(value)) {
+      throw new TypeError(what + ' must be a finite number');
+    }
+    return value;
+  }
+
+  function requireBoolean(value, what) {
+    if (typeof value !== 'boolean') {
+      throw new TypeError(what + ' must be a boolean');
+    }
+    return value;
   }
 
   // ------------------------------------------------------------------
@@ -273,9 +306,10 @@ var BlindfoldSession = BlindfoldSession || {};
     // The recording manifest writer (4.6 calls this at stream start).
     // ----------------------------------------------------------------
 
-    // Exact-keys validator for a 4.5-owned manifest record. Covers
-    // exactly the eight 4.5-owned fields; 4.10/4.12/4.13 widen it when
-    // they add theirs.
+    // Exact-keys validator for a manifest record. Covers the eight
+    // 4.5-owned fields plus the six 4.6-owned fields (deliberate
+    // widening — see MANIFEST_KEYS). The 4.6 fields are nullable:
+    // recordSegmentFormat derives them only when 4.6 provides them.
     function requireValidManifestRecord(record) {
       requireExactKeys(record, MANIFEST_KEYS, 'recording_manifest record');
       requireUuidV4(record.segmentId, 'segmentId');
@@ -293,12 +327,40 @@ var BlindfoldSession = BlindfoldSession || {};
           record.createdAtUtc === '') {
         throw new TypeError('createdAtUtc must be a non-empty string');
       }
+      if (record.streamStartedAtUtc !== null &&
+          (typeof record.streamStartedAtUtc !== 'string' ||
+           record.streamStartedAtUtc === '')) {
+        throw new TypeError('streamStartedAtUtc must be a non-empty string or null');
+      }
+      if (record.streamStartedAtMonotonicMs !== null &&
+          (typeof record.streamStartedAtMonotonicMs !== 'number' ||
+           !isFinite(record.streamStartedAtMonotonicMs))) {
+        throw new TypeError('streamStartedAtMonotonicMs must be a finite number or null');
+      }
+      if (record.effectiveDeviceId !== null &&
+          (typeof record.effectiveDeviceId !== 'string' ||
+           record.effectiveDeviceId === '')) {
+        throw new TypeError('effectiveDeviceId must be a non-empty string or null');
+      }
+      if (record.audioTrackPresent !== null &&
+          typeof record.audioTrackPresent !== 'boolean') {
+        throw new TypeError('audioTrackPresent must be a boolean or null');
+      }
+      if (record.videoTrackPresent !== null &&
+          typeof record.videoTrackPresent !== 'boolean') {
+        throw new TypeError('videoTrackPresent must be a boolean or null');
+      }
       return record;
     }
 
     // Write one manifest record. The fileExtension is derived from the
     // ACTUAL negotiated MIME type (recorder.mimeType as passed in by
     // 4.6), never from the requested string.
+    //
+    // 4.6's fields (streamStartedAtUtc, streamStartedAtMonotonicMs,
+    // effectiveDeviceId, audioTrackPresent, videoTrackPresent) are
+    // accepted when provided and default to null otherwise — the
+    // deliberate 4.6 widening keeps 4.5's call shape intact.
     //
     // Pre-session inertness (2.x/3.x/4.2 precedent): null/undefined
     // sessionId or gameId → plain data {ok:false, error:'no-session'},
@@ -325,7 +387,23 @@ var BlindfoldSession = BlindfoldSession || {};
           actualMimeType: requireMimeOrNull(
             input.actualMimeType, 'actualMimeType'),
           fileExtension: extensionForMimeType(input.actualMimeType),
-          createdAtUtc: nowUtcIso()
+          createdAtUtc: nowUtcIso(),
+          // 4.6-owned (nullable; 4.6 always provides real values).
+          streamStartedAtUtc: (input.streamStartedAtUtc === undefined ||
+            input.streamStartedAtUtc === null) ? null :
+            requireNonEmptyString(input.streamStartedAtUtc, 'streamStartedAtUtc'),
+          streamStartedAtMonotonicMs: (input.streamStartedAtMonotonicMs === undefined ||
+            input.streamStartedAtMonotonicMs === null) ? null :
+            requireFiniteNumber(input.streamStartedAtMonotonicMs, 'streamStartedAtMonotonicMs'),
+          effectiveDeviceId: (input.effectiveDeviceId === undefined ||
+            input.effectiveDeviceId === null) ? null :
+            requireNonEmptyString(input.effectiveDeviceId, 'effectiveDeviceId'),
+          audioTrackPresent: (input.audioTrackPresent === undefined ||
+            input.audioTrackPresent === null) ? null :
+            requireBoolean(input.audioTrackPresent, 'audioTrackPresent'),
+          videoTrackPresent: (input.videoTrackPresent === undefined ||
+            input.videoTrackPresent === null) ? null :
+            requireBoolean(input.videoTrackPresent, 'videoTrackPresent')
         };
         requireValidManifestRecord(record);
       } catch (e) {

@@ -384,6 +384,34 @@ var BlindfoldSession = BlindfoldSession || {};
       });
     }
 
+    // 4.6: record an actually-used-but-unselected device as
+    // source:'default' (never 'user'). The deviceId comes from a live
+    // track's getSettings() — ground truth. Same persist-before-live as
+    // select() (4.2 SF-1): a storage failure rejects instead of leaving a
+    // phantom selection. The default becomes the remembered selection
+    // (5.3 reads it next boot). If the deviceId is absent from the
+    // enumeration, it is recorded anyway with a null label rather than
+    // failing the stream start.
+    function recordDefault(deviceId) {
+      requireDeviceId(deviceId, 'recordDefault deviceId');
+      return ensureEnumerated().then(function () {
+        var found = findDevice(deviceId);
+        var label = found ? found.label : null;
+        return Promise.resolve()
+          .then(function () {
+            var kv = {};
+            kv[storageKey] = deviceId;
+            return requireStorage().set(kv);
+          })
+          .then(function () {
+            selection = deviceId;
+            selectionSource = 'default';
+            emitDeviceSelected(deviceId, label, 'default');
+            return { ok: true, selection: deviceId };
+          });
+      });
+    }
+
     function ensureEnumerated() {
       if (devices !== null) {
         return Promise.resolve(devices);
@@ -597,6 +625,7 @@ var BlindfoldSession = BlindfoldSession || {};
       storageKey: function () { return storageKey; },
       listDevices: listDevices,
       select: select,
+      recordDefault: recordDefault,
       requestPermission: requestPermission,
       queryPermission: queryPermission,
       getState: getState,
