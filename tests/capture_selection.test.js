@@ -570,18 +570,21 @@ describe('recorder channel routing', () => {
 
 describe('AC8 — diff discipline', () => {
   it('content scripts are byte-identical to HEAD', () => {
+    // Honest cumulative evolution (4.4): device_selection.js leaves this
+    // list — 4.4 legitimately kind-branches the probe constraints and
+    // parameterizes the validator messages (see its pin in
+    // tests/device_selection.test.js).
     for (const f of ['content.js', 'chess_utils.js', 'sounds.js', 'lifecycle.js',
                      'sender.js', 'status_indicator.js', 'event_envelope.js',
                      'session_identity.js', 'session_conditions.js',
-                     'game_records.js', 'db.js', 'writer.js', 'session_store.js',
-                     'device_selection.js']) {
+                     'game_records.js', 'db.js', 'writer.js', 'session_store.js']) {
       const head = execSync(`git show HEAD:${f}`, { cwd: REPO, stdio: 'pipe' }).toString();
       const current = fs.readFileSync(path.join(REPO, f), 'utf8');
-      assert.strictEqual(current, head, `${f} changed but 4.3 must not touch it`);
+      assert.strictEqual(current, head, `${f} changed but 4.4 must not touch it`);
     }
   });
 
-  it('only 4.3 files appear in git status', () => {
+  it('only 4.3/4.4 files appear in git status', () => {
     const status = execSync('git status --porcelain', { cwd: REPO }).toString();
     const changed = status.split('\n').filter((l) => l.trim()).map((l) => l.slice(3).trim());
     const allowed = new Set([
@@ -592,6 +595,10 @@ describe('AC8 — diff discipline', () => {
       'recording_host.js',
       'sw.js',
       'manifest.json',
+      // Honest cumulative evolution: 4.4 legitimately modifies
+      // device_selection.js (video probe kind-branch + validator
+      // messages), pinned by its own suite's diff-discipline test.
+      'device_selection.js',
       'tests/capture_selection.test.js',
       'tests/capture_broker.test.js',
       'tests/manifest_sw.test.js',
@@ -614,6 +621,17 @@ describe('AC8 — diff discipline', () => {
       'tests/writer.test.js',
       '.autodev/evidence/4.3.contract.md',
       '.autodev/evidence/4.3.build.md',
+      // Honest cumulative evolution: 4.4 (webcam selection and
+      // permission handling) modifies device_selection.js (video
+      // probe kind-branch + validator messages) and recorder.js
+      // (camera selector + cam-* channel), and repairs
+      // restoreDevices() to await all selector restores.
+      '.autodev/evidence/4.4.contract.md',
+      '.autodev/evidence/4.4.build.md',
+      // Honest cumulative evolution: 4.4's review/behavior
+      // evidence lands after the pins were evolved (2.x/3.x/4.1-4.3 precedent).
+      '.autodev/evidence/4.4.review.md',
+      '.autodev/evidence/4.4.behavior.md',
       // Honest cumulative evolution: 4.3's review/behavior evidence lands
       // after the pins were evolved (2.x/3.x/4.1/4.2 precedent).
       '.autodev/evidence/4.3.review.md',

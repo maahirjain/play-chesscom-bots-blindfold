@@ -568,16 +568,13 @@ describe('AC2 — manifest permission change', () => {
   });
 
   it('the 4.3 manifest delta vs HEAD is exactly the contract-pinned change', () => {
-    // Honest cumulative evolution (4.3): the 4.2-era "no manifest change"
-    // assertion is superseded — 4.3's contract REQUIRES "tabCapture" +
-    // host_permissions ["https://www.chess.com/*"]. The durable assertion
-    // pins the delta to exactly that: no other manifest change.
-    assert.deepStrictEqual(manifest.permissions, ['offscreen', 'tabCapture']);
-    assert.deepStrictEqual(manifest.host_permissions, ['https://www.chess.com/*']);
+    // Honest cumulative evolution (4.4): HEAD now includes 4.3's pinned
+    // change, so `git diff HEAD` is empty — and 4.4's contract requires
+    // NO manifest change. The durable assertion is that the working tree
+    // introduces no new manifest delta; the 4.3-pinned permissions are
+    // asserted above.
     const diff = execSync('git diff HEAD -- manifest.json', { cwd: REPO }).toString();
-    assert.ok(/tabCapture/.test(diff), 'delta includes the tabCapture permission');
-    assert.ok(/host_permissions/.test(diff), 'delta includes host_permissions');
-    assert.ok(!/content_security_policy/.test(diff), 'no CSP change');
+    assert.strictEqual(diff, '', '4.4 must not change manifest.json');
   });
 });
 
@@ -637,6 +634,17 @@ describe('AC6 — diff discipline', () => {
       'tests/capture_broker.test.js',
       '.autodev/evidence/4.3.contract.md',
       '.autodev/evidence/4.3.build.md',
+      // Honest cumulative evolution: 4.4 (webcam selection and
+      // permission handling) modifies device_selection.js (video
+      // probe kind-branch + validator messages) and recorder.js
+      // (camera selector + cam-* channel), and repairs
+      // restoreDevices() to await all selector restores.
+      '.autodev/evidence/4.4.contract.md',
+      '.autodev/evidence/4.4.build.md',
+      // Honest cumulative evolution: 4.4's review/behavior
+      // evidence lands after the pins were evolved (2.x/3.x/4.1-4.3 precedent).
+      '.autodev/evidence/4.4.review.md',
+      '.autodev/evidence/4.4.behavior.md',
       // Honest cumulative evolution: 4.3's review/behavior evidence lands
       // after the pins were evolved (2.x/3.x/4.1/4.2 precedent).
       '.autodev/evidence/4.3.review.md',

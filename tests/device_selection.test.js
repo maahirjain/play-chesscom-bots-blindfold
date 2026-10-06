@@ -702,7 +702,7 @@ describe('AC7 — recorder channel routing', () => {
 // ------------------------------------------------------------------
 
 describe('AC8 — diff discipline', () => {
-  it('only 4.2 files appear in git status', () => {
+  it('only 4.2/4.4 files appear in git status', () => {
     const status = execSync('git status --porcelain', { cwd: REPO }).toString();
     const changed = status.split('\n').filter((l) => l.trim()).map((l) => l.slice(3).trim());
     const allowed = new Set([
@@ -733,6 +733,20 @@ describe('AC8 — diff discipline', () => {
       // after the pins were evolved (2.x/3.x/4.1/4.2 precedent).
       '.autodev/evidence/4.3.review.md',
       '.autodev/evidence/4.3.behavior.md',
+      // Honest cumulative evolution: 4.4 (webcam selection and
+      // permission handling) legitimately modifies device_selection.js
+      // (video probe constraints kind-branch + parameterized validator
+      // messages) and recorder.js (camera selector + cam-* channel),
+      // adds its tests + evidence; its files join the allowlists.
+      // 4.4 also repairs restoreDevices() to await ALL selector restores
+      // (a real race the 4.4 tests exposed: the first selector's promise
+      // resolved before the others finished).
+      '.autodev/evidence/4.4.contract.md',
+      '.autodev/evidence/4.4.build.md',
+      // Honest cumulative evolution: 4.4's review/behavior
+      // evidence lands after the pins were evolved (2.x/3.x/4.1-4.3 precedent).
+      '.autodev/evidence/4.4.review.md',
+      '.autodev/evidence/4.4.behavior.md',
       '.autodev/DECISIONS.md',
       // Cumulative evolution: earlier suites' diff-discipline allowlists
       // are evolved by this task with justification comments.
@@ -803,5 +817,304 @@ describe('AC8 — diff discipline', () => {
     const diff = execSync('git diff HEAD --stat -- content.js chess_utils.js sounds.js',
       { cwd: REPO }).toString().trim();
     assert.equal(diff, '', 'content scripts untouched by 4.2');
+  });
+});
+
+// ------------------------------------------------------------------
+// Task 4.4 (PLAN.md §4.4): webcam selection and permission handling.
+// Near-mechanical reuse of the 4.2 factory with kind:'videoinput',
+// plus the genuine gap fix: the permission probe must use { video }
+// constraints, never { audio }. AC1–AC8 (static/unit) per
+// .autodev/evidence/4.4.contract.md; AC9–AC11 run via
+// ~/workspace/tools/ext-verify/sw-camdevices.js; AC12 is §7's.
+// ------------------------------------------------------------------
+
+function fakeCameraPermissions(state) {
+  return {
+    query: async (desc) => {
+      assert.equal(desc.name, 'camera');
+      return { state: state };
+    }
+  };
+}
+
+describe('4.4 — videoinput factory instantiation (AC1)', () => {
+  it("constructs with kind 'videoinput'; camera storage key and event types", () => {
+    const { sel } = makeSelector({ kind: 'videoinput' });
+    assert.equal(sel.kind(), 'videoinput');
+    assert.equal(sel.storageKey(), 'blindfold.cameraDeviceId.v1');
+  });
+
+  it('rejects non-audioinput/videoinput kinds (unchanged)', () => {
+    assert.throws(() => BS_DEV.createDeviceSelector({ kind: 'screen' }), RangeError);
+  });
+});
+
+describe('4.4 — validator error messages use camera_* names (AC6)', () => {
+  it('camera event-type names appear in failure messages', () => {
+    assert.throws(() => BS.requireValidPermissionChangedPayload(
+      { permissionState: 'maybe', source: 'request', errorName: null },
+      'camera_permission_changed'),
+      /camera_permission_changed payload\.permissionState/);
+    assert.throws(() => BS.requireValidDeviceSelectedPayload(
+      { deviceId: 'x', label: null, source: 'telepathy' },
+      'camera_device_selected'),
+      /camera_device_selected payload\.source/);
+    assert.throws(() => BS.requireValidDeviceSelectedPayload(
+      { deviceId: '', label: null, source: 'user' },
+      'camera_device_selected'),
+      /camera_device_selected payload\.deviceId/);
+  });
+
+  it('exported validators default to microphone_* (backward compatible)', () => {
+    assert.throws(() => BS.requireValidPermissionChangedPayload(
+      { permissionState: 'maybe', source: 'request', errorName: null }),
+      /microphone_permission_changed payload\.permissionState/);
+    assert.throws(() => BS.requireValidDeviceSelectedPayload(
+      { deviceId: 'x', label: null, source: 'telepathy' }),
+      /microphone_device_selected payload\.source/);
+  });
+
+  it('the camera selector validates with its own names end to end', () => {
+    // The factory's internal emit calls pass the instance's event-type
+    // names (covered by the grants/denied/stale tests below, which assert
+    // camera_* event types on every emitted event).
+    const { sel } = makeSelector({ kind: 'videoinput' });
+    assert.equal(sel.kind(), 'videoinput');
+  });
+});
+
+describe('4.4 — camera probe uses { video } constraints (AC2/AC3)', () => {
+  it('probe with a selection sends {video:{deviceId:{exact}}} and no audio key', async () => {
+    const md = fakeMediaDevices();
+    const { sel, emitted } = makeSelector({
+      kind: 'videoinput', mediaDevices: md,
+      permissions: fakeCameraPermissions('prompt')
+    });
+    await sel.select('cam-1');
+    const res = await sel.requestPermission();
+    assert.equal(res.permissionState, 'granted');
+    assert.equal(res.ok, true);
+    const c = md.state.constraintsSeen[md.state.constraintsSeen.length - 1];
+    assert.deepEqual(c, { video: { deviceId: { exact: 'cam-1' } } });
+    assert.ok(!('audio' in c), 'no audio key in the video probe');
+    // Every probe track was stopped; the emitted event is camera_*.
+    const permEv = emitted.find((e) => e.eventType === 'camera_permission_changed');
+    assert.ok(permEv, 'camera_permission_changed emitted');
+    assert.deepEqual(permEv.payload,
+      { permissionState: 'granted', source: 'request', errorName: null });
+    assert.ok(emitted.every((e) => !e.eventType.startsWith('microphone_')),
+      'no microphone_* event from a camera selector');
+  });
+
+  it('probe with no selection sends {video:true}', async () => {
+    const md = fakeMediaDevices();
+    const { sel } = makeSelector({ kind: 'videoinput', mediaDevices: md });
+    const res = await sel.requestPermission();
+    assert.equal(res.permissionState, 'granted');
+    assert.deepEqual(md.state.constraintsSeen[0], { video: true });
+  });
+
+  it('probe stops every track: no stream retained', async () => {
+    const stopped = [];
+    const md = fakeMediaDevices({
+      gumImpl: () => {
+        const tracks = [
+          { stop() { stopped.push('t1'); } },
+          { stop() { stopped.push('t2'); } }
+        ];
+        return Promise.resolve({ getTracks: () => tracks });
+      }
+    });
+    const { sel } = makeSelector({ kind: 'videoinput', mediaDevices: md });
+    const res = await sel.requestPermission();
+    assert.equal(res.permissionState, 'granted');
+    assert.deepEqual(stopped.sort(), ['t1', 't2'],
+      'every probe track stopped before the probe resolved');
+  });
+
+  it('cam-list-devices maps only videoinput devices; labels null pre-grant', async () => {
+    const { sel } = makeSelector({ kind: 'videoinput' });
+    const res = await sel.listDevices();
+    assert.equal(res.ok, true);
+    assert.equal(res.devices.length, 1);
+    assert.deepEqual(res.devices[0],
+      { deviceId: 'cam-1', label: null, kind: 'videoinput' });
+  });
+});
+
+describe('4.4 — camera denial and staleness (AC4/AC5)', () => {
+  it("NotAllowedError → denied state, not an exception; raw error name on the event", async () => {
+    const md = fakeMediaDevices({ gumError: namedError('NotAllowedError') });
+    const { sel, emitted } = makeSelector({ kind: 'videoinput', mediaDevices: md });
+    const res = await sel.requestPermission();
+    assert.deepEqual(res,
+      { ok: false, permissionState: 'denied', errorName: 'NotAllowedError' });
+    const ev = emitted.find((e) => e.eventType === 'camera_permission_changed');
+    assert.ok(ev);
+    assert.equal(ev.payload.errorName, 'NotAllowedError');
+  });
+
+  it("OverconstrainedError → selection invalidated (source 'invalidated')", async () => {
+    const storage = fakeStorage();
+    const md = fakeMediaDevices({ gumError: namedError('OverconstrainedError') });
+    const { sel, emitted } = makeSelector({
+      kind: 'videoinput', mediaDevices: md, storage
+    });
+    await sel.select('cam-1');
+    emitted.length = 0;
+    const res = await sel.requestPermission();
+    assert.equal(res.permissionState, 'unknown');
+    const st = await sel.getState();
+    assert.equal(st.selection, null, 'stale selection cleared');
+    assert.equal(storage._store['blindfold.cameraDeviceId.v1'], undefined,
+      'stale persisted selection dropped');
+    const ev = emitted.find((e) => e.eventType === 'camera_device_selected');
+    assert.ok(ev);
+    assert.deepEqual(ev.payload,
+      { deviceId: null, label: null, source: 'invalidated' });
+  });
+});
+
+describe('4.4 — camera restore and selection (AC1/AC7)', () => {
+  it('restores a persisted camera selection with source restored', async () => {
+    const storage = fakeStorage({ 'blindfold.cameraDeviceId.v1': 'cam-1' });
+    const { sel, emitted, sess } = makeSelector({
+      kind: 'videoinput', storage, sessionId: null, gameId: null
+    });
+    await sel.restoreOnBoot();
+    const st = await sel.getState();
+    assert.equal(st.selection, 'cam-1');
+    sess.sid = SID; sess.gid = GID;
+    sel.announceSelectionForSession();
+    assert.deepEqual(emitted[0].payload,
+      { deviceId: 'cam-1', label: null, source: 'restored' });
+    assert.equal(emitted[0].eventType, 'camera_device_selected');
+  });
+
+  it('mic and camera selectors are independent instances', async () => {
+    const { sel: mic } = makeSelector({ kind: 'audioinput' });
+    const { sel: cam } = makeSelector({ kind: 'videoinput' });
+    await mic.select('mic-1');
+    await cam.select('cam-1');
+    assert.equal((await mic.getState()).selection, 'mic-1');
+    assert.equal((await cam.getState()).selection, 'cam-1');
+    assert.equal(mic.storageKey(), 'blindfold.micDeviceId.v1');
+    assert.equal(cam.storageKey(), 'blindfold.cameraDeviceId.v1');
+  });
+});
+
+describe('4.4 — recorder channel routing (AC7)', () => {
+  function makeRecorder(overrides) {
+    const o = overrides || {};
+    const sentToWriter = [];
+    const chromeNs = {
+      runtime: {
+        sendMessage: (msg) => {
+          sentToWriter.push(msg);
+          return Promise.resolve({ ok: true, eventId: msg.event && msg.event.eventId });
+        },
+        onMessage: { addListener: () => true }
+      }
+    };
+    const rec = BS.createOffscreenRecorder(Object.assign({
+      chromeNs, announce: false,
+      mediaDevices: o.mediaDevices || fakeMediaDevices(),
+      storage: o.storage || fakeStorage(),
+      permissions: null,
+      selectorClock: () => '2026-10-06T00:00:00.000Z'
+    }, o.recorderOpts || {}));
+    function send(msg) {
+      return new Promise((resolve) => {
+        const r = rec.onRuntimeMessage(
+          Object.assign({ kind: 'recorder', v: 1 }, msg), {}, resolve);
+        if (r === false) {
+          resolve('sync-false');
+        }
+      });
+    }
+    return { rec, send, sentToWriter };
+  }
+
+  it('routes cam-list-devices / cam-select / cam-request-permission / cam-get-state', async () => {
+    const { send } = makeRecorder();
+    await send({ msg: 'recorder-set-session', sessionId: SID, gameId: GID });
+    const list = await send({ msg: 'cam-list-devices' });
+    assert.equal(list.ok, true);
+    assert.equal(list.devices.length, 1);
+    assert.equal(list.devices[0].kind, 'videoinput');
+    const s = await send({ msg: 'cam-select', deviceId: 'cam-1' });
+    assert.deepEqual(s, { ok: true, selection: 'cam-1' });
+    const p = await send({ msg: 'cam-request-permission' });
+    assert.equal(p.permissionState, 'granted');
+    const st = await send({ msg: 'cam-get-state' });
+    assert.deepEqual(st, {
+      ok: true, selection: 'cam-1', permissionState: 'granted',
+      devicesEnumeratedAt: '2026-10-06T00:00:00.000Z'
+    });
+  });
+
+  it('cam-select with unknown deviceId → {ok:false, error:unknown-device}, never throws', async () => {
+    const { send } = makeRecorder();
+    const res = await send({ msg: 'cam-select', deviceId: 'ghost' });
+    assert.deepEqual(res, { ok: false, error: 'unknown-device' });
+  });
+
+  it('cam-select with a malformed deviceId → invalid-request', async () => {
+    const { send } = makeRecorder();
+    assert.deepEqual(await send({ msg: 'cam-select', deviceId: 42 }),
+      { ok: false, error: 'invalid-request' });
+    assert.deepEqual(await send({ msg: 'cam-select' }),
+      { ok: false, error: 'invalid-request' });
+  });
+
+  it('a throwing camera selector becomes {ok:false}; the mic still answers (independence)', async () => {
+    const boom = new Error('camera exploded');
+    const evil = {
+      listDevices: async () => { throw boom; },
+      select: async () => { throw boom; },
+      requestPermission: async () => { throw boom; },
+      getState: async () => { throw boom; },
+      restoreOnBoot: async () => { throw boom; },
+      announceSelectionForSession: () => { throw boom; }
+    };
+    const { send } = makeRecorder({ recorderOpts: { cameraSelector: evil } });
+    assert.deepEqual(await send({ msg: 'cam-select', deviceId: 'cam-1' }),
+      { ok: false, error: 'internal-error' });
+    const list = await send({ msg: 'mic-list-devices' });
+    assert.equal(list.ok, true, 'mic unaffected by camera failure');
+    const pong = await send({ msg: 'recorder-ping' });
+    assert.equal(pong.ok, true, 'liveness pong never dropped');
+  });
+
+  it('restoreDevices restores the camera selection; session activation announces it', async () => {
+    const storage = fakeStorage({ 'blindfold.cameraDeviceId.v1': 'cam-1' });
+    const { rec, send, sentToWriter } = makeRecorder({ storage });
+    await rec.restoreDevices();
+    await send({ msg: 'recorder-set-session', sessionId: SID, gameId: GID });
+    const ev = sentToWriter.find((m) => m.kind === 'event' && m.event &&
+      m.event.eventType === 'camera_device_selected');
+    assert.ok(ev, 'camera_device_selected announced on session activation');
+    assert.equal(ev.event.payload.source, 'restored');
+    assert.equal(ev.event.payload.deviceId, 'cam-1');
+  });
+
+  it('camera events travel the writer intake with the recording_context source', async () => {
+    const { send, sentToWriter } = makeRecorder();
+    await send({ msg: 'recorder-set-session', sessionId: SID, gameId: GID });
+    await send({ msg: 'cam-request-permission' });
+    const env = sentToWriter.find((m) => m.kind === 'event' && m.event &&
+      m.event.eventType === 'camera_permission_changed');
+    assert.ok(env);
+    assert.equal(env.event.sourceContext, 'recording_context');
+    assert.equal(env.event.sessionId, SID);
+    assert.equal(env.event.gameId, GID);
+  });
+
+  it('pre-session camera commands work; no writer traffic', async () => {
+    const { send, sentToWriter } = makeRecorder();
+    assert.deepEqual(await send({ msg: 'cam-select', deviceId: 'cam-1' }),
+      { ok: true, selection: 'cam-1' });
+    assert.equal(sentToWriter.length, 0);
   });
 });

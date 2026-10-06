@@ -149,22 +149,16 @@ describe('AC4/AC6 — diff is exactly the background block', () => {
   });
 
   it('web_accessible_resources block byte-identical to HEAD (AC6, cumulative)', () => {
-    // 2.1/2.2 pinned the whole tail from "content_scripts" onward; 2.3
-    // legitimately extended the js list inside content_scripts per its
-    // contract (exact list pinned in tests/sender.test.js); 4.3
-    // legitimately appends "host_permissions": ["https://www.chess.com/*"]
-    // AFTER the web_accessible_resources block per its contract. The
-    // cumulative invariant: web_accessible_resources itself is untouched,
-    // and the tail is exactly that block plus the 4.3 host_permissions.
+    // Honest cumulative evolution (4.4): HEAD now includes 4.3's pinned
+    // host_permissions addition, so the 4.3-era archaeology (rebuilding
+    // the tail from a pre-4.3 HEAD) no longer applies. 4.4's contract
+    // requires NO manifest change; the durable assertion is that the
+    // working-tree tail is byte-identical to HEAD's tail.
     const tailMarker = '"web_accessible_resources"';
     const newTail = manifestRaw.slice(manifestRaw.indexOf(tailMarker));
-    const oldTail = oldRaw.slice(oldRaw.indexOf(tailMarker));
-    assert.strictEqual(
-      newTail,
-      oldTail.slice(0, oldTail.lastIndexOf(']') + 1) +
-        ',\n    "host_permissions": ["https://www.chess.com/*"]\n}',
-      'tail changed beyond the 4.3 host_permissions addition'
-    );
+    const headTail = oldRaw.slice(oldRaw.indexOf(tailMarker));
+    assert.strictEqual(newTail, headTail,
+      'tail changed but 4.4 requires no manifest change');
   });
 
   it('manifest head is version/name/version/background/permissions (AC4, cumulative)', () => {

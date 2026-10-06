@@ -120,38 +120,44 @@ var BlindfoldSession = BlindfoldSession || {};
   // Exported on the namespace for tests and for the recorder's defense.
   // ------------------------------------------------------------------
 
-  function requireValidPermissionChangedPayload(payload) {
+  // The event-type name is parameterized (optional second argument):
+  // the microphone_* defaults keep the exported signature backward
+  // compatible, while each selector instance passes its own event-type
+  // names so 4.4 camera failures never mislabel themselves (4.4 §2).
+  function requireValidPermissionChangedPayload(payload, eventTypeName) {
+    var etName = eventTypeName || 'microphone_permission_changed';
     requireExactKeys(payload, ['permissionState', 'source', 'errorName'],
-      'microphone_permission_changed payload');
+      etName + ' payload');
     if (PERMISSION_STATES.indexOf(payload.permissionState) === -1) {
       throw new RangeError(
-        'microphone_permission_changed payload.permissionState must be one of: ' +
+        etName + ' payload.permissionState must be one of: ' +
         PERMISSION_STATES.join(', '));
     }
     if (PERMISSION_SOURCES.indexOf(payload.source) === -1) {
       throw new RangeError(
-        "microphone_permission_changed payload.source must be 'query' or 'request'");
+        etName + " payload.source must be 'query' or 'request'");
     }
     if (payload.errorName !== null && typeof payload.errorName !== 'string') {
       throw new TypeError(
-        'microphone_permission_changed payload.errorName must be a string or null');
+        etName + ' payload.errorName must be a string or null');
     }
     return payload;
   }
 
-  function requireValidDeviceSelectedPayload(payload) {
+  function requireValidDeviceSelectedPayload(payload, eventTypeName) {
+    var etName = eventTypeName || 'microphone_device_selected';
     requireExactKeys(payload, ['deviceId', 'label', 'source'],
-      'microphone_device_selected payload');
+      etName + ' payload');
     if (payload.deviceId !== null) {
-      requireDeviceId(payload.deviceId, 'microphone_device_selected payload.deviceId');
+      requireDeviceId(payload.deviceId, etName + ' payload.deviceId');
     }
     if (payload.label !== null && typeof payload.label !== 'string') {
       throw new TypeError(
-        'microphone_device_selected payload.label must be a string or null');
+        etName + ' payload.label must be a string or null');
     }
     if (SELECTION_SOURCES.indexOf(payload.source) === -1) {
       throw new RangeError(
-        'microphone_device_selected payload.source must be one of: ' +
+        etName + ' payload.source must be one of: ' +
         SELECTION_SOURCES.join(', '));
     }
     return payload;
@@ -310,7 +316,7 @@ var BlindfoldSession = BlindfoldSession || {};
     function emitDeviceSelected(deviceId, label, source) {
       var payload = requireValidDeviceSelectedPayload({
         deviceId: deviceId, label: label, source: source
-      });
+      }, eventTypes.deviceSelected);
       if (!isActive()) {
         return null;
       }
@@ -320,7 +326,7 @@ var BlindfoldSession = BlindfoldSession || {};
     function emitPermissionChanged(state, source, errorName) {
       var payload = requireValidPermissionChangedPayload({
         permissionState: state, source: source, errorName: errorName
-      });
+      }, eventTypes.permissionChanged);
       if (!isActive()) {
         return null;
       }
@@ -432,13 +438,22 @@ var BlindfoldSession = BlindfoldSession || {};
       } catch (e) {
         return Promise.resolve({ ok: false, permissionState: 'unknown', errorName: errName(e) });
       }
-      var constraints = selection !== null ?
-        { audio: { deviceId: { exact: selection } } } :
-        { audio: true };
+      // 4.4 gap fix: the probe constraints are kind-branched — a camera
+      // probe requests video, never audio. The probe uses { video: true }
+      // or an exact deviceId only; recording-quality constraints
+      // (resolution/framerate/facingMode) are 4.6's decision.
+      var constraints = {};
+      if (kind === KIND_VIDEOINPUT) {
+        constraints.video = selection !== null ?
+          { deviceId: { exact: selection } } : true;
+      } else {
+        constraints.audio = selection !== null ?
+          { deviceId: { exact: selection } } : true;
+      }
       return Promise.resolve()
         .then(function () { return md.getUserMedia(constraints); })
         .then(function (stream) {
-          // No open mic stream is ever retained: stop every track before
+          // No open stream is ever retained: stop every track before
           // the probe resolves. 4.6 re-acquires at Start.
           stopAllTracks(stream);
           return onProbeOutcome('granted', 'request', null);

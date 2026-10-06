@@ -264,6 +264,17 @@ describe('AC4 — diff discipline', () => {
       'tests/manifest_sw.test.js',
       '.autodev/evidence/4.3.contract.md',
       '.autodev/evidence/4.3.build.md',
+      // Honest cumulative evolution: 4.4 (webcam selection and
+      // permission handling) modifies device_selection.js (video
+      // probe kind-branch + validator messages) and recorder.js
+      // (camera selector + cam-* channel), and repairs
+      // restoreDevices() to await all selector restores.
+      '.autodev/evidence/4.4.contract.md',
+      '.autodev/evidence/4.4.build.md',
+      // Honest cumulative evolution: 4.4's review/behavior
+      // evidence lands after the pins were evolved (2.x/3.x/4.1-4.3 precedent).
+      '.autodev/evidence/4.4.review.md',
+      '.autodev/evidence/4.4.behavior.md',
       // Honest cumulative evolution: 4.3's review/behavior evidence lands
       // after the pins were evolved (2.x/3.x/4.1/4.2 precedent).
       '.autodev/evidence/4.3.review.md',

@@ -570,3 +570,32 @@ Consequential engineering decisions with reasoning and evidence. Newest first.
   offscreen documents in this Puppeteer version; use
   `target.createCDPSession()` + `Runtime.evaluate` instead
   (`~/workspace/tools/ext-verify/sw-screencapture.js`, 42/42 checks).
+
+## 4.4 webcam selection and permission handling
+
+- **Near-mechanical 4.2 reuse.** `createDeviceSelector({kind:'videoinput'})`
+  instantiated beside the mic selector in the offscreen recorder; persisted
+  key `blindfold.cameraDeviceId.v1` (document localStorage, 4.2 precedent);
+  event types `camera_permission_changed` / `camera_device_selected`;
+  channel family `cam-list-devices` / `cam-select` /
+  `cam-request-permission` / `cam-get-state`; `recorder-set-session`
+  shared across both selectors (independent instances). No UI (§5), no
+  manifest changes, no resolution/framerate/facingMode policy (4.6's).
+- **The one genuine factory gap:** `runPermissionProbe` hardcoded
+  `{ audio: ... }`; it is now kind-branched so a camera probe requests
+  `{ video: ... }` (exact deviceId when selected, `true` otherwise) and
+  never carries an `audio` key. Probe-then-stop holds: every track
+  stopped before the probe resolves; no stream retained; 4.6 re-acquires
+  at Start (the probe→start revocation race is 4.6's case).
+- **Validator messages parameterized.** The shared payload validators
+  took an optional event-type name (microphone_* defaults preserved for
+  backward compatibility); the factory passes each instance's names so
+  camera failures never mislabel themselves.
+- **"Saved separately from the screen" is 4.6's boundary.** 4.4 delivers
+  a selected, permitted camera and stops; the separate-stream wiring
+  does not exist yet and 4.4 builds none of it.
+- **Repair during V1: `restoreDevices()` awaited only the first
+  selector's restore (real race).** A 4.4 restore test failed because the
+  camera restore was still in flight when the caller proceeded. Repaired
+  to `Promise.all` over all three selectors' best-effort restores (each
+  rejection swallowed; still never throws).

@@ -15,7 +15,7 @@
 //
 // 4.2 (PLAN.md §4.2): microphone selection and permission handling. The
 // recorder instantiates device_selection.js's createDeviceSelector
-// (kind 'audioinput'; 4.4 will add 'videoinput') and routes five new
+// (kind 'audioinput'; 4.4 adds kind 'videoinput') and routes five new
 // recorder-channel messages to it. The selector is purely reactive — §5's
 // UI drives it; recording_host.js gains no 4.2 behavior. The recorder
 // also owns the session seam (recorder-set-session) and the session-gated
@@ -41,6 +41,14 @@
 //                    → { ok, permissionState, errorName }
 //   SW → offscreen : 'mic-get-state' {}
 //                    → { ok, selection, permissionState, devicesEnumeratedAt }
+//   SW → offscreen : 'cam-list-devices' {}
+//                    → { ok, devices: [{ deviceId, label, kind }] } (4.4)
+//   SW → offscreen : 'cam-select' { deviceId }
+//                    → { ok, selection } | { ok:false, error }
+//   SW → offscreen : 'cam-request-permission' {}
+//                    → { ok, permissionState, errorName }
+//   SW → offscreen : 'cam-get-state' {}
+//                    → { ok, selection, permissionState, devicesEnumeratedAt }
 //   4.3 (PLAN.md §4.3): screen/tab capture selection and permission
 //   handling. The recorder instantiates capture_selection.js's
 //   createCaptureSelector (deliberately NOT the 4.2 device factory —
@@ -53,6 +61,12 @@
 //   'capture-get-stream-id' to the SW on this same channel (recording_host
 //   .js routes them). The streamId travels SW → recorder as a request
 //   field, is never persisted, and is single-use.
+//   4.4 (PLAN.md §4.4): webcam selection and permission handling. The
+//   recorder instantiates a second createDeviceSelector (kind
+//   'videoinput') and routes the cam-* message family to it — a
+//   near-mechanical reuse of 4.2's factory. Probe-then-stop (no stream
+//   retained); "saved separately from the screen" is 4.6's stream
+//   wiring, not 4.4's.
 // Command responses are plain {ok,...} objects (no envelope) — the
 // request's sendMessage promise correlates them.
 // 'recorder-pong'.nowMonotonicMs is a performance.now() reading — the hook
@@ -83,12 +97,19 @@ var BlindfoldSession = BlindfoldSession || {};
   var MSG_PING = 'recorder-ping';
   var MSG_PONG = 'recorder-pong';
 
-  // 4.2 command names (PLAN.md §4.2). 4.4 will add the camera_* set.
+  // 4.2 command names (PLAN.md §4.2). 4.4 adds the camera_* set below.
   var MSG_SET_SESSION = 'recorder-set-session';
   var MSG_MIC_LIST = 'mic-list-devices';
   var MSG_MIC_SELECT = 'mic-select';
   var MSG_MIC_PERMISSION = 'mic-request-permission';
   var MSG_MIC_STATE = 'mic-get-state';
+  // 4.4 camera-selection commands (§5 drives these). Mirrors the mic-*
+  // family exactly; the camera selector is an independent instance of
+  // the same device_selection.js factory with kind:'videoinput'.
+  var MSG_CAM_LIST = 'cam-list-devices';
+  var MSG_CAM_SELECT = 'cam-select';
+  var MSG_CAM_PERMISSION = 'cam-request-permission';
+  var MSG_CAM_STATE = 'cam-get-state';
   // 4.3 capture-selection commands (§5 drives these).
   var MSG_CAPTURE_LIST = 'capture-list-modes';
   var MSG_CAPTURE_SELECT = 'capture-select';
@@ -308,6 +329,13 @@ var BlindfoldSession = BlindfoldSession || {};
           message.msg === MSG_MIC_STATE) {
         return handleMicCommand(message, sendResponse);
       }
+      // 4.4 commands. Same failure-isolation as 4.2.
+      if (message.msg === MSG_CAM_LIST ||
+          message.msg === MSG_CAM_SELECT ||
+          message.msg === MSG_CAM_PERMISSION ||
+          message.msg === MSG_CAM_STATE) {
+        return handleCamCommand(message, sendResponse);
+      }
       if (message.msg === MSG_CAPTURE_LIST ||
           message.msg === MSG_CAPTURE_SELECT ||
           message.msg === MSG_CAPTURE_PERMISSION ||
@@ -509,6 +537,37 @@ var BlindfoldSession = BlindfoldSession || {};
     }
 
     // ----------------------------------------------------------------
+    // 4.4: the webcam selector (purely reactive; §5 drives it).
+    // Independent instance of the same factory with kind:'videoinput';
+    // "saved separately from the screen" is 4.6's stream wiring, not 4.4's.
+    // ----------------------------------------------------------------
+
+    var cameraSelector = null;
+    function getCameraSelector() {
+      if (cameraSelector === null) {
+        var BS = shared();
+        if (typeof BS.createDeviceSelector !== 'function') {
+          throw new Error('recorder: createDeviceSelector is unavailable');
+        }
+        if (o.cameraSelector !== undefined && o.cameraSelector !== null) {
+          cameraSelector = o.cameraSelector;
+        } else {
+          cameraSelector = BS.createDeviceSelector({
+            kind: 'videoinput',
+            mediaDevices: o.mediaDevices,
+            storage: o.storage !== undefined ? o.storage : createLocalStorageAdapter(),
+            permissions: o.permissions,
+            nowUtcIso: o.selectorClock,
+            emitEvent: emitRecorderEvent,
+            getSessionId: function () { return sessionId; },
+            getGameId: function () { return gameId; }
+          });
+        }
+      }
+      return cameraSelector;
+    }
+
+    // ----------------------------------------------------------------
     // 4.3: the screen/tab capture selector (purely reactive; §5 drives it).
     // ----------------------------------------------------------------
 
@@ -622,30 +681,29 @@ var BlindfoldSession = BlindfoldSession || {};
       return false; // unknown msg: ignore, no response (4.1 behavior)
     }
 
-    // Best-effort boot restore of the persisted mic selection (silent
+    // Best-effort boot restore of the persisted selections (silent
     // when inert — no session exists yet at boot). Never throws; the
-    // recorder's liveness must not depend on storage.
+    // recorder's liveness must not depend on storage. 4.4 repair: waits
+    // for ALL selector restores (Promise.all), not just the first —
+    // otherwise a later selector's restore can still be in flight when
+    // the caller proceeds.
     function restoreDevices() {
-      var p = null;
+      var ps = [];
       try {
-        var sel = getMicSelector();
-        p = sel.restoreOnBoot();
-        if (p && typeof p.catch === 'function') {
-          p.catch(function () { /* boot restore is best-effort */ });
-        }
-      } catch (e) { /* mic restore must not block the capture restore */ }
+        ps.push(getMicSelector().restoreOnBoot());
+      } catch (e) { /* mic restore must not block the others */ }
       // 4.3: the persisted capture mode restores the same way.
       try {
-        var csel = getCaptureSelector();
-        var cp = csel.restoreOnBoot();
-        if (cp && typeof cp.catch === 'function') {
-          cp.catch(function () { /* boot restore is best-effort */ });
-        }
-        if (p === null) {
-          p = cp;
-        }
+        ps.push(getCaptureSelector().restoreOnBoot());
       } catch (e) { /* capture restore must not wedge the recorder */ }
-      return p;
+      // 4.4: the persisted camera selection restores the same way.
+      try {
+        ps.push(getCameraSelector().restoreOnBoot());
+      } catch (e) { /* camera restore must not wedge the recorder */ }
+      return Promise.all(ps.map(function (p) {
+        return Promise.resolve(p).then(function () { return null; },
+          function () { return null; /* boot restore is best-effort */ });
+      }));
     }
 
     // Map a handler failure to channel data (3.2 SF-1: never throw
@@ -723,6 +781,15 @@ var BlindfoldSession = BlindfoldSession || {};
           } catch (w) { /* ignore */ }
           return false;
         }
+        // 4.4: the camera selection announces the same way.
+        try {
+          getCameraSelector().announceSelectionForSession();
+        } catch (e) {
+          try {
+            sendResponse({ ok: false, error: 'internal-error' });
+          } catch (w) { /* ignore */ }
+          return false;
+        }
       }
       try {
         sendResponse({ ok: true });
@@ -767,6 +834,46 @@ var BlindfoldSession = BlindfoldSession || {};
       return false; // unknown msg: ignore, no response (4.1 behavior)
     }
 
+    // 4.4: camera commands. Mirrors handleMicCommand exactly; the same
+    // channel error vocabulary applies (RangeError → 'unknown-device',
+    // TypeError → 'invalid-request'), per the 4.4 contract's table.
+    function handleCamCommand(message, sendResponse) {
+      var sel;
+      try {
+        sel = getCameraSelector();
+      } catch (e) {
+        try {
+          sendResponse(toChannelError(e));
+        } catch (w) { /* ignore */ }
+        return false;
+      }
+      // Deferred inside the promise: a synchronously-throwing selector
+      // (e.g. unavailable mediaDevices) becomes a rejection, which
+      // respondAsync converts to {ok:false} — the listener never throws.
+      function deferred(fn) {
+        return respondAsync(Promise.resolve().then(fn), sendResponse);
+      }
+      if (message.msg === MSG_CAM_LIST) {
+        return deferred(function () { return sel.listDevices(); });
+      }
+      if (message.msg === MSG_CAM_SELECT) {
+        if (typeof message.deviceId !== 'string' || message.deviceId === '') {
+          try {
+            sendResponse({ ok: false, error: 'invalid-request' });
+          } catch (e) { /* ignore */ }
+          return false;
+        }
+        return deferred(function () { return sel.select(message.deviceId); });
+      }
+      if (message.msg === MSG_CAM_PERMISSION) {
+        return deferred(function () { return sel.requestPermission(); });
+      }
+      if (message.msg === MSG_CAM_STATE) {
+        return deferred(function () { return sel.getState(); });
+      }
+      return false; // unknown msg: ignore, no response (4.1 behavior)
+    }
+
     if (announce) {
       announceReady();
     }
@@ -779,6 +886,8 @@ var BlindfoldSession = BlindfoldSession || {};
       onRuntimeMessage: onRuntimeMessage,
       // 4.2 surface (Node tests drive these directly).
       getMicSelector: getMicSelector,
+      // 4.4 surface (Node tests drive these directly).
+      getCameraSelector: getCameraSelector,
       // 4.3 surface (Node tests drive these directly).
       getCaptureSelector: getCaptureSelector,
       createBrokerClient: createBrokerClient,
@@ -802,6 +911,10 @@ var BlindfoldSession = BlindfoldSession || {};
   BlindfoldSession.RECORDER_MSG_MIC_SELECT = MSG_MIC_SELECT;
   BlindfoldSession.RECORDER_MSG_MIC_PERMISSION = MSG_MIC_PERMISSION;
   BlindfoldSession.RECORDER_MSG_MIC_STATE = MSG_MIC_STATE;
+  BlindfoldSession.RECORDER_MSG_CAM_LIST = MSG_CAM_LIST;
+  BlindfoldSession.RECORDER_MSG_CAM_SELECT = MSG_CAM_SELECT;
+  BlindfoldSession.RECORDER_MSG_CAM_PERMISSION = MSG_CAM_PERMISSION;
+  BlindfoldSession.RECORDER_MSG_CAM_STATE = MSG_CAM_STATE;
   BlindfoldSession.RECORDER_MSG_CAPTURE_LIST = MSG_CAPTURE_LIST;
   BlindfoldSession.RECORDER_MSG_CAPTURE_SELECT = MSG_CAPTURE_SELECT;
   BlindfoldSession.RECORDER_MSG_CAPTURE_PERMISSION = MSG_CAPTURE_PERMISSION;
