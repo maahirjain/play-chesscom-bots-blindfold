@@ -977,3 +977,41 @@ Consequential engineering decisions with reasoning and evidence. Newest first.
   section-4 auditor must verify this wiring; until then the stop
   marker is mechanism-only. 4.12's contract should state the
   played-vs-failed disambiguation rule for marker events.
+
+## 4.12 timecode/offset arithmetic
+
+- **4.12 persists nothing — the §0.1 PLAN reading note.** PLAN §4.12
+  says "save timecode/offset information," but every offset is a pure
+  function of already-stored values (4.6 stream starts, 4.8 raw
+  `timecodeMs`, 4.10 clock link, 4.11 marker source timestamps), so
+  persisting computed offsets would violate the standing
+  no-derivable-values rule. The "save" half is satisfied in aggregate;
+  4.12's distinctive contribution is the calculation half: the
+  canonical nine-function `timecode.js` library. `MANIFEST_KEYS` stays
+  16, `DB_VERSION` stays 2. (If the section-4 auditor disagrees, the
+  remedy is a deliberate documented widening — not silent drift.)
+- **First task allowed timestamp arithmetic.** All prior tasks were
+  identity-only by pin; `timecode.js` is the single home for
+  recording-alignment math. `wallUtcMs` is V1-pinned equal to
+  `event_envelope.deriveWallUtcMs` — one formula, one home for
+  alignment use.
+- **Chunk-arrival time is never frame time** (PLAN's prohibition):
+  `receivedAtMonotonicMs` is ordering evidence only; no 4.12 function
+  takes it. Null/unusable `timecodeMs` → exact media time honestly
+  unknown (`null`), never arrival-time-as-truth.
+- **Marker disambiguation (required by the 4.11 review):** only
+  `'played'`/`'shown'` sync markers participate in alignment;
+  `'failed'` means no acoustic/optical anchor exists — its timestamp
+  is not a media landmark. Stop double-beep: earliest `'played'` per
+  `markerId` by `appendSeq`.
+- **A library, not a pipeline stage:** `timecode.js` has zero platform
+  surface and is deliberately NOT wired into `recorder.html` — 4.13's
+  contract decides. Consumers: 4.13 (per-piece wall times), 4.14
+  (status), §6.3 `media-sync.json` (the alignment timeline; §6.3 owns
+  the join logic, 4.12 owns the math).
+- **V2 characterization (headless Chrome 154, fake devices):**
+  `timecodeMs` = [0, 0, 4654.8, 4831.4] over 4 chunks — first chunks
+  carry 0 (initial `requestData()` flush before the encoder advanced),
+  then genuinely advancing media times. One implementation's behavior
+  is not a spec guarantee; §7/AC11 re-characterizes on the owner's
+  device.

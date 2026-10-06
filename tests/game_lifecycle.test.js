@@ -634,6 +634,7 @@ describe('AC11 — diff discipline', () => {
       // the allowlists.
       'track_monitor.js',
       'tests/track_monitor.test.js',
+      'tests/timecode.test.js',
       '.autodev/evidence/4.9.contract.md',
       '.autodev/evidence/4.9.build.md',
       // Honest cumulative evolution: 4.9's review/behavior evidence lands
@@ -690,6 +691,22 @@ describe('AC11 — diff discipline', () => {
       // after the pins were evolved (2.x/3.x/4.1-4.10 precedent).
       '.autodev/evidence/4.11.review.md',
       '.autodev/evidence/4.11.behavior.md',
+      // Honest cumulative evolution: 4.12 (recording timecode/offset
+      // arithmetic) legitimately adds timecode.js (the pure nine-function
+      // alignment library — media→clock→wall conversions, marker
+      // disambiguation, continuity rule), persists nothing new
+      // (MANIFEST_KEYS stays 16, DB_VERSION stays 2, no recorder.html
+      // wiring — a library, not a pipeline stage), records the ## 4.12
+      // decisions, and adds its test + evidence; its files join the
+      // allowlists.
+      'timecode.js',
+      'tests/timecode.test.js',
+      '.autodev/evidence/4.12.contract.md',
+      '.autodev/evidence/4.12.build.md',
+      // Honest cumulative evolution: 4.12's review/behavior evidence lands
+      // after the pins were evolved (2.x/3.x/4.1-4.11 precedent).
+      '.autodev/evidence/4.12.review.md',
+      '.autodev/evidence/4.12.behavior.md',
       // Honest cumulative evolution: 4.3's review/behavior evidence lands
       // after the pins were evolved (2.x/3.x/4.1/4.2 precedent).
       '.autodev/evidence/4.3.review.md',

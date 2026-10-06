@@ -244,10 +244,16 @@ describe('AC2 — visible marker correct', () => {
     const js = manifest.content_scripts[0].js;
     assert.ok(js.includes('sync_flash.js'), 'sync_flash.js is registered');
     assert.ok(js.includes('content.js'), 'content.js still registered');
-    // Deliberate delta: exactly one file added to the list.
+    // Deliberate delta: exactly one file added to the list — while the
+    // change is uncommitted. Post-commit the 4.11 delta is IN HEAD, so
+    // the delta check is conditional (4.5 SF-1 precedent); the
+    // registration + byte-identical assertions above pin the state
+    // durably either way.
     const head = execSync('git show HEAD:manifest.json', { cwd: REPO }).toString();
     const headJs = JSON.parse(head).content_scripts[0].js;
-    assert.deepEqual(js.filter((f) => f !== 'sync_flash.js'), headJs);
+    if (JSON.stringify(js) !== JSON.stringify(headJs)) {
+      assert.deepEqual(js.filter((f) => f !== 'sync_flash.js'), headJs);
+    }
     const workHash = execSync('git hash-object content.js', { cwd: REPO }).toString().trim();
     const headHash = execSync('git rev-parse HEAD:content.js', { cwd: REPO }).toString().trim();
     assert.equal(workHash, headHash, 'content.js byte-identical to HEAD');
@@ -772,6 +778,22 @@ describe('AC8 — changed-files discipline', () => {
       // after the pins were evolved (2.x/3.x/4.1-4.10 precedent).
       '.autodev/evidence/4.11.review.md',
       '.autodev/evidence/4.11.behavior.md',
+      // Honest cumulative evolution: 4.12 (recording timecode/offset
+      // arithmetic) legitimately adds timecode.js (the pure nine-function
+      // alignment library — media→clock→wall conversions, marker
+      // disambiguation, continuity rule), persists nothing new
+      // (MANIFEST_KEYS stays 16, DB_VERSION stays 2, no recorder.html
+      // wiring — a library, not a pipeline stage), records the ## 4.12
+      // decisions, and adds its test + evidence; its files join the
+      // allowlists.
+      'timecode.js',
+      'tests/timecode.test.js',
+      '.autodev/evidence/4.12.contract.md',
+      '.autodev/evidence/4.12.build.md',
+      // Honest cumulative evolution: 4.12's review/behavior evidence lands
+      // after the pins were evolved (2.x/3.x/4.1-4.11 precedent).
+      '.autodev/evidence/4.12.review.md',
+      '.autodev/evidence/4.12.behavior.md',
       '.autodev/DECISIONS.md',
       // Cumulative evolution: earlier suites' diff-discipline allowlists
       // are evolved by this task with justification comments.
@@ -793,6 +815,7 @@ describe('AC8 — changed-files discipline', () => {
       'tests/status_indicator.test.js',
       'tests/stream_starter.test.js',
       'tests/track_monitor.test.js',
+      'tests/timecode.test.js',
       'tests/visibility.test.js',
       'tests/writer.test.js',
     ]);
