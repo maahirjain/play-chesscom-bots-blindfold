@@ -59,8 +59,11 @@ describe('AC2 — sw.js exists', () => {
   });
 });
 
-// --- AC3: sw.js is a comment-only registration stub: no functional code.
-describe('AC3 — sw.js contains no functional code', () => {
+// --- AC3: sw.js functional code (as amended by task 2.2).
+// 2.1 pinned a comment-only stub; 2.2 legitimately added one line,
+// importScripts('db.js'), per its contract. The cumulative invariant: no
+// other functional code (no listeners, storage, or fetch).
+describe('AC3 — sw.js functional code is exactly the db.js import', () => {
   // Strip //-line and /* */-block comments so the header's own mentions of
   // intentionally-absent APIs do not count as functional code.
   function stripComments(src) {
@@ -77,9 +80,15 @@ describe('AC3 — sw.js contains no functional code', () => {
   const swRaw = fs.readFileSync(path.join(REPO, 'sw.js'), 'utf8');
   const codeOnly = stripComments(swRaw);
 
-  it('stripped of comments, the stub is exactly the use-strict directive', () => {
+  it('stripped of comments, functional code is the use-strict directive + db.js import', () => {
     const lines = codeOnly.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-    assert.deepStrictEqual(lines, ["'use strict';"]);
+    assert.deepStrictEqual(lines, ["'use strict';", "importScripts('db.js');"]);
+  });
+
+  it('exactly one importScripts call, importing db.js', () => {
+    const calls = codeOnly.match(/importScripts\s*\(/g) || [];
+    assert.strictEqual(calls.length, 1, 'expected exactly one importScripts call');
+    assert.ok(codeOnly.includes("importScripts('db.js')"), 'must import db.js');
   });
 
   const forbidden = [
@@ -89,7 +98,6 @@ describe('AC3 — sw.js contains no functional code', () => {
     'onStartup',
     'onInstalled',
     'chrome.storage',
-    'importScripts',
   ];
   for (const token of forbidden) {
     it(`no "${token}" outside comments`, () => {
@@ -122,22 +130,31 @@ describe('AC4/AC6 — diff is exactly the background block', () => {
     );
   });
 
-  it('the only manifest change is the inserted background block (AC4)', () => {
-    // Note: oldRaw.slice(0, oldContentIdx) already ends with the 4-space
-    // indent of the "content_scripts" line, so the inserted block carries
-    // no leading spaces of its own.
-    const expectedBg = '"background": {\n        "service_worker": "sw.js"\n    },\n    ';
+  it('manifest head is exactly version/name/version/background (AC4, cumulative)', () => {
+    // 2.1 inserted the background block; 2.2's contract requires the manifest
+    // to be byte-identical to HEAD (pinned in tests/db.test.js). The
+    // cumulative invariant: the head is exactly these four keys, so no
+    // permissions/CSP/version changes can sneak in.
+    const head = manifestRaw.slice(0, newContentIdx);
     assert.strictEqual(
-      manifestRaw.slice(0, newContentIdx),
-      oldRaw.slice(0, oldContentIdx) + expectedBg,
+      head,
+      '{\n' +
+      '    "manifest_version": 3,\n' +
+      '    "name": "Play Chess.com Bots Blindfold",\n' +
+      '    "version": "1.0.0",\n' +
+      '    "background": {\n' +
+      '        "service_worker": "sw.js"\n' +
+      '    },\n' +
+      '    ',
       'manifest head changed beyond the background block'
     );
   });
 
-  it('sw.js is new (not present at HEAD)', () => {
-    assert.throws(
-      () => execSync('git show HEAD:sw.js', { cwd: REPO, stdio: 'pipe' }),
-      'sw.js unexpectedly present at HEAD'
-    );
+  // Superseded by task 2.2: sw.js is no longer new at HEAD (it was committed
+  // by 2.1 and amended by 2.2). The cumulative sw.js state is pinned
+  // git-independently in tests/db.test.js ("sw.js functional code is exactly
+  // the importScripts line" + header-list checks).
+  it('sw.js amendment state is owned by the 2.2 contract (see tests/db.test.js)', () => {
+    assert.ok(fs.existsSync(path.join(REPO, 'sw.js')), 'sw.js missing');
   });
 });

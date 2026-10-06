@@ -107,3 +107,17 @@ Consequential engineering decisions with reasoning and evidence. Newest first.
    neuters `--load-extension` (no targets register, no errors). Extension-load
    harnesses must pass `ignoreDefaultArgs: ['--disable-extensions']`
    (found during 2.1 AC5 verification).
+
+8. **`about:blank` is an opaque origin for IndexedDB probes.** In
+   `about:blank`, `indexedDB.databases()` throws SecurityError. Origin-
+   isolation probes (e.g. proving the extension DB is invisible to pages)
+   need a real localhost origin, not `about:blank`. (Found during 2.2
+   V2 verification.)
+
+9. **Notes for the §2.4 (transactional writer) contract.** (a) `db.js`'s
+   `withStore` resolves on request success, not `transaction.oncomplete`;
+   the 2.4 writer must require commit-awaiting semantics. (b) A record
+   missing its keyPath makes `store.put` throw a raw DOMException
+   (DataError) synchronously rather than a wrapped plain Error — the
+   2.4 contract should wrap or document this surface. (Found during 2.2
+   review + behavioral verification.)
