@@ -151,7 +151,7 @@
     "1.1": {
       "status": "DONE",
       "commit": "4ea52c7",
-      "verification": "V1 PASS (30/30 node --test, 2 independent reviews); V2/V3/V4 N/A; retro: fresh behavioral verifier BEHAVIOR_VERIFIED (29/29)",
+      "verification": "V1 PASS (30/30 node --test, 2 independent reviews); V2 PASS (headless-Chrome renderer smoke); V3/V4 N/A; retro: fresh behavioral verifier BEHAVIOR_VERIFIED (29/29)",
       "deferred": [
         "AC4 -> 5.1/5.5",
         "AC8 -> 3.1/3.5",
@@ -166,7 +166,7 @@
       "verification": "V1 PASS (47/47 node --test, 2 independent reviews); V2 PASS (headless-Chrome renderer smoke); V3/V4 deferred N/A; retro: fresh behavioral verifier BEHAVIOR_VERIFIED (25/25)",
       "deferred": [
         "AC3 Start wiring -> 5.1/5.5",
-        "AC18 envelope -> 1.3",
+        "AC18 conditions_changed emission at runtime -> 2.3/3.x/5.x",
         "AC20 SW loading -> 2.1",
         "DOM observation -> 3.3/5.4",
         "manual UI -> 5.2/5.4",
@@ -196,7 +196,7 @@
         "stream-fold helper -> 3.1/7.2",
         "envelope assembly with refs -> 2.4/2.7",
         "checkpoint emission conditions -> 3.1/6.1",
-        "event-type registration at runtime -> 1.3 registry"
+        "emitter envelope assembly validates types via isEventType -> 2.3/3.x"
       ]
     },
     "2.1": {
