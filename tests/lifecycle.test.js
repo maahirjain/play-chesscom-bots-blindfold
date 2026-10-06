@@ -905,7 +905,11 @@ describe('AC15 — diff discipline', () => {
     // needs the 1.4 payload factories in the content-script world.
     assert.deepEqual(manifest.content_scripts[0].js, [
       'event_envelope.js', 'sender.js', 'lifecycle.js', 'status_indicator.js',
-      'sounds.js', 'chess.min.js', 'game_records.js', 'chess_utils.js', 'content.js'
+      // Honest cumulative evolution: 4.11 appends sync_flash.js
+      // (the visible sync-marker content script) per its contract;
+      // content.js itself stays byte-identical.
+      'sounds.js', 'chess.min.js', 'game_records.js', 'chess_utils.js', 'content.js',
+      'sync_flash.js'
     ]);
   });
 
@@ -1154,6 +1158,32 @@ describe('AC15 — diff discipline', () => {
       // after the pins were evolved (2.x/3.x/4.1-4.9 precedent).
       '.autodev/evidence/4.10.review.md',
       '.autodev/evidence/4.10.behavior.md',
+      // Honest cumulative evolution: 4.11 (audible/visible sync
+      // markers) legitimately adds sync_marker.js (offscreen audible
+      // marker + SW flash-relay request), sync_flash.js (content-script
+      // visible flash), sync_beep.wav (880 Hz beep asset), wires the
+      // start marker into recorder.js's start-streams final .then, adds
+      // the SW flash-relay leg to recording_host.js, the MSG_SYNC_FLASH
+      // vocabulary entry, the script tag in recorder.html, the content
+      // script in manifest.json, records the ## 4.11 decisions, and adds
+      // its test + evidence; its files join the allowlists.
+      'sync_marker.js',
+      'sync_flash.js',
+      'sync_beep.wav',
+      'tests/sync_marker.test.js',
+      // 4.11 also touches recorder.js, recording_host.js, recorder.html
+      // and manifest.json; already listed by earlier tasks where
+      // applicable — the Set dedupes.
+      'recorder.js',
+      'recording_host.js',
+      'recorder.html',
+      'manifest.json',
+      '.autodev/evidence/4.11.contract.md',
+      '.autodev/evidence/4.11.build.md',
+      // Honest cumulative evolution: 4.11's review/behavior evidence lands
+      // after the pins were evolved (2.x/3.x/4.1-4.10 precedent).
+      '.autodev/evidence/4.11.review.md',
+      '.autodev/evidence/4.11.behavior.md',
       // Honest cumulative evolution: 4.3's review/behavior evidence lands
       // after the pins were evolved (2.x/3.x/4.1/4.2 precedent).
       '.autodev/evidence/4.3.review.md',

@@ -133,6 +133,11 @@ var BlindfoldSession = BlindfoldSession || {};
   // 4.6 stream start (PLAN.md §4.6). §5 drives it at Start; the response
   // carries per-stream outcomes. Session-gated (no session → no-session).
   var MSG_START_STREAMS = 'recorder-start-streams';
+  // 4.11 visible-marker flash relay (PLAN.md §4.11). Offscreen → SW:
+  // the SW resolves the target tab (4.3 capture broker) and relays
+  // {kind:'blindfold-sync-flash', ...} to the content script. The only
+  // deliberate channel-vocabulary addition of 4.11 (contract §7).
+  var MSG_SYNC_FLASH = 'recorder-sync-flash';
 
   // Source context stamped on every event this document emits (1.3's
   // SOURCE_CONTEXTS already includes 'recording_context').
@@ -899,6 +904,110 @@ var BlindfoldSession = BlindfoldSession || {};
       return trackMonitor;
     }
 
+    // ----------------------------------------------------------------
+    // 4.11: audible/visible sync markers (PLAN.md §4.11). recorder.js
+    // wires the marker the same way as formatSupport / audioPolicy /
+    // chunkWriter / trackMonitor: lazy, shared-namespace-resolved,
+    // test-injectable via o.syncMarker. Absence is a wiring defect →
+    // plain Error, like createTrackMonitor. The marker is auxiliary:
+    // it can never fail the streams or the channel response.
+    //
+    // The audible half plays in this document (AUDIO_PLAYBACK) via
+    // HTMLAudioElement only — no AudioContext anywhere (the 4.7
+    // code-scan pin passes unmodified). The visible half is relayed
+    // to the SW (MSG_SYNC_FLASH), which forwards it to the Chess.com
+    // tab's sync_flash.js content script.
+    //
+    // 4.13's obligation (contract §4): call
+    // getSyncMarker().emitStopMarker() BEFORE recorder.stop(), so the
+    // stop marker is captured before the final flush. 4.11 defines the
+    // seam; 4.13 wires it.
+    // ----------------------------------------------------------------
+
+    var syncMarker = null;
+    function getSyncMarker() {
+      if (syncMarker === null) {
+        var BS = shared();
+        if (typeof BS.createSyncMarker !== 'function') {
+          throw new Error('recorder: createSyncMarker is unavailable');
+        }
+        if (o.syncMarker !== undefined && o.syncMarker !== null) {
+          syncMarker = o.syncMarker;
+        } else {
+          syncMarker = BS.createSyncMarker({
+            emitEvent: emitRecorderEvent,
+            getSessionId: function () { return sessionId; },
+            sendRelayMessage: sendSyncFlashRelay,
+            audioFactory: createMarkerAudio,
+            assetUrl: markerAssetUrl(),
+            setTimeoutFn: function (fn, ms) { return setTimeout(fn, ms); },
+            newUuidV4: newUuidV4
+          });
+        }
+      }
+      return syncMarker;
+    }
+
+    function markerAssetUrl() {
+      var runtime = runtimeOf();
+      if (runtime && typeof runtime.getURL === 'function') {
+        try {
+          return runtime.getURL('sync_beep.wav');
+        } catch (e) { /* fall through to the bare name */ }
+      }
+      return 'sync_beep.wav';
+    }
+
+    function createMarkerAudio(url) {
+      var g = (typeof globalThis !== 'undefined') ? globalThis : null;
+      var ACtor = g ? g.Audio : null;
+      if (typeof ACtor !== 'function') {
+        return null; // the marker module emits 'failed' honestly
+      }
+      return new ACtor(url);
+    }
+
+    // Offscreen → SW flash-relay request (contract §7). Always resolves
+    // (never rejects): an unreachable SW becomes data, never a thrown
+    // marker failure.
+    function sendSyncFlashRelay(fields) {
+      var runtime = runtimeOf();
+      return new Promise(function (resolve) {
+        if (!runtime || typeof runtime.sendMessage !== 'function') {
+          resolve({ ok: false, error: 'unreachable' });
+          return;
+        }
+        var envelope = {
+          kind: RECORDER_MSG_KIND,
+          msg: MSG_SYNC_FLASH,
+          v: RECORDER_PROTOCOL_V,
+          markerId: fields.markerId,
+          phase: fields.phase,
+          // Additive to the contract's relay shape: the visible event's
+          // envelope requires sessionId, and the page's activeSessionId
+          // is not set pre-§5 — the offscreen document's 4.6 no-session
+          // guard is the authority at marker time.
+          sessionId: fields.sessionId
+        };
+        var rsp = null;
+        try {
+          rsp = runtime.sendMessage(envelope);
+        } catch (e) {
+          resolve({ ok: false, error: 'send-threw' });
+          return;
+        }
+        if (rsp && typeof rsp.then === 'function') {
+          rsp.then(function (ans) {
+            resolve(ans);
+          }, function () {
+            resolve({ ok: false, error: 'send-failed' });
+          });
+        } else {
+          resolve({ ok: false, error: 'no-response' });
+        }
+      });
+    }
+
     // 4.9's finalized-marker exclusion for the restart pre-check. The
     // marker name is 4.13's to define (db.js already anticipates "4.13
     // marks it finalized"); until defined this matches nothing, so every
@@ -1058,6 +1167,21 @@ var BlindfoldSession = BlindfoldSession || {};
               emitRestartDiscontinuities(monitor, both.superseded, result);
             } catch (e) { /* monitoring best-effort; streams are recording */ }
           }
+          // 4.11 start marker: iff ≥1 stream started successfully.
+          // Fire-and-forget, best-effort — the marker can never delay or
+          // fail the channel response (the 4.8/4.9 kickoff precedent).
+          // Zero started streams → no marker at all (the per-kind start
+          // response is the record — the 4.9 precedent for
+          // never-started streams).
+          try {
+            var resStreams = (both.result && both.result.streams) || {};
+            var startedKinds = Object.keys(resStreams).filter(function (k) {
+              return resStreams[k] && resStreams[k].ok === true;
+            });
+            if (startedKinds.length > 0) {
+              getSyncMarker().emitStartMarker();
+            }
+          } catch (e) { /* marker is auxiliary; streams are recording */ }
           return result;
         }), sendResponse, toChannelError);
     }
@@ -1338,6 +1462,11 @@ var BlindfoldSession = BlindfoldSession || {};
       // recorder-start-streams handler attaches monitoring for every
       // successfully started stream and emits restart discontinuities).
       getTrackMonitor: getTrackMonitor,
+      // 4.11 surface (Node tests drive this directly; the
+      // recorder-start-streams handler emits the start marker for every
+      // generation with ≥1 started stream; 4.13 calls
+      // getSyncMarker().emitStopMarker() BEFORE recorder.stop()).
+      getSyncMarker: getSyncMarker,
       restoreDevices: restoreDevices,
       getSession: function () { return { sessionId: sessionId, gameId: gameId }; }
     };
@@ -1371,6 +1500,7 @@ var BlindfoldSession = BlindfoldSession || {};
   BlindfoldSession.RECORDER_MSG_CAPTURE_GET_STREAM_ID = MSG_CAPTURE_GET_STREAM_ID;
   BlindfoldSession.RECORDER_MSG_GET_FORMATS = MSG_FORMATS;
   BlindfoldSession.RECORDER_MSG_START_STREAMS = MSG_START_STREAMS;
+  BlindfoldSession.RECORDER_MSG_SYNC_FLASH = MSG_SYNC_FLASH;
   BlindfoldSession.RECORDER_SOURCE_CONTEXT = RECORDER_SOURCE_CONTEXT;
   BlindfoldSession.isRecorderMessage = isRecorderMessage;
   BlindfoldSession.createOffscreenRecorder = createOffscreenRecorder;

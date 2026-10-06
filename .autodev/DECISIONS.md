@@ -907,3 +907,73 @@ Consequential engineering decisions with reasoning and evidence. Newest first.
   "Give every recording segment an ID" half was already satisfied by
   the 4.5 §2 amendment (4.6 mints uuid-v4 segmentIds at stream start);
   4.10's work is the link half. PLAN.md itself is never modified.
+
+## 4.11 audible/visible sync markers at start and stop
+
+- **PLAN says both ends.** PLAN.md §4.11 requires markers at session
+  start AND stop (the §7.9 check is "markers align with event timestamps
+  at both ends of a recording"). 4.11 builds the mechanism, wires the
+  START marker into the start-streams final `.then` (iff ≥1 stream
+  started), and defines the exact `emitStopMarker()` seam 4.13 must call
+  BEFORE `recorder.stop()` — so the stop marker is captured before the
+  final flush. 4.11 does not wire the stop marker itself (auditor check,
+  not a defect).
+- **One markerId, two modalities, two source timestamps.** Audible:
+  880 Hz sine, 250 ms per beep, 44.1 kHz 16-bit mono WAV
+  (`sync_beep.wav`, generated deterministically — the generation command
+  is in the 4.11 build report), 1× at start / 2× at stop (150 ms
+  onset-to-onset; the two beeps share the markerId, ordered by the event
+  log's own sequence). Visible: 200 ms fullscreen white flash on the
+  Chess.com page (`sync_flash.js` content script). Each modality emits
+  its own `sync_marker` event synchronously with play/flash — the
+  envelope's `monotonicMs` + `clockSegmentId` ARE the source timestamps
+  (standing rule: no derivable values persisted).
+- **Audible plays in the offscreen document** (`AUDIO_PLAYBACK`
+  rationale — it survives page refreshes, 4.1's whole point) via
+  `HTMLAudioElement` ONLY. **Not a mixer** (4.7 re-pin): the tone is
+  played into the room through the speakers — acoustic, like 4.7's
+  bleed reality. Nothing is routed into any MediaStream; the 4.7
+  no-`AudioContext` code-scan pin passes UNMODIFIED.
+- **Visible flash is a page overlay** because the flash must be ON the
+  captured surface: the offscreen document is never visible, the SW
+  cannot show UI, and notifications would miss tab mode. New content
+  script `sync_flash.js` (manifest `content_scripts` gains it;
+  `content.js` stays byte-identical); 200 ms of photons, not UI —
+  `pointer-events: none`, no focus calls, no overlay listeners, so the
+  3.2 move-input path and 3.3 visibility instrumentation are untouched.
+- **Exactly one new channel message** (`recorder-sync-flash`):
+  offscreen → SW relay via `recording_host.js`'s `onRuntimeMessage`
+  (the 4.3 broker precedent); the SW resolves the target tab through
+  the 4.3 capture broker and `chrome.tabs.sendMessage`s
+  `{kind:'blindfold-sync-flash', markerId, phase, sessionId}`.
+  `sessionId` rides the relay additively: the visible event's envelope
+  requires it and the page's `activeSessionId` is not set pre-§5 — the
+  offscreen document's 4.6 no-session guard is the authority at marker
+  time. `MSG_*` snapshot gains exactly one value (deliberate).
+- **Failure honesty (marker never fails recording).** `play()` is async:
+  the 'played' event is emitted synchronously with the call (the honest
+  record of the attempt, timestamped at the beep time); a later
+  rejection emits a second event with `status: 'failed'` and the
+  verbatim error (the honest record of the outcome) — events are
+  append-only, nothing is rewritten. Relay `{relayed:false}` →
+  visible `status: 'skipped'` with the honest reason (`no-target-tab`,
+  `send-failed`, …). Zero started streams → no marker at all.
+- **Honest capture matrix.** Mic captures the beep acoustically;
+  screen-mode system audio may include it iff shared (never tab mode —
+  the tone is not tab audio); the webcam is video-only by design and
+  its alignment rests on the flash-if-in-frame (physical, not promised)
+  or 4.10/4.6/4.12. Audibility/visibility IN the recordings needs human
+  senses — AC11/§7.9.
+- **No manifest widening** (markers are per-generation, events-only —
+  the 4.9 precedent); `DB_VERSION` stays 2; no offset computation (the
+  marker module does no timestamp arithmetic — 4.12's territory); no
+  marker detection in recordings (content analysis, forbidden). §6.3's
+  `media-sync.json` reads marker events from the log; 4.12 consumes
+  them for per-stream offsets.
+- **Forward requirement for 4.13 (PLAN §4.11 covers stop too):**
+  `emitStopMarker()` is defined but NOT wired — 4.13 must call it
+  before `recorder.stop()`, allowing enough capture time for the
+  double-beep (150 ms onset-to-onset) to be distinguishable. The
+  section-4 auditor must verify this wiring; until then the stop
+  marker is mechanism-only. 4.12's contract should state the
+  played-vs-failed disambiguation rule for marker events.

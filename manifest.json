@@ -9,7 +9,7 @@
     "content_scripts": [
         {
             "matches": ["https://www.chess.com/play/computer*"],
-            "js": ["event_envelope.js", "sender.js", "lifecycle.js", "status_indicator.js", "sounds.js", "chess.min.js", "game_records.js", "chess_utils.js", "content.js"],
+            "js": ["event_envelope.js", "sender.js", "lifecycle.js", "status_indicator.js", "sounds.js", "chess.min.js", "game_records.js", "chess_utils.js", "content.js", "sync_flash.js"],
             "css": ["overlay.css"]
         }
     ],

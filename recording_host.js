@@ -338,6 +338,14 @@ var BlindfoldSession = BlindfoldSession || {};
           message.msg === 'capture-get-stream-id') {
         return handleCaptureBrokerMessage(message, sendResponse);
       }
+      // 4.11 SW-leg: relay the visible sync-marker flash request to the
+      // target tab's sync_flash.js content script. The tab is resolved
+      // through the 4.3 capture broker; an unreachable tab is honest
+      // data ({ok:true, relayed:false, reason}), never a thrown
+      // listener error (3.2 SF-1 precedent).
+      if (message.msg === 'recorder-sync-flash') {
+        return handleSyncFlashRelay(message, sendResponse);
+      }
       return false; // unknown msg: ignore, no response
     }
 
@@ -372,6 +380,62 @@ var BlindfoldSession = BlindfoldSession || {};
         return answer(captureBroker.getStreamId(message.tabId));
       }
       return false;
+    }
+
+    // 4.11: relay the visible sync-marker flash to the target tab.
+    // Resolves the tab through the 4.3 capture broker (the currently
+    // captured tab when known, else the active Chess.com tab), then
+    // chrome.tabs.sendMessage(tabId, {kind:'blindfold-sync-flash',
+    // markerId, phase, sessionId}). Every outcome is data: {ok:true,
+    // relayed:true} on attempt, {ok:true, relayed:false, reason} when
+    // there is no tab or the send fails — the offscreen document turns
+    // that into an honest 'skipped' marker event. Only a missing broker
+    // is {ok:false} (wiring failure, the 4.3 precedent).
+    function handleSyncFlashRelay(message, sendResponse) {
+      function answer(result) {
+        try {
+          sendResponse(isPlainObject(result) ? result :
+                       { ok: false, error: 'internal-error' });
+        } catch (e) { /* channel closed; nothing more to do */ }
+      }
+      Promise.resolve()
+        .then(function () {
+          if (!captureBroker) {
+            throw new Error('broker-unavailable');
+          }
+          return captureBroker.resolveTargetTab();
+        })
+        .then(function (res) {
+          var tabId = (res && res.ok === true &&
+                       typeof res.tabId === 'number') ? res.tabId : null;
+          if (tabId === null) {
+            return { ok: true, relayed: false,
+                     reason: (res && typeof res.reason === 'string' &&
+                              res.reason) || 'no-target-tab' };
+          }
+          var tabs = chromeNs.tabs;
+          if (!tabs || typeof tabs.sendMessage !== 'function') {
+            return { ok: true, relayed: false,
+                     reason: 'tabs-unavailable' };
+          }
+          return Promise.resolve(tabs.sendMessage(tabId, {
+            kind: 'blindfold-sync-flash',
+            markerId: message.markerId,
+            phase: message.phase,
+            sessionId: message.sessionId
+          })).then(function () {
+            return { ok: true, relayed: true };
+          }, function () {
+            // The tab may have closed between resolve and send (or the
+            // content script is absent) — honest data, not a throw.
+            return { ok: true, relayed: false, reason: 'send-failed' };
+          });
+        })
+        .then(answer, function (err) {
+          answer({ ok: false,
+                   error: (err && err.message) || 'internal-error' });
+        });
+      return true; // async sendResponse
     }
 
     function installRecorderListener() {

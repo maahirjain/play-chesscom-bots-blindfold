@@ -90,6 +90,9 @@ describe('AC1 — no auto-deletion exists', () => {
     // recorder.js/recorder.html/device_selection.js/capture_selection.js
     // are the offscreen document, not SW-loaded, so they are outside the
     // retention-scan surface by design.)
+    // Honest cumulative evolution: 4.11 appends sync_flash.js to the
+    // manifest content_scripts js list per its contract (the visible
+    // sync-marker flash) — it joins the load surface and the scan.
     assert.deepEqual(PRODUCT_FILES, [
       'capture_broker.js',
       'chess_utils.js',
@@ -106,6 +109,7 @@ describe('AC1 — no auto-deletion exists', () => {
       'sounds.js',
       'status_indicator.js',
       'sw.js',
+      'sync_flash.js',
       'writer.js',
     ]);
   });
@@ -382,6 +386,32 @@ describe('AC4 — diff discipline', () => {
       // after the pins were evolved (2.x/3.x/4.1-4.9 precedent).
       '.autodev/evidence/4.10.review.md',
       '.autodev/evidence/4.10.behavior.md',
+      // Honest cumulative evolution: 4.11 (audible/visible sync
+      // markers) legitimately adds sync_marker.js (offscreen audible
+      // marker + SW flash-relay request), sync_flash.js (content-script
+      // visible flash), sync_beep.wav (880 Hz beep asset), wires the
+      // start marker into recorder.js's start-streams final .then, adds
+      // the SW flash-relay leg to recording_host.js, the MSG_SYNC_FLASH
+      // vocabulary entry, the script tag in recorder.html, the content
+      // script in manifest.json, records the ## 4.11 decisions, and adds
+      // its test + evidence; its files join the allowlists.
+      'sync_marker.js',
+      'sync_flash.js',
+      'sync_beep.wav',
+      'tests/sync_marker.test.js',
+      // 4.11 also touches recorder.js, recording_host.js, recorder.html
+      // and manifest.json; already listed by earlier tasks where
+      // applicable — the Set dedupes.
+      'recorder.js',
+      'recording_host.js',
+      'recorder.html',
+      'manifest.json',
+      '.autodev/evidence/4.11.contract.md',
+      '.autodev/evidence/4.11.build.md',
+      // Honest cumulative evolution: 4.11's review/behavior evidence lands
+      // after the pins were evolved (2.x/3.x/4.1-4.10 precedent).
+      '.autodev/evidence/4.11.review.md',
+      '.autodev/evidence/4.11.behavior.md',
       // Honest cumulative evolution: 4.3's review/behavior evidence lands
       // after the pins were evolved (2.x/3.x/4.1/4.2 precedent).
       '.autodev/evidence/4.3.review.md',
@@ -496,11 +526,16 @@ describe('AC4 — diff discipline', () => {
     // recorder.js (camera channel); 4.5 legitimately modifies db.js
     // (DB_VERSION 1 → 2 + recording_manifest store) and
     // recorder.js/recorder.html (recorder-get-formats channel + db.js and
-    // format_support.js script tags). All other product files
+    // format_support.js script tags). 4.11 legitimately modifies
+    // manifest.json (sync_flash.js content script), recorder.js
+    // (start-marker wiring + MSG_SYNC_FLASH), recording_host.js (the
+    // SW-leg flash relay), and recorder.html (sync_marker.js script
+    // tag); 4.11's sync_marker.js/sync_flash.js are new files (no HEAD
+    // content to differ from — see below). All other product files
     // must remain byte-identical — the retention guarantee. New files that
     // do not exist at HEAD (4.1's recording_host.js, 4.2's
     // device_selection.js, 4.3's capture_selection.js/capture_broker.js,
-    // 4.5's format_support.js)
+    // 4.5's format_support.js, 4.11's sync_marker.js/sync_flash.js)
     // are skipped: they have no HEAD content to differ from, and their
     // scan coverage comes from the deletion-primitive / TTL scans above.
     const changedByTasks = new Set(['chess_utils.js', 'content.js',
@@ -508,7 +543,8 @@ describe('AC4 — diff discipline', () => {
                                     'recording_host.js', 'recorder.js',
                                     'recorder.html', 'device_selection.js',
                                     'capture_selection.js', 'db.js',
-                                    'format_support.js',
+                                    'format_support.js', 'sync_marker.js',
+                                    'sync_flash.js',
                                     'capture_broker.js']);
     for (const f of PRODUCT_FILES) {
       if (changedByTasks.has(f)) continue;
