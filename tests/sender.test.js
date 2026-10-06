@@ -446,12 +446,33 @@ describe('AC7 — diff discipline (static)', () => {
     assert.strictEqual(occurrences, 1, 'expected exactly one sender instantiation line');
   });
 
-  it('db.js is byte-identical to HEAD; sw.js state is owned by the 2.4 contract', () => {
+  it('db.js is byte-identical to HEAD apart from the 4.5 manifest store', () => {
     // 2.4 legitimately amended sw.js (writer intake); its cumulative state
-    // is pinned in tests/writer.test.js (AC11). db.js must be untouched.
-    const head = execSync('git show HEAD:db.js', { cwd: ROOT });
-    const work = fs.readFileSync(path.join(ROOT, 'db.js'));
-    assert.ok(head.equals(work), 'db.js differs from HEAD');
+    // is pinned in tests/writer.test.js (AC11). Honest cumulative
+    // evolution (4.5): db.js legitimately bumps DB_VERSION 1 → 2 and
+    // adds the recording_manifest store (see its pin in
+    // tests/format_support.test.js); everything else in db.js must be
+    // untouched. Proven on the git diff: every changed line belongs to
+    // a hunk that carries a 4.5 marker.
+    const work = fs.readFileSync(path.join(ROOT, 'db.js'), 'utf8');
+    assert.ok(work.includes('recording_manifest'),
+      'db.js must carry the 4.5 recording_manifest store');
+    assert.ok(work.includes('var DB_VERSION = 2;'),
+      'db.js must carry the 4.5 DB_VERSION bump');
+    const diff = execSync('git diff HEAD -- db.js', { cwd: ROOT }).toString();
+    const hunks = diff.split(/^@@/m).slice(1);
+    // SF-1 (4.5 review): this test must stay green after the coordinator
+    // commits 4.5 — post-commit `git diff HEAD` is empty, so the hunk
+    // check runs only when a diff exists; the content assertions above
+    // pin the 4.5 change durably either way (2.8/4.4 precedent).
+    if (diff.trim().length > 0) {
+      assert.ok(hunks.length > 0, 'expected a db.js diff (the 4.5 change)');
+    }
+    const stray = hunks.filter(
+      (h) => !/recording_manifest|DB_VERSION = 2|4\.5/.test(h));
+    assert.deepEqual(stray, [],
+      'db.js has diff hunks beyond the 4.5 manifest store:\n' +
+      stray.join('\n@@'));
   });
 
   it('sender.js has no chrome. literal in code (lazy resolver uses bracket notation)', () => {
@@ -775,6 +796,22 @@ describe('2.5 retry policy', () => {
       // evidence lands after the pins were evolved (2.x/3.x/4.1-4.3 precedent).
       '.autodev/evidence/4.4.review.md',
       '.autodev/evidence/4.4.behavior.md',
+      // Honest cumulative evolution: 4.5 (recording format
+      // verification + recording manifest) legitimately adds
+      // format_support.js, routes recorder-get-formats through
+      // recorder.js/recorder.html (which now also load db.js),
+      // bumps db.js to version 2 with the recording_manifest
+      // store, and adds its test + evidence; its files join
+      // the allowlists.
+      'format_support.js',
+      'db.js',
+      'tests/format_support.test.js',
+      '.autodev/evidence/4.5.contract.md',
+      '.autodev/evidence/4.5.build.md',
+      // Honest cumulative evolution: 4.5's review/behavior
+      // evidence lands after the pins were evolved (2.x/3.x/4.1-4.4 precedent).
+      '.autodev/evidence/4.5.review.md',
+      '.autodev/evidence/4.5.behavior.md',
       // Honest cumulative evolution: 4.3's review/behavior evidence lands
       // after the pins were evolved (2.x/3.x/4.1/4.2 precedent).
       '.autodev/evidence/4.3.review.md',

@@ -44,7 +44,12 @@ var BlindfoldSession = BlindfoldSession || {};
   'use strict';
 
   var DB_NAME = 'blindfold-experiment';
-  var DB_VERSION = 1;
+  // 4.5 (PLAN.md §4.5) bumps the version 1 → 2 for the new
+  // recording_manifest store. applySchema() creates missing stores
+  // idempotently on upgrade, so pre-4.5 databases upgrade cleanly and
+  // no user data is touched (§2.9: never delete user data in an
+  // upgrade).
+  var DB_VERSION = 2;
 
   function deepFreeze(value) {
     if (value !== null && (typeof value === 'object' || typeof value === 'function')) {
@@ -78,6 +83,18 @@ var BlindfoldSession = BlindfoldSession || {};
         name: 'media_chunks',
         keyPath: ['segmentId', 'chunkIndex'],
         indexes: []
+      },
+      // 4.5 (PLAN.md §4.5): the recording manifest — one record per
+      // recording segment. Mutable by design (4.5 writes format
+      // identity at stream start; 4.10 adds the clock anchor; 4.12
+      // adds timecode/offsets; 4.13 marks it finalized), so events are
+      // the wrong home. §6.3 reads this store for media-sync.json.
+      {
+        name: 'recording_manifest',
+        keyPath: 'segmentId',
+        indexes: [
+          { name: 'bySessionId', keyPath: 'sessionId', unique: false }
+        ]
       }
     ]
   });

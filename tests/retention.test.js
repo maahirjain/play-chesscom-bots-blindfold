@@ -197,13 +197,18 @@ describe('AC3 — no retention metadata in the schema', () => {
     return out;
   }
 
-  it('exactly the five 2.2 stores; no store carries TTL/expiry keys', () => {
+  it('exactly the six stores (2.2 + 4.5 manifest); no store carries TTL/expiry keys', () => {
+    // Honest cumulative evolution: 4.5 (PLAN.md §4.5) legitimately adds
+    // the recording_manifest store (mutable by design — format identity
+    // at stream start, clock anchor/timecode/finalization later). It
+    // carries no TTL/expiry keys; retention semantics unchanged (§2.9).
     const SCHEMA = require('../db.js').DB.SCHEMA;
     const names = SCHEMA.stores.map((s) => s.name).sort();
     assert.deepEqual(names, [
       'conditions',
       'events',
       'media_chunks',
+      'recording_manifest',
       'sequence_state',
       'session_metadata',
     ]);
@@ -275,6 +280,22 @@ describe('AC4 — diff discipline', () => {
       // evidence lands after the pins were evolved (2.x/3.x/4.1-4.3 precedent).
       '.autodev/evidence/4.4.review.md',
       '.autodev/evidence/4.4.behavior.md',
+      // Honest cumulative evolution: 4.5 (recording format
+      // verification + recording manifest) legitimately adds
+      // format_support.js, routes recorder-get-formats through
+      // recorder.js/recorder.html (which now also load db.js),
+      // bumps db.js to version 2 with the recording_manifest
+      // store, and adds its test + evidence; its files join
+      // the allowlists.
+      'format_support.js',
+      'db.js',
+      'tests/format_support.test.js',
+      '.autodev/evidence/4.5.contract.md',
+      '.autodev/evidence/4.5.build.md',
+      // Honest cumulative evolution: 4.5's review/behavior
+      // evidence lands after the pins were evolved (2.x/3.x/4.1-4.4 precedent).
+      '.autodev/evidence/4.5.review.md',
+      '.autodev/evidence/4.5.behavior.md',
       // Honest cumulative evolution: 4.3's review/behavior evidence lands
       // after the pins were evolved (2.x/3.x/4.1/4.2 precedent).
       '.autodev/evidence/4.3.review.md',
@@ -384,17 +405,24 @@ describe('AC4 — diff discipline', () => {
     // recorder.js/recorder.html (mic channel); 4.3 legitimately modifies
     // manifest.json (tabCapture + host_permissions), sw.js (the capture
     // broker import), recording_host.js (the SW-leg broker routing), and
-    // recorder.js/recorder.html (capture channel). All other product files
+    // recorder.js/recorder.html (capture channel); 4.4 legitimately
+    // modifies device_selection.js (video probe kind-branch) and
+    // recorder.js (camera channel); 4.5 legitimately modifies db.js
+    // (DB_VERSION 1 → 2 + recording_manifest store) and
+    // recorder.js/recorder.html (recorder-get-formats channel + db.js and
+    // format_support.js script tags). All other product files
     // must remain byte-identical — the retention guarantee. New files that
     // do not exist at HEAD (4.1's recording_host.js, 4.2's
-    // device_selection.js, 4.3's capture_selection.js/capture_broker.js)
+    // device_selection.js, 4.3's capture_selection.js/capture_broker.js,
+    // 4.5's format_support.js)
     // are skipped: they have no HEAD content to differ from, and their
     // scan coverage comes from the deletion-primitive / TTL scans above.
     const changedByTasks = new Set(['chess_utils.js', 'content.js',
                                     'manifest.json', 'sounds.js', 'sw.js',
                                     'recording_host.js', 'recorder.js',
                                     'recorder.html', 'device_selection.js',
-                                    'capture_selection.js',
+                                    'capture_selection.js', 'db.js',
+                                    'format_support.js',
                                     'capture_broker.js']);
     for (const f of PRODUCT_FILES) {
       if (changedByTasks.has(f)) continue;

@@ -975,7 +975,11 @@ describe('AC15 — diff discipline', () => {
   });
 
   it('db.js, sender.js, event_envelope.js, session_identity.js, session_conditions.js, session_store.js byte-identical to HEAD', () => {
-    for (const f of ['db.js', 'sender.js', 'event_envelope.js',
+    // Honest cumulative evolution (4.5): db.js leaves this list — 4.5
+    // legitimately bumps DB_VERSION 1 → 2 and adds the
+    // recording_manifest store (see its pin in
+    // tests/format_support.test.js).
+    for (const f of ['sender.js', 'event_envelope.js',
                      'session_identity.js', 'session_conditions.js',
                      'session_store.js']) {
       const head = execSync(`git show HEAD:${f}`, { cwd: ROOT, stdio: 'pipe' }).toString();
@@ -1048,6 +1052,22 @@ describe('AC15 — diff discipline', () => {
       // evidence lands after the pins were evolved (2.x/3.x/4.1-4.3 precedent).
       '.autodev/evidence/4.4.review.md',
       '.autodev/evidence/4.4.behavior.md',
+      // Honest cumulative evolution: 4.5 (recording format
+      // verification + recording manifest) legitimately adds
+      // format_support.js, routes recorder-get-formats through
+      // recorder.js/recorder.html (which now also load db.js),
+      // bumps db.js to version 2 with the recording_manifest
+      // store, and adds its test + evidence; its files join
+      // the allowlists.
+      'format_support.js',
+      'db.js',
+      'tests/format_support.test.js',
+      '.autodev/evidence/4.5.contract.md',
+      '.autodev/evidence/4.5.build.md',
+      // Honest cumulative evolution: 4.5's review/behavior
+      // evidence lands after the pins were evolved (2.x/3.x/4.1-4.4 precedent).
+      '.autodev/evidence/4.5.review.md',
+      '.autodev/evidence/4.5.behavior.md',
       // Honest cumulative evolution: 4.3's review/behavior evidence lands
       // after the pins were evolved (2.x/3.x/4.1/4.2 precedent).
       '.autodev/evidence/4.3.review.md',

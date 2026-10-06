@@ -67,6 +67,11 @@
 //   near-mechanical reuse of 4.2's factory. Probe-then-stop (no stream
 //   retained); "saved separately from the screen" is 4.6's stream
 //   wiring, not 4.4's.
+//   SW → offscreen : 'capture-resolve-tab' / 'capture-query-permission' /
+//                    'capture-get-stream-id' (4.3 SW-leg broker messages)
+//   SW → offscreen : 'recorder-get-formats' {}
+//                    → { ok, formats: { microphone:[...], screen:[...],
+//                       webcam:[...] }, verifiedAtUtc } (4.5)
 // Command responses are plain {ok,...} objects (no envelope) — the
 // request's sendMessage promise correlates them.
 // 'recorder-pong'.nowMonotonicMs is a performance.now() reading — the hook
@@ -120,6 +125,11 @@ var BlindfoldSession = BlindfoldSession || {};
   var MSG_CAPTURE_RESOLVE_TAB = 'capture-resolve-tab';
   var MSG_CAPTURE_QUERY_PERMISSION = 'capture-query-permission';
   var MSG_CAPTURE_GET_STREAM_ID = 'capture-get-stream-id';
+  // 4.5 format-verification query (PLAN.md §4.5). Stateless: the probe
+  // always re-runs isTypeSupported (synchronous, cheap) — no cache, no
+  // staleness. No session gating: device capability, not session data;
+  // emits nothing.
+  var MSG_FORMATS = 'recorder-get-formats';
 
   // Source context stamped on every event this document emits (1.3's
   // SOURCE_CONTEXTS already includes 'recording_context').
@@ -341,6 +351,11 @@ var BlindfoldSession = BlindfoldSession || {};
           message.msg === MSG_CAPTURE_PERMISSION ||
           message.msg === MSG_CAPTURE_STATE) {
         return handleCaptureCommand(message, sendResponse);
+      }
+      // 4.5: format verification. Stateless query — failure-isolated
+      // like every other command (3.2 SF-1 precedent).
+      if (message.msg === MSG_FORMATS) {
+        return handleFormatCommand(message, sendResponse);
       }
       return false; // unknown msg: ignore, no response
     }
@@ -637,6 +652,70 @@ var BlindfoldSession = BlindfoldSession || {};
       return captureSelector;
     }
 
+    // ----------------------------------------------------------------
+    // 4.5: format verification + the recording manifest writer.
+    //
+    // The format-support instance probes MediaRecorder.isTypeSupported
+    // per stream kind against the frozen candidate lists. The manifest
+    // writer (recordSegmentFormat) is the API 4.6 calls at stream start
+    // with the real recorder.mimeType; 4.5 itself constructs no
+    // MediaRecorder and starts nothing.
+    // ----------------------------------------------------------------
+
+    var formatSupport = null;
+    function getFormatSupport() {
+      if (formatSupport === null) {
+        var BS = shared();
+        if (typeof BS.createFormatSupport !== 'function') {
+          throw new Error('recorder: createFormatSupport is unavailable');
+        }
+        if (o.formatSupport !== undefined && o.formatSupport !== null) {
+          formatSupport = o.formatSupport;
+        } else {
+          formatSupport = BS.createFormatSupport({
+            // mediaRecorder/db read lazily from the real globals in the
+            // document; the manifest write goes direct to the
+            // extension-owned IDB (4.1's direct-IDB path).
+            nowUtcIso: o.selectorClock
+          });
+        }
+      }
+      return formatSupport;
+    }
+
+    // 'recorder-get-formats' → { ok, formats, verifiedAtUtc }. The probe
+    // always re-runs; an unavailable MediaRecorder becomes {ok:false}
+    // data (never a thrown listener break).
+    function handleFormatCommand(message, sendResponse) {
+      var fs;
+      try {
+        fs = getFormatSupport();
+      } catch (e) {
+        try {
+          sendResponse({ ok: false, error: 'unavailable' });
+        } catch (w) { /* ignore */ }
+        return false;
+      }
+      function deferred(fn) {
+        return respondAsync(Promise.resolve().then(fn), sendResponse,
+          function (err) {
+            if (err instanceof Error &&
+                !(err instanceof TypeError) &&
+                !(err instanceof RangeError)) {
+              return { ok: false, error: 'unavailable' };
+            }
+            return toChannelError(err);
+          });
+      }
+      return deferred(function () {
+        return {
+          ok: true,
+          formats: fs.verifyFormats(),
+          verifiedAtUtc: new Date().toISOString()
+        };
+      });
+    }
+
     function handleCaptureCommand(message, sendResponse) {
       var sel;
       try {
@@ -891,6 +970,9 @@ var BlindfoldSession = BlindfoldSession || {};
       // 4.3 surface (Node tests drive these directly).
       getCaptureSelector: getCaptureSelector,
       createBrokerClient: createBrokerClient,
+      // 4.5 surface (Node tests drive these directly; 4.6 calls
+      // getFormatSupport().recordSegmentFormat at stream start).
+      getFormatSupport: getFormatSupport,
       restoreDevices: restoreDevices,
       getSession: function () { return { sessionId: sessionId, gameId: gameId }; }
     };
@@ -922,6 +1004,7 @@ var BlindfoldSession = BlindfoldSession || {};
   BlindfoldSession.RECORDER_MSG_CAPTURE_RESOLVE_TAB = MSG_CAPTURE_RESOLVE_TAB;
   BlindfoldSession.RECORDER_MSG_CAPTURE_QUERY_PERMISSION = MSG_CAPTURE_QUERY_PERMISSION;
   BlindfoldSession.RECORDER_MSG_CAPTURE_GET_STREAM_ID = MSG_CAPTURE_GET_STREAM_ID;
+  BlindfoldSession.RECORDER_MSG_GET_FORMATS = MSG_FORMATS;
   BlindfoldSession.RECORDER_SOURCE_CONTEXT = RECORDER_SOURCE_CONTEXT;
   BlindfoldSession.isRecorderMessage = isRecorderMessage;
   BlindfoldSession.createOffscreenRecorder = createOffscreenRecorder;

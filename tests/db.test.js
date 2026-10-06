@@ -19,9 +19,14 @@ const ROOT = path.join(__dirname, '..');
 const BlindfoldSession = require('../db.js');
 
 describe('SCHEMA — matches contract §2.3 exactly (AC1)', () => {
+  // Honest cumulative evolution: 4.5 (PLAN.md §4.5, recording format
+  // verification + recording manifest) legitimately bumps DB_VERSION
+  // 1 → 2 and adds the recording_manifest store (keyPath segmentId,
+  // bySessionId index). The expected schema below is the new
+  // cumulative baseline.
   const expected = {
     dbName: 'blindfold-experiment',
-    version: 1,
+    version: 2,
     stores: [
       {
         name: 'events',
@@ -38,6 +43,14 @@ describe('SCHEMA — matches contract §2.3 exactly (AC1)', () => {
         name: 'media_chunks',
         keyPath: ['segmentId', 'chunkIndex'],
         indexes: []
+      },
+      // 4.5: the recording manifest (one record per recording segment).
+      {
+        name: 'recording_manifest',
+        keyPath: 'segmentId',
+        indexes: [
+          { name: 'bySessionId', keyPath: 'sessionId', unique: false }
+        ]
       }
     ]
   };
@@ -48,7 +61,7 @@ describe('SCHEMA — matches contract §2.3 exactly (AC1)', () => {
 
   it('AC1: DB_NAME and DB_VERSION match the schema', () => {
     assert.equal(BlindfoldSession.DB.DB_NAME, 'blindfold-experiment');
-    assert.equal(BlindfoldSession.DB.DB_VERSION, 1);
+    assert.equal(BlindfoldSession.DB.DB_VERSION, 2);
     assert.equal(BlindfoldSession.DB.SCHEMA.dbName, BlindfoldSession.DB.DB_NAME);
     assert.equal(BlindfoldSession.DB.SCHEMA.version, BlindfoldSession.DB.DB_VERSION);
   });
@@ -67,12 +80,14 @@ describe('SCHEMA — matches contract §2.3 exactly (AC1)', () => {
     }
   });
 
-  it('AC1: exactly five stores, no speculative extras', () => {
+  it('AC1: exactly six stores, no speculative extras', () => {
+    // Honest cumulative evolution: 4.5 adds recording_manifest.
     const names = BlindfoldSession.DB.SCHEMA.stores.map((s) => s.name).sort();
     assert.deepEqual(names, [
       'conditions',
       'events',
       'media_chunks',
+      'recording_manifest',
       'sequence_state',
       'session_metadata'
     ]);

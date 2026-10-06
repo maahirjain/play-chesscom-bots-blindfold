@@ -333,15 +333,19 @@ describe('AC8–AC9 — installStatusIndicator', () => {
 // AC12: PLAN.md unmodified.
 // ------------------------------------------------------------------
 describe('AC10–AC12 — diff discipline and scope', () => {
-  it('sender.js, writer.js, db.js, session_store.js, lifecycle.js, event_envelope.js byte-identical to HEAD (sw.js legitimately extended by 4.1)', () => {
+  it('sender.js, writer.js, session_store.js, lifecycle.js, event_envelope.js byte-identical to HEAD (db.js legitimately changed by 4.5)', () => {
     // Honest cumulative evolution: 4.1 legitimately extends sw.js
     // (recording-context supervisor wiring) per its contract; sw.js is
     // pinned by tests/manifest_sw.test.js AC3 (4.1 cumulative) instead.
-    for (const f of ['sender.js', 'writer.js', 'db.js', 'session_store.js',
+    // Honest cumulative evolution (4.5): db.js leaves this list — 4.5
+    // legitimately bumps DB_VERSION 1 → 2 and adds the
+    // recording_manifest store (see its pin in
+    // tests/format_support.test.js).
+    for (const f of ['sender.js', 'writer.js', 'session_store.js',
                      'lifecycle.js', 'event_envelope.js']) {
       const head = execSync(`git show HEAD:${f}`, { cwd: ROOT, stdio: 'pipe' }).toString();
       const current = fs.readFileSync(path.join(ROOT, f), 'utf8');
-      assert.strictEqual(current, head, `${f} changed but 4.1 must not touch it`);
+      assert.strictEqual(current, head, `${f} changed but 4.1/4.5 must not touch it`);
     }
   });
 
@@ -448,6 +452,22 @@ describe('AC10–AC12 — diff discipline and scope', () => {
       // evidence lands after the pins were evolved (2.x/3.x/4.1-4.3 precedent).
       '.autodev/evidence/4.4.review.md',
       '.autodev/evidence/4.4.behavior.md',
+      // Honest cumulative evolution: 4.5 (recording format
+      // verification + recording manifest) legitimately adds
+      // format_support.js, routes recorder-get-formats through
+      // recorder.js/recorder.html (which now also load db.js),
+      // bumps db.js to version 2 with the recording_manifest
+      // store, and adds its test + evidence; its files join
+      // the allowlists.
+      'format_support.js',
+      'db.js',
+      'tests/format_support.test.js',
+      '.autodev/evidence/4.5.contract.md',
+      '.autodev/evidence/4.5.build.md',
+      // Honest cumulative evolution: 4.5's review/behavior
+      // evidence lands after the pins were evolved (2.x/3.x/4.1-4.4 precedent).
+      '.autodev/evidence/4.5.review.md',
+      '.autodev/evidence/4.5.behavior.md',
       // Honest cumulative evolution: 4.3's review/behavior evidence lands
       // after the pins were evolved (2.x/3.x/4.1/4.2 precedent).
       '.autodev/evidence/4.3.review.md',

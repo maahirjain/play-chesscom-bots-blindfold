@@ -599,3 +599,36 @@ Consequential engineering decisions with reasoning and evidence. Newest first.
   camera restore was still in flight when the caller proceeded. Repaired
   to `Promise.all` over all three selectors' best-effort restores (each
   rejection swallowed; still never throws).
+
+## 4.5 recording format verification and the recording manifest
+
+- **Manifest = a mutable IDB store, not events.** `recording_manifest`
+  (keyPath `segmentId`, `bySessionId` index) in the extension-owned DB;
+  `DB_VERSION` 1 → 2. Events are append-only and immutable (2.4) — the
+  wrong home for a record that 4.5 writes at stream start, 4.10 anchors,
+  4.12 timecodes, and 4.13 finalizes. `applySchema()` creates the store
+  idempotently on upgrade; no user data touched (§2.9). §6.3 reads this
+  store for media-sync.json.
+- **4.5 owns eight format-identity fields** (`segmentId`, `sessionId`,
+  `gameId`, `streamKind`, `requestedMimeType`, `actualMimeType`,
+  `fileExtension`, `createdAtUtc`); 4.10/4.12/4.13's fields are reserved
+  and their later validator-widening must be deliberate (exact-keys
+  convention rejects anything else).
+- **Format verification is always re-probed** (`isTypeSupported` is
+  synchronous and cheap) — no cache, no staleness. Frozen prioritized
+  candidate lists per kind (VP9 → VP8 → H.264 → bare container; Opus
+  audio); an empty list is an honest "cannot start", never a silent
+  fallback to an unverified type. Unavailable API → plain Error, never a
+  fabricated list.
+- **`fileExtension` derives from the ACTUAL negotiated MIME type**
+  (`recorder.mimeType`), never the requested string; unknown → `null`,
+  never fabricated. 4.6 must pass the real `recorder.mimeType` at stream
+  start (4.6's V2 proves the read; 4.5's V2 honestly stops at the store
+  existing and a synthetic-payload write).
+- **No new event types.** Format support is queryable state
+  (`recorder-get-formats` on the recorder channel), not an event; 4.14
+  owns status reporting. No `MediaRecorder` construction in 4.5 (only
+  `isTypeSupported` probing); no manifest-permission changes.
+- **V2 finding:** the offscreen document loads `db.js` and writes the
+  manifest direct to the extension-owned IDB (4.1's direct-IDB path) —
+  proven readable from the SW, same origin, same partition.

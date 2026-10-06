@@ -574,10 +574,14 @@ describe('AC8 — diff discipline', () => {
     // list — 4.4 legitimately kind-branches the probe constraints and
     // parameterizes the validator messages (see its pin in
     // tests/device_selection.test.js).
+    // Honest cumulative evolution (4.5): db.js leaves this list — 4.5
+    // legitimately bumps DB_VERSION 1 → 2 and adds the
+    // recording_manifest store (see its pin in
+    // tests/format_support.test.js).
     for (const f of ['content.js', 'chess_utils.js', 'sounds.js', 'lifecycle.js',
                      'sender.js', 'status_indicator.js', 'event_envelope.js',
                      'session_identity.js', 'session_conditions.js',
-                     'game_records.js', 'db.js', 'writer.js', 'session_store.js']) {
+                     'game_records.js', 'writer.js', 'session_store.js']) {
       const head = execSync(`git show HEAD:${f}`, { cwd: REPO, stdio: 'pipe' }).toString();
       const current = fs.readFileSync(path.join(REPO, f), 'utf8');
       assert.strictEqual(current, head, `${f} changed but 4.4 must not touch it`);
@@ -632,6 +636,22 @@ describe('AC8 — diff discipline', () => {
       // evidence lands after the pins were evolved (2.x/3.x/4.1-4.3 precedent).
       '.autodev/evidence/4.4.review.md',
       '.autodev/evidence/4.4.behavior.md',
+      // Honest cumulative evolution: 4.5 (recording format
+      // verification + recording manifest) legitimately adds
+      // format_support.js, routes recorder-get-formats through
+      // recorder.js/recorder.html (which now also load db.js),
+      // bumps db.js to version 2 with the recording_manifest
+      // store, and adds its test + evidence; its files join
+      // the allowlists.
+      'format_support.js',
+      'db.js',
+      'tests/format_support.test.js',
+      '.autodev/evidence/4.5.contract.md',
+      '.autodev/evidence/4.5.build.md',
+      // Honest cumulative evolution: 4.5's review/behavior
+      // evidence lands after the pins were evolved (2.x/3.x/4.1-4.4 precedent).
+      '.autodev/evidence/4.5.review.md',
+      '.autodev/evidence/4.5.behavior.md',
       // Honest cumulative evolution: 4.3's review/behavior evidence lands
       // after the pins were evolved (2.x/3.x/4.1/4.2 precedent).
       '.autodev/evidence/4.3.review.md',

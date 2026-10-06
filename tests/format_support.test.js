@@ -1,0 +1,570 @@
+// tests/format_support.test.js
+//
+// V1 verification for task 4.5 (PLAN.md §4.5) per
+// .autodev/evidence/4.5.contract.md. Covers acceptance criteria AC1–AC8
+// (static/unit). AC9–AC11 (real Chrome) run separately via
+// ~/workspace/tools/ext-verify/sw-formats.js; AC12 (real device codec
+// support + actual MIME types from real recordings) is deferred to
+// owner verification (§7).
+//
+// Run: node --test tests/format_support.test.js   (from repo root)
+
+const { describe, it } = require('node:test');
+const assert = require('node:assert/strict');
+const { execSync } = require('node:child_process');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const REPO = path.resolve(__dirname, '..');
+const BS_FMT = require(path.join(REPO, 'format_support.js'));
+const BS_DB = require(path.join(REPO, 'db.js'));
+const BS_ENV = require(path.join(REPO, 'event_envelope.js'));
+const BS_DEV = require(path.join(REPO, 'device_selection.js'));
+const BS_CAP = require(path.join(REPO, 'capture_selection.js'));
+const BS_REC = require(path.join(REPO, 'recorder.js'));
+
+// The Node test harness publishes the merged namespace on
+// globalThis (sender.js precedent): format_support resolves DB through
+// shared(), and the recorder resolves createFormatSupport the same way.
+const BS = Object.assign({}, BS_ENV, BS_FMT, BS_DEV, BS_CAP, BS_DB, BS_REC);
+globalThis.BlindfoldSession = BS;
+
+const SID = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa';
+const GID = 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb';
+const SEG = 'cccccccc-3333-4333-8333-cccccccccccc';
+
+const FROZEN_LISTS = {
+  microphone: [
+    'audio/webm;codecs=opus',
+    'audio/webm',
+    'audio/mp4'
+  ],
+  screen: [
+    'video/webm;codecs=vp9,opus',
+    'video/webm;codecs=vp8,opus',
+    'video/webm;codecs=h264,opus',
+    'video/webm'
+  ],
+  webcam: [
+    'video/webm;codecs=vp9',
+    'video/webm;codecs=vp8',
+    'video/webm;codecs=h264',
+    'video/webm'
+  ]
+};
+
+// A scripted MediaRecorder: supportedSet = MIME types reporting true.
+function fakeMediaRecorder(supportedSet) {
+  const seen = [];
+  return {
+    seen,
+    isTypeSupported: (mime) => {
+      seen.push(mime);
+      return supportedSet.has(mime);
+    }
+  };
+}
+
+function fakeDb() {
+  const puts = [];
+  return {
+    puts,
+    put: async (store, record) => {
+      puts.push({ store, record });
+    }
+  };
+}
+
+// ------------------------------------------------------------------
+// AC1: module loads; verifyFormats returns the supported subset.
+// ------------------------------------------------------------------
+
+describe('AC1 — module and verifyFormats', () => {
+  it('loads in Node via the shim and exposes the factory + constants', () => {
+    assert.equal(typeof BS.createFormatSupport, 'function');
+    assert.equal(typeof BS.extensionForMimeType, 'function');
+    assert.equal(BS.MANIFEST_STORE_NAME, 'recording_manifest');
+    assert.deepEqual(BS.FORMAT_STREAM_KINDS,
+      ['microphone', 'screen', 'webcam']);
+  });
+
+  it('candidate lists are frozen and match the contract §3', () => {
+    assert.deepEqual(BS.FORMAT_CANDIDATES, FROZEN_LISTS);
+    assert.ok(Object.isFrozen(BS.FORMAT_CANDIDATES));
+    for (const k of BS.FORMAT_STREAM_KINDS) {
+      assert.ok(Object.isFrozen(BS.FORMAT_CANDIDATES[k]),
+        'candidate list not frozen: ' + k);
+    }
+  });
+
+  it('verifyFormats returns the supported subset per kind', () => {
+    const supported = new Set([
+      'audio/webm;codecs=opus',
+      'video/webm;codecs=vp8,opus',
+      'video/webm',
+      'video/webm;codecs=vp8'
+    ]);
+    const mr = fakeMediaRecorder(supported);
+    const fs = BS.createFormatSupport({ mediaRecorder: mr });
+    const formats = fs.verifyFormats();
+    assert.deepEqual(formats, {
+      microphone: ['audio/webm;codecs=opus'],
+      screen: ['video/webm;codecs=vp8,opus', 'video/webm'],
+      webcam: ['video/webm;codecs=vp8', 'video/webm']
+    });
+  });
+
+  it('every candidate is probed exactly once per call (no cache)', () => {
+    const mr = fakeMediaRecorder(new Set());
+    const fs = BS.createFormatSupport({ mediaRecorder: mr });
+    fs.verifyFormats();
+    const total = FROZEN_LISTS.microphone.length +
+      FROZEN_LISTS.screen.length + FROZEN_LISTS.webcam.length;
+    assert.equal(mr.seen.length, total, 'all candidates probed');
+    fs.verifyFormats();
+    assert.equal(mr.seen.length, total * 2, 're-probed, not cached');
+  });
+});
+
+// ------------------------------------------------------------------
+// AC2: priority order preserved — first supported candidate wins.
+// ------------------------------------------------------------------
+
+describe('AC2 — priority order', () => {
+  it('order matches the frozen lists: VP9 > VP8 > H.264 > bare', () => {
+    const mr = fakeMediaRecorder(new Set([
+      'video/webm;codecs=vp9', 'video/webm;codecs=vp8',
+      'video/webm;codecs=h264', 'video/webm'
+    ]));
+    const fs = BS.createFormatSupport({ mediaRecorder: mr });
+    assert.deepEqual(fs.verifyFormats().webcam, FROZEN_LISTS.webcam);
+  });
+
+  it('empty support for a kind is an honest empty list, not a fallback', () => {
+    const mr = fakeMediaRecorder(new Set(['audio/webm;codecs=opus']));
+    const fs = BS.createFormatSupport({ mediaRecorder: mr });
+    const formats = fs.verifyFormats();
+    assert.deepEqual(formats.screen, [], 'no silent fallback to unverified type');
+    assert.deepEqual(formats.webcam, []);
+    assert.deepEqual(formats.microphone, ['audio/webm;codecs=opus']);
+  });
+});
+
+// ------------------------------------------------------------------
+// AC3: unavailable platform → plain Error (no weak fallback).
+// ------------------------------------------------------------------
+
+describe('AC3 — unavailable MediaRecorder', () => {
+  function assertPlainError(err) {
+    assert.ok(err instanceof Error, 'is an Error');
+    assert.ok(!(err instanceof TypeError), 'not a TypeError');
+    assert.ok(!(err instanceof RangeError), 'not a RangeError');
+    return true;
+  }
+
+  it('null MediaRecorder → plain Error on verifyFormats', () => {
+    const fs = BS.createFormatSupport({ mediaRecorder: null });
+    assert.throws(() => fs.verifyFormats(), assertPlainError);
+  });
+
+  it('isTypeSupported missing → plain Error on verifyFormats', () => {
+    const fs = BS.createFormatSupport({ mediaRecorder: {} });
+    assert.throws(() => fs.verifyFormats(), assertPlainError);
+  });
+
+  it('a throwing isTypeSupported marks that candidate unsupported', () => {
+    const mr = {
+      isTypeSupported: (mime) => {
+        if (mime === 'video/webm;codecs=vp9') {
+          throw new Error('scripted probe failure');
+        }
+        return mime === 'video/webm;codecs=vp8';
+      }
+    };
+    const fs = BS.createFormatSupport({ mediaRecorder: mr });
+    assert.deepEqual(fs.verifyFormats().webcam, ['video/webm;codecs=vp8']);
+  });
+});
+
+// ------------------------------------------------------------------
+// AC4: extensionForMimeType mapping table.
+// ------------------------------------------------------------------
+
+describe('AC4 — extensionForMimeType', () => {
+  const cases = [
+    ['video/webm', '.webm'],
+    ['video/webm;codecs=vp9', '.webm'],
+    ['video/webm;codecs=vp9,opus', '.webm'],
+    ['audio/webm', '.webm'],
+    ['audio/webm;codecs=opus', '.webm'],
+    ['video/mp4', '.mp4'],
+    ['video/mp4;codecs=avc1', '.mp4'],
+    ['audio/mp4', '.m4a'],
+    ['audio/mp4;codecs=mp4a', '.m4a'],
+    ['video/x-matroska', null],
+    ['application/octet-stream', null],
+    ['', null],
+    [null, null],
+    [undefined, null],
+    [42, null]
+  ];
+  for (const [mime, expected] of cases) {
+    it(`maps ${JSON.stringify(mime)} → ${JSON.stringify(expected)}`, () => {
+      assert.equal(BS.extensionForMimeType(mime), expected);
+    });
+  }
+
+  it('strips parameters and is case-insensitive on the container', () => {
+    assert.equal(BS.extensionForMimeType('Video/WebM;codecs=vp9'), '.webm');
+  });
+});
+
+// ------------------------------------------------------------------
+// AC5: manifest record validator — exact keys, TypeError/RangeError.
+// ------------------------------------------------------------------
+
+describe('AC5 — requireValidManifestRecord', () => {
+  function validRecord(overrides) {
+    return Object.assign({
+      segmentId: SEG,
+      sessionId: SID,
+      gameId: GID,
+      streamKind: 'screen',
+      requestedMimeType: 'video/webm;codecs=vp9,opus',
+      actualMimeType: 'video/webm;codecs=vp9,opus',
+      fileExtension: '.webm',
+      createdAtUtc: '2026-10-06T00:00:00.000Z'
+    }, overrides || {});
+  }
+
+  function makeFs() {
+    return BS.createFormatSupport({
+      mediaRecorder: fakeMediaRecorder(new Set()),
+      db: fakeDb()
+    });
+  }
+
+  it('accepts a valid 4.5-owned record', () => {
+    const fs = makeFs();
+    assert.deepEqual(fs.requireValidManifestRecord(validRecord()), validRecord());
+  });
+
+  it('bad streamKind → RangeError', () => {
+    const fs = makeFs();
+    assert.throws(() => fs.requireValidManifestRecord(
+      validRecord({ streamKind: 'radio' })), RangeError);
+  });
+
+  it('malformed segmentId → TypeError', () => {
+    const fs = makeFs();
+    assert.throws(() => fs.requireValidManifestRecord(
+      validRecord({ segmentId: 'not-a-uuid' })), TypeError);
+  });
+
+  it('malformed sessionId/gameId → TypeError', () => {
+    const fs = makeFs();
+    assert.throws(() => fs.requireValidManifestRecord(
+      validRecord({ sessionId: 'x' })), TypeError);
+    assert.throws(() => fs.requireValidManifestRecord(
+      validRecord({ gameId: 'x' })), TypeError);
+  });
+
+  it('extra keys rejected (4.10/4.12/4.13 must widen deliberately)', () => {
+    const fs = makeFs();
+    assert.throws(() => fs.requireValidManifestRecord(
+      validRecord({ clockAnchor: {} })), TypeError);
+  });
+
+  it('missing keys rejected', () => {
+    const fs = makeFs();
+    const r = validRecord();
+    delete r.fileExtension;
+    assert.throws(() => fs.requireValidManifestRecord(r), TypeError);
+  });
+
+  it('null actual/requested MIME allowed; bad extension → RangeError', () => {
+    const fs = makeFs();
+    fs.requireValidManifestRecord(validRecord({
+      requestedMimeType: null, actualMimeType: null, fileExtension: null
+    }));
+    assert.throws(() => fs.requireValidManifestRecord(
+      validRecord({ fileExtension: '.avi' })), RangeError);
+  });
+});
+
+// ------------------------------------------------------------------
+// AC6: recordSegmentFormat — derivation, null handling, pre-session.
+// ------------------------------------------------------------------
+
+describe('AC6 — recordSegmentFormat', () => {
+  function makeFs(db) {
+    return BS.createFormatSupport({
+      mediaRecorder: fakeMediaRecorder(new Set()),
+      db: db || fakeDb(),
+      nowUtcIso: () => '2026-10-06T00:00:00.000Z'
+    });
+  }
+
+  function input(overrides) {
+    return Object.assign({
+      segmentId: SEG,
+      sessionId: SID,
+      gameId: GID,
+      streamKind: 'screen',
+      requestedMimeType: 'video/webm;codecs=vp9,opus',
+      actualMimeType: 'video/webm;codecs=vp9,opus'
+    }, overrides || {});
+  }
+
+  it('writes the record with fileExtension derived from actualMimeType', async () => {
+    const db = fakeDb();
+    const fs = makeFs(db);
+    const res = await fs.recordSegmentFormat(input());
+    assert.deepEqual(res, { ok: true, segmentId: SEG, fileExtension: '.webm' });
+    assert.equal(db.puts.length, 1);
+    assert.equal(db.puts[0].store, 'recording_manifest');
+    assert.deepEqual(db.puts[0].record, {
+      segmentId: SEG,
+      sessionId: SID,
+      gameId: GID,
+      streamKind: 'screen',
+      requestedMimeType: 'video/webm;codecs=vp9,opus',
+      actualMimeType: 'video/webm;codecs=vp9,opus',
+      fileExtension: '.webm',
+      createdAtUtc: '2026-10-06T00:00:00.000Z'
+    });
+  });
+
+  it('derives from the ACTUAL type when requested ≠ actual (diverged pair)', async () => {
+    const db = fakeDb();
+    const fs = makeFs(db);
+    // Chrome normalized the requested string: actual is what counts.
+    const res = await fs.recordSegmentFormat(input({
+      requestedMimeType: 'video/webm;codecs=vp9,opus',
+      actualMimeType: 'video/webm'
+    }));
+    assert.equal(res.fileExtension, '.webm');
+    assert.equal(db.puts[0].record.fileExtension, '.webm');
+    assert.equal(db.puts[0].record.requestedMimeType,
+      'video/webm;codecs=vp9,opus', 'requested preserved for forensics');
+  });
+
+  it('unknown actual type → null extension, never fabricated', async () => {
+    const db = fakeDb();
+    const fs = makeFs(db);
+    const res = await fs.recordSegmentFormat(input({
+      requestedMimeType: 'video/x-matroska',
+      actualMimeType: 'video/x-matroska'
+    }));
+    assert.deepEqual(res, { ok: true, segmentId: SEG, fileExtension: null });
+    assert.equal(db.puts[0].record.fileExtension, null);
+  });
+
+  it('null actualMimeType → null extension', async () => {
+    const db = fakeDb();
+    const fs = makeFs(db);
+    const res = await fs.recordSegmentFormat(input({
+      requestedMimeType: null, actualMimeType: null
+    }));
+    assert.equal(res.fileExtension, null);
+    assert.equal(db.puts[0].record.actualMimeType, null);
+  });
+
+  it('pre-session (null ids) → {ok:false}, no throw, no write', async () => {
+    const db = fakeDb();
+    const fs = makeFs(db);
+    const res = await fs.recordSegmentFormat(
+      input({ sessionId: null, gameId: null }));
+    assert.deepEqual(res, { ok: false, error: 'no-session' });
+    assert.equal(db.puts.length, 0, 'nothing written pre-session');
+  });
+
+  it('malformed input rejects with TypeError/RangeError (channel maps it)', async () => {
+    const fs = makeFs();
+    await assert.rejects(() => fs.recordSegmentFormat(
+      input({ streamKind: 'radio' })), RangeError);
+    await assert.rejects(() => fs.recordSegmentFormat(
+      input({ segmentId: 'bad' })), TypeError);
+  });
+
+  it('non-object input → {ok:false, error:invalid-request}', async () => {
+    const db = fakeDb();
+    const fs = makeFs(db);
+    assert.deepEqual(await fs.recordSegmentFormat(null),
+      { ok: false, error: 'invalid-request' });
+    assert.equal(db.puts.length, 0);
+  });
+});
+
+// ------------------------------------------------------------------
+// AC7: db.js SCHEMA includes recording_manifest; DB_VERSION is 2.
+// ------------------------------------------------------------------
+
+describe('AC7 — db.js schema', () => {
+  it('SCHEMA includes recording_manifest (keyPath segmentId, bySessionId)', () => {
+    const stores = BS.DB.SCHEMA.stores;
+    const m = stores.find((s) => s.name === 'recording_manifest');
+    assert.ok(m, 'recording_manifest present');
+    assert.equal(m.keyPath, 'segmentId');
+    assert.deepEqual(m.indexes, [
+      { name: 'bySessionId', keyPath: 'sessionId', unique: false }
+    ]);
+  });
+
+  it('DB_VERSION is 2 and SCHEMA.version matches', () => {
+    assert.equal(BS.DB.DB_VERSION, 2);
+    assert.equal(BS.DB.SCHEMA.version, 2);
+  });
+});
+
+// ------------------------------------------------------------------
+// Recorder channel: 'recorder-get-formats'.
+// ------------------------------------------------------------------
+
+describe('recorder channel — recorder-get-formats', () => {
+  function makeRecorder(formatSupport) {
+    const chromeNs = {
+      runtime: {
+        sendMessage: () => Promise.resolve({ ok: true }),
+        onMessage: { addListener: () => true }
+      }
+    };
+    const rec = BS.createOffscreenRecorder(Object.assign({
+      chromeNs, announce: false,
+      mediaDevices: null,
+      storage: { get: async () => ({}), set: async () => {}, remove: async () => {} },
+      permissions: null,
+      selectorClock: () => '2026-10-06T00:00:00.000Z'
+    }, formatSupport ? { formatSupport } : {}));
+    function send(msg) {
+      return new Promise((resolve) => {
+        const r = rec.onRuntimeMessage(
+          Object.assign({ kind: 'recorder', v: 1 }, msg), {}, resolve);
+        if (r === false) {
+          resolve('sync-false');
+        }
+      });
+    }
+    return { rec, send };
+  }
+
+  it('routes recorder-get-formats → {ok, formats, verifiedAtUtc}', async () => {
+    const fakeFs = {
+      verifyFormats: () => ({
+        microphone: ['audio/webm;codecs=opus'],
+        screen: [],
+        webcam: ['video/webm;codecs=vp8']
+      }),
+      recordSegmentFormat: async () => ({ ok: true })
+    };
+    const { send } = makeRecorder(fakeFs);
+    const res = await send({ msg: 'recorder-get-formats' });
+    assert.equal(res.ok, true);
+    assert.deepEqual(res.formats, {
+      microphone: ['audio/webm;codecs=opus'],
+      screen: [],
+      webcam: ['video/webm;codecs=vp8']
+    });
+    assert.equal(typeof res.verifiedAtUtc, 'string');
+  });
+
+  it('unavailable MediaRecorder → {ok:false, error:unavailable}, never throws', async () => {
+    const fakeFs = {
+      verifyFormats: () => {
+        throw new Error('format_support: MediaRecorder.isTypeSupported is unavailable');
+      },
+      recordSegmentFormat: async () => ({ ok: true })
+    };
+    const { send } = makeRecorder(fakeFs);
+    const res = await send({ msg: 'recorder-get-formats' });
+    assert.deepEqual(res, { ok: false, error: 'unavailable' });
+  });
+
+  it('unknown msg still ignored (4.1 behavior)', async () => {
+    const { send } = makeRecorder({
+      verifyFormats: () => ({}),
+      recordSegmentFormat: async () => ({ ok: true })
+    });
+    assert.equal(await send({ msg: 'recorder-get-nonsense' }), 'sync-false');
+  });
+});
+
+// ------------------------------------------------------------------
+// AC8: diff discipline — only 4.5 files; no MediaRecorder
+// construction; content scripts untouched; no new event types.
+// ------------------------------------------------------------------
+
+describe('AC8 — diff discipline', () => {
+  it('only 4.5 files appear in git status', () => {
+    const status = execSync('git status --porcelain', { cwd: REPO }).toString();
+    const changed = status.split('\n').filter((l) => l.trim()).map((l) => l.slice(3).trim());
+    const allowed = new Set([
+      // Honest cumulative evolution: 4.5 (recording format verification
+      // + recording manifest) legitimately adds format_support.js,
+      // routes recorder-get-formats through recorder.js/recorder.html
+      // (which now also load db.js), bumps db.js to version 2 with the
+      // recording_manifest store, and adds its test + evidence; its
+      // files join the allowlists.
+      'format_support.js',
+      'db.js',
+      'recorder.js',
+      'recorder.html',
+      'tests/format_support.test.js',
+      '.autodev/evidence/4.5.contract.md',
+      '.autodev/evidence/4.5.build.md',
+      // Honest cumulative evolution: 4.5's review/behavior evidence lands
+      // after the pins were evolved (2.x/3.x/4.1-4.4 precedent).
+      '.autodev/evidence/4.5.review.md',
+      '.autodev/evidence/4.5.behavior.md',
+      '.autodev/DECISIONS.md',
+      // Cumulative evolution: earlier suites' diff-discipline allowlists
+      // are evolved by this task with justification comments.
+      'tests/attempt_tracker.test.js',
+      'tests/capture_broker.test.js',
+      'tests/capture_selection.test.js',
+      'tests/db.test.js',
+      'tests/device_selection.test.js',
+      'tests/game_lifecycle.test.js',
+      'tests/history_tracker.test.js',
+      'tests/lifecycle.test.js',
+      'tests/manifest_sw.test.js',
+      'tests/recording_host.test.js',
+      'tests/retention.test.js',
+      'tests/sender.test.js',
+      'tests/session_store.test.js',
+      'tests/speech.test.js',
+      'tests/status_indicator.test.js',
+      'tests/visibility.test.js',
+      'tests/writer.test.js'
+    ]);
+    for (const f of changed) {
+      assert.ok(allowed.has(f), `unexpected modified file: ${f}`);
+    }
+  });
+
+  it('no MediaRecorder CONSTRUCTION in 4.5 product code (only isTypeSupported probing)', () => {
+    for (const f of ['format_support.js', 'recorder.js', 'recorder.html', 'db.js']) {
+      const src = fs.readFileSync(path.join(REPO, f), 'utf8');
+      const code = src.split('\n')
+        .filter((l) => !l.trim().startsWith('//') && !l.trim().startsWith('*'))
+        .join('\n');
+      assert.ok(!/new\s+MediaRecorder/.test(code),
+        `no MediaRecorder construction in ${f}`);
+    }
+  });
+
+  it('content scripts byte-identical (no gameplay change)', () => {
+    const status = execSync('git status --porcelain', { cwd: REPO }).toString();
+    const changed = status.split('\n').filter((l) => l.trim()).map((l) => l.slice(3).trim());
+    for (const f of ['content.js', 'chess_utils.js', 'sounds.js']) {
+      assert.ok(!changed.includes(f), `${f} must be untouched by 4.5`);
+    }
+  });
+
+  it('event_envelope.js untouched (no new event types)', () => {
+    const status = execSync('git status --porcelain', { cwd: REPO }).toString();
+    const changed = status.split('\n').filter((l) => l.trim()).map((l) => l.slice(3).trim());
+    assert.ok(!changed.includes('event_envelope.js'),
+      'event_envelope.js must be untouched by 4.5');
+  });
+});
