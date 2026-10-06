@@ -522,3 +522,51 @@ Consequential engineering decisions with reasoning and evidence. Newest first.
   (`recorder-set-session`, `mic-list-devices`, `mic-select`,
   `mic-request-permission`, `mic-get-state`); all failure-isolated.
   `recording_host.js` gained no 4.2 behavior.
+
+## 4.3 screen/tab capture selection and permission handling
+
+- **Surface: `chrome.tabCapture` primary, `getDisplayMedia` user-driven
+  fallback.** Tab capture is deterministic (no per-session picker),
+  install-time queryable, and carries tab audio (4.7's feed).
+  `chrome.desktopCapture` excluded (Chrome-Apps-only). The persisted
+  `captureMode ∈ {'tab','screen'}` is the selection; 4.3 delivers selection
+  and permission handling, not recording.
+- **chrome.* split, verified live.** CDP `Runtime.evaluate` inside the real
+  offscreen `recorder.html` target proves it exposes only `chrome.runtime`
+  (`chrome.tabs`/`chrome.tabCapture`/`chrome.permissions` all absent); the
+  SW exposes `chrome.tabs` + `chrome.tabCapture`. All `chrome.*` calls
+  therefore live SW-side in the new `capture_broker.js`
+  (`resolveTargetTab`, `queryCapturePermission`, `getStreamId`); the
+  offscreen document only runs `getUserMedia` with `chromeMediaSource`
+  constraints and stops every track (probe-then-stop, no retention — 4.2
+  precedent).
+- **Manifest:** `"tabCapture"` permission (V2: `permissions.contains`
+  reports `'granted'`, install-time effective) + `host_permissions:
+  ["https://www.chess.com/*"]` (lets `chrome.tabs.query({url})` see the
+  game tab). Both required, both kept.
+- **Empirical tab-probe outcome (observed, not fabricated).** Headless
+  Chrome refuses `getMediaStreamId` with "Extension has not been invoked
+  for the current page" (no toolbar invocation headless); the probe
+  honestly reports `{ok:true, permissionState:'unknown', errorName:'Error'}`.
+  The doc-leg API surface is proven independently: a bogus-streamId
+  `getUserMedia({chromeMediaSource:'tab', ...})` in the offscreen document
+  returns `AbortError: "Error starting tab capture"` — the constraint
+  format is recognized and capture is attempted. No BLOCKER declared.
+- **Permission honesty.** Tab mode queryable (granted/denied); screen mode
+  inherently `'prompt'` — `capture-request-permission` for `'screen'`
+  performs no media call and returns `note:'picker-at-start'`. Denial is a
+  state. Tab ids re-resolved per boot/Start, never persisted; no-target-tab
+  → honest `tabId:null`, no active-tab fallback. Persistence in document
+  localStorage (`blindfold.captureMode.v1`, 4.2 precedent); never silently
+  defaults.
+- **Events** (`screen_capture_permission_changed`,
+  `screen_capture_selected`) travel the existing writer intake from the
+  offscreen document, session-gated (4.2's recorder-set-session reused);
+  `event_envelope.js` untouched. 4.7 consumes the probe's `audioIncluded`
+  flag. Four channel messages, all failure-isolated; the three SW-leg
+  broker messages route through `recording_host.js` with async `{ok}`
+  responses.
+- **V2 harness note:** `offscreenTarget.page()` does not attach to
+  offscreen documents in this Puppeteer version; use
+  `target.createCDPSession()` + `Runtime.evaluate` instead
+  (`~/workspace/tools/ext-verify/sw-screencapture.js`, 42/42 checks).

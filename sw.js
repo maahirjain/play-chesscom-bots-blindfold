@@ -18,14 +18,14 @@
 //   - 2.5: retry of unacknowledged events
 //   - 2.8: write-failure / storage-capacity surfacing in the status indicator
 //   - 2.9: retention and export semantics
-//   - 4.2–4.14: device selection, formats, streams, chunks, sync marker,
-//     timecode, Stop finalization, per-stream status (recording_host.js
-//     owns the offscreen document lifecycle only)
+//   - 4.4–4.14: webcam selection, formats, streams, chunks, sync marker,
+//     timecode, Stop finalization, per-stream status (capture_broker.js /
+//     recording_host.js own the 4.3 SW-side capture broker only)
 // Do not add other message listeners, storage access, or other imports here
 // until the owning task's contract says so.
 'use strict';
 
-importScripts('db.js', 'event_envelope.js', 'writer.js', 'session_identity.js', 'session_conditions.js', 'session_store.js', 'lifecycle.js', 'recording_host.js');
+importScripts('db.js', 'event_envelope.js', 'writer.js', 'session_identity.js', 'session_conditions.js', 'session_store.js', 'lifecycle.js', 'capture_broker.js', 'recording_host.js');
 // The handle exists so tests can remove the listener to simulate a genuine
 // no-ack state. Production code must NEVER remove the writer's listener
 // (a worker restart recreates the whole JS context and re-installs anyway).

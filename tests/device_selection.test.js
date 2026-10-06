@@ -17,12 +17,16 @@ const path = require('node:path');
 const REPO = path.resolve(__dirname, '..');
 const BS_ENV = require(path.join(REPO, 'event_envelope.js'));
 const BS_DEV = require(path.join(REPO, 'device_selection.js'));
+// 4.3: the recorder now also depends on capture_selection.js (the
+// recorder's handleSetSession announces the capture selection); the
+// merged namespace must include it for the recorder-channel tests.
+const BS_CAP = require(path.join(REPO, 'capture_selection.js'));
 const BS_REC = require(path.join(REPO, 'recorder.js'));
 
 // The Node test harness publishes the merged namespace on
 // globalThis (sender.js precedent): the recorder resolves
 // createDeviceSelector/createEvent/captureClockAnchor through shared().
-const BS = Object.assign({}, BS_ENV, BS_DEV, BS_REC);
+const BS = Object.assign({}, BS_ENV, BS_DEV, BS_CAP, BS_REC);
 globalThis.BlindfoldSession = BS;
 
 const SID = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa';
@@ -712,6 +716,23 @@ describe('AC8 — diff discipline', () => {
       // after the pins were evolved (2.x/3.x/4.1 precedent).
       '.autodev/evidence/4.2.review.md',
       '.autodev/evidence/4.2.behavior.md',
+      // Honest cumulative evolution: 4.3 (screen/tab capture selection
+      // and permission handling) legitimately adds capture_selection.js
+      // (offscreen side) + capture_broker.js (SW side), routes the four
+      // capture commands plus the three SW-leg broker messages, adds the
+      // tabCapture permission + host_permissions, and adds its tests +
+      // evidence; its files join the allowlists.
+      'capture_selection.js',
+      'capture_broker.js',
+      'tests/capture_selection.test.js',
+      'tests/capture_broker.test.js',
+      'tests/manifest_sw.test.js',
+      '.autodev/evidence/4.3.contract.md',
+      '.autodev/evidence/4.3.build.md',
+      // Honest cumulative evolution: 4.3's review/behavior evidence lands
+      // after the pins were evolved (2.x/3.x/4.1/4.2 precedent).
+      '.autodev/evidence/4.3.review.md',
+      '.autodev/evidence/4.3.behavior.md',
       '.autodev/DECISIONS.md',
       // Cumulative evolution: earlier suites' diff-discipline allowlists
       // are evolved by this task with justification comments.
@@ -728,7 +749,16 @@ describe('AC8 — diff discipline', () => {
       'tests/speech.test.js',
       'tests/status_indicator.test.js',
       'tests/visibility.test.js',
-      'tests/writer.test.js'
+      'tests/writer.test.js',
+      // Honest cumulative evolution: 4.3 legitimately modifies
+      // manifest.json (tabCapture + host_permissions), sw.js (capture
+      // broker import), recorder.html (capture_selection.js script tag),
+      // and recording_host.js (SW-leg broker routing) per its contract;
+      // these join the allowlists.
+      'manifest.json',
+      'sw.js',
+      'recorder.html',
+      'recording_host.js'
     ]);
     for (const f of changed) {
       assert.ok(allowed.has(f), `unexpected modified file: ${f}`);
@@ -757,9 +787,16 @@ describe('AC8 — diff discipline', () => {
     }
   });
 
-  it('manifest.json is unmodified by 4.2', () => {
-    const diff = execSync('git diff HEAD -- manifest.json', { cwd: REPO }).toString().trim();
-    assert.equal(diff, '', 'no manifest changes in 4.2');
+  it('manifest.json delta is exactly the 4.3 contract change (4.2 made none)', () => {
+    // Honest cumulative evolution: 4.2's contract required NO manifest
+    // change; 4.3's contract REQUIRES "tabCapture" + host_permissions
+    // ["https://www.chess.com/*"]. The durable assertion pins the delta
+    // to exactly 4.3's change — 4.2's contribution remains zero.
+    const manifest = JSON.parse(fs.readFileSync(path.join(REPO, 'manifest.json'), 'utf8'));
+    assert.deepStrictEqual(manifest.permissions, ['offscreen', 'tabCapture']);
+    assert.deepStrictEqual(manifest.host_permissions, ['https://www.chess.com/*']);
+    const diff = execSync('git diff HEAD -- manifest.json', { cwd: REPO }).toString();
+    assert.ok(!/content_security_policy/.test(diff), 'no CSP change');
   });
 
   it('content scripts are byte-identical (no media APIs leak into gameplay)', () => {

@@ -675,16 +675,17 @@ describe('AC10 — listener installation and adapter', () => {
 // AC11: diff discipline.
 // ------------------------------------------------------------------
 describe('AC11 — diff discipline', () => {
-  it('sw.js: importScripts line + install calls + header update only (4.1 cumulative)', () => {
+  it('sw.js: importScripts line + install calls + header update only (4.3 cumulative)', () => {
     // 2.6 legitimately extended the importScripts line per its contract
     // (session-state storage primitives); 2.7 legitimately extends it per
     // its contract (lifecycle detector); 4.1 legitimately extends it per
-    // its contract (recording-context supervisor + two startup lines).
-    // Cumulative invariant: exactly one importScripts call, exactly one
-    // installWriterListener call, and the completed tasks removed from the
-    // absent list.
+    // its contract (recording-context supervisor + two startup lines);
+    // 4.3 legitimately extends it per its contract (SW-side capture
+    // broker). Cumulative invariant: exactly one importScripts call,
+    // exactly one installWriterListener call, and the completed tasks
+    // removed from the absent list.
     const sw = fs.readFileSync(path.join(ROOT, 'sw.js'), 'utf8');
-    assert.ok(sw.includes("importScripts('db.js', 'event_envelope.js', 'writer.js', 'session_identity.js', 'session_conditions.js', 'session_store.js', 'lifecycle.js', 'recording_host.js');"),
+    assert.ok(sw.includes("importScripts('db.js', 'event_envelope.js', 'writer.js', 'session_identity.js', 'session_conditions.js', 'session_store.js', 'lifecycle.js', 'capture_broker.js', 'recording_host.js');"),
       'importScripts line');
     assert.ok(sw.includes('BlindfoldSession.writerListener = BlindfoldSession.installWriterListener();'),
       'install call with lifecycle handle');
@@ -704,17 +705,21 @@ describe('AC11 — diff discipline', () => {
     assert.equal((codeStripped.match(/installWriterListener\s*\(/g) || []).length, 1);
   });
 
-  it('manifest.json differs from HEAD only in the js list and the 4.1 permissions (cumulative)', () => {
+  it('manifest.json differs from HEAD only in the js list and the 4.1/4.3 permissions (cumulative)', () => {
     // Honest cumulative evolution: 2.7 legitimately inserts lifecycle.js
     // after sender.js per its contract; 4.1 legitimately adds
-    // "permissions": ["offscreen"] per its contract. The cumulative
-    // invariant is that nothing else in the manifest changed.
+    // "permissions": ["offscreen"] per its contract; 4.3 legitimately
+    // extends it with "tabCapture" and adds host_permissions per its
+    // contract. The cumulative invariant is that nothing else in the
+    // manifest changed.
     const headManifest = JSON.parse(execSync('git show HEAD:manifest.json', { cwd: ROOT }).toString());
     const current = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8'));
     headManifest.content_scripts[0].js = current.content_scripts[0].js;
     headManifest.permissions = current.permissions;
+    headManifest.host_permissions = current.host_permissions;
     assert.deepEqual(current, headManifest, 'manifest changed beyond the js list + permissions');
-    assert.deepStrictEqual(current.permissions, ['offscreen']);
+    assert.deepStrictEqual(current.permissions, ['offscreen', 'tabCapture']);
+    assert.deepStrictEqual(current.host_permissions, ['https://www.chess.com/*']);
   });
 
   it('no other repo files modified (git status allowlist)', () => {
@@ -750,6 +755,23 @@ describe('AC11 — diff discipline', () => {
       // after the pins were evolved (2.x/3.x/4.1 precedent).
       '.autodev/evidence/4.2.review.md',
       '.autodev/evidence/4.2.behavior.md',
+      // Honest cumulative evolution: 4.3 (screen/tab capture selection
+      // and permission handling) legitimately adds capture_selection.js
+      // (offscreen side) + capture_broker.js (SW side), routes the four
+      // capture commands plus the three SW-leg broker messages, adds the
+      // tabCapture permission + host_permissions, and adds its tests +
+      // evidence; its files join the allowlists.
+      'capture_selection.js',
+      'capture_broker.js',
+      'tests/capture_selection.test.js',
+      'tests/capture_broker.test.js',
+      'tests/manifest_sw.test.js',
+      '.autodev/evidence/4.3.contract.md',
+      '.autodev/evidence/4.3.build.md',
+      // Honest cumulative evolution: 4.3's review/behavior evidence lands
+      // after the pins were evolved (2.x/3.x/4.1/4.2 precedent).
+      '.autodev/evidence/4.3.review.md',
+      '.autodev/evidence/4.3.behavior.md',
       'sw.js',
       'writer.js',
       'tests/writer.test.js',

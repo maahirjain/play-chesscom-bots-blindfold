@@ -525,10 +525,11 @@ describe('AC9 — diff discipline', () => {
     // 2.7 legitimately appends lifecycle.js to the importScripts line per
     // its contract (SW-side discontinuity detection); 4.1 legitimately
     // appends recording_host.js plus the two recordingHost startup lines
-    // per its contract (recording-context supervision).
+    // per its contract (recording-context supervision); 4.3 legitimately
+    // appends capture_broker.js per its contract (SW-side capture broker).
     assert.deepEqual(lines, [
       "'use strict';",
-      "importScripts('db.js', 'event_envelope.js', 'writer.js', 'session_identity.js', 'session_conditions.js', 'session_store.js', 'lifecycle.js', 'recording_host.js');",
+      "importScripts('db.js', 'event_envelope.js', 'writer.js', 'session_identity.js', 'session_conditions.js', 'session_store.js', 'lifecycle.js', 'capture_broker.js', 'recording_host.js');",
       'BlindfoldSession.writerListener = BlindfoldSession.installWriterListener();',
       'BlindfoldSession.recordingHost = BlindfoldSession.createRecordingHost(globalThis.chrome || {});',
       'BlindfoldSession.recordingHost.start();'
@@ -549,12 +550,14 @@ describe('AC9 — diff discipline', () => {
     // 2.8 contract AC10 documented in 2.8.build.md — the module cannot load
     // in the content script without the manifest entry); 4.1 legitimately
     // adds "permissions": ["offscreen"] per its contract (pinned in
-    // tests/recording_host.test.js AC2).
+    // tests/recording_host.test.js AC2); 4.3 legitimately extends it with
+    // "tabCapture" and adds host_permissions per its contract.
     const headManifest = JSON.parse(
       execSync('git show HEAD:manifest.json', { cwd: ROOT, stdio: 'pipe' }).toString());
     const current = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8'));
     headManifest.content_scripts[0].js = current.content_scripts[0].js;
     headManifest.permissions = current.permissions;
+    headManifest.host_permissions = current.host_permissions;
     assert.deepEqual(current, headManifest, 'manifest changed beyond the js list + permissions');
     assert.deepEqual(current.content_scripts[0].js, [
       'event_envelope.js', 'sender.js', 'lifecycle.js', 'status_indicator.js',
@@ -626,6 +629,23 @@ describe('AC9 — diff discipline', () => {
       // after the pins were evolved (2.x/3.x/4.1 precedent).
       '.autodev/evidence/4.2.review.md',
       '.autodev/evidence/4.2.behavior.md',
+      // Honest cumulative evolution: 4.3 (screen/tab capture selection
+      // and permission handling) legitimately adds capture_selection.js
+      // (offscreen side) + capture_broker.js (SW side), routes the four
+      // capture commands plus the three SW-leg broker messages, adds the
+      // tabCapture permission + host_permissions, and adds its tests +
+      // evidence; its files join the allowlists.
+      'capture_selection.js',
+      'capture_broker.js',
+      'tests/capture_selection.test.js',
+      'tests/capture_broker.test.js',
+      'tests/manifest_sw.test.js',
+      '.autodev/evidence/4.3.contract.md',
+      '.autodev/evidence/4.3.build.md',
+      // Honest cumulative evolution: 4.3's review/behavior evidence lands
+      // after the pins were evolved (2.x/3.x/4.1/4.2 precedent).
+      '.autodev/evidence/4.3.review.md',
+      '.autodev/evidence/4.3.behavior.md',
       'sw.js',
       'session_store.js',
       'session_identity.js',

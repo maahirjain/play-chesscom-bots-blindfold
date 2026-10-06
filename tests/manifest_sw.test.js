@@ -36,21 +36,24 @@ describe('AC1 — manifest entry', () => {
 
   it('no other top-level manifest keys were added', () => {
     // Honest cumulative evolution: 4.1 legitimately adds the "permissions"
-    // key (exactly ["offscreen"]) per its contract. The cumulative
-    // invariant: no other top-level keys beyond the original six plus
-    // "permissions".
+    // key (exactly ["offscreen"]) per its contract, and 4.3 legitimately
+    // adds "host_permissions" (exactly ["https://www.chess.com/*"]) per its
+    // contract. The cumulative invariant: no other top-level keys beyond
+    // the original six plus "permissions" plus "host_permissions".
     assert.deepStrictEqual(
       Object.keys(manifest).sort(),
       ['background', 'content_scripts', 'manifest_version', 'name', 'version',
-       'web_accessible_resources', 'permissions'].sort()
+       'web_accessible_resources', 'permissions', 'host_permissions'].sort()
     );
   });
 
-  it('permissions is exactly ["offscreen"]; no host_permissions/CSP; version unchanged', () => {
+  it('permissions is ["offscreen", "tabCapture"]; host_permissions is the game origin; version unchanged', () => {
     // Honest cumulative evolution: 4.1 adds the "offscreen" permission for
-    // the dedicated recording context (PLAN.md §4.1). Nothing else.
-    assert.deepStrictEqual(manifest.permissions, ['offscreen']);
-    assert.ok(!('host_permissions' in manifest));
+    // the dedicated recording context (PLAN.md §4.1); 4.3 adds
+    // "tabCapture" plus host_permissions for the chess.com game tab
+    // (PLAN.md §4.3). Nothing else.
+    assert.deepStrictEqual(manifest.permissions, ['offscreen', 'tabCapture']);
+    assert.deepStrictEqual(manifest.host_permissions, ['https://www.chess.com/*']);
     assert.ok(!('content_security_policy' in manifest));
     assert.strictEqual(manifest.version, '1.0.0');
   });
@@ -86,29 +89,32 @@ describe('AC3 — sw.js functional code is exactly the db.js import', () => {
   const swRaw = fs.readFileSync(path.join(REPO, 'sw.js'), 'utf8');
   const codeOnly = stripComments(swRaw);
 
-  it('stripped of comments, functional code is the 4.1 wiring (cumulative)', () => {
+  it('stripped of comments, functional code is the 4.3 wiring (cumulative)', () => {
     // 2.1 pinned the comment-only stub; 2.2 added the db.js import; 2.4
     // legitimately added the writer intake per its contract; 2.6
     // legitimately added the session-state storage primitives per its
     // contract; 2.7 legitimately added the lifecycle detector per its
     // contract; 4.1 legitimately adds the recording-context supervisor
-    // (recording_host.js) plus its two startup lines per its contract.
-    // Cumulative invariant: exactly these five functional lines.
+    // (recording_host.js) plus its two startup lines per its contract;
+    // 4.3 legitimately adds the SW-side capture broker (capture_broker.js)
+    // per its contract (the chrome.* split: the offscreen document cannot
+    // call chrome.tabCapture). Cumulative invariant: exactly these five
+    // functional lines.
     const lines = codeOnly.split('\n').map(l => l.trim()).filter(l => l.length > 0);
     assert.deepStrictEqual(lines, [
       "'use strict';",
-      "importScripts('db.js', 'event_envelope.js', 'writer.js', 'session_identity.js', 'session_conditions.js', 'session_store.js', 'lifecycle.js', 'recording_host.js');",
+      "importScripts('db.js', 'event_envelope.js', 'writer.js', 'session_identity.js', 'session_conditions.js', 'session_store.js', 'lifecycle.js', 'capture_broker.js', 'recording_host.js');",
       'BlindfoldSession.writerListener = BlindfoldSession.installWriterListener();',
       'BlindfoldSession.recordingHost = BlindfoldSession.createRecordingHost(globalThis.chrome || {});',
       'BlindfoldSession.recordingHost.start();'
     ]);
   });
 
-  it('exactly one importScripts call, importing the 4.1 module set', () => {
+  it('exactly one importScripts call, importing the 4.3 module set', () => {
     const calls = codeOnly.match(/importScripts\s*\(/g) || [];
     assert.strictEqual(calls.length, 1, 'expected exactly one importScripts call');
-    assert.ok(codeOnly.includes("importScripts('db.js', 'event_envelope.js', 'writer.js', 'session_identity.js', 'session_conditions.js', 'session_store.js', 'lifecycle.js', 'recording_host.js')"),
-      'must import the storage layer, the event contract, the writer, the session-state modules, the lifecycle detector, and the recording-context supervisor');
+    assert.ok(codeOnly.includes("importScripts('db.js', 'event_envelope.js', 'writer.js', 'session_identity.js', 'session_conditions.js', 'session_store.js', 'lifecycle.js', 'capture_broker.js', 'recording_host.js')"),
+      'must import the storage layer, the event contract, the writer, the session-state modules, the lifecycle detector, the SW capture broker, and the recording-context supervisor');
   });
 
   const forbidden = [
@@ -145,13 +151,19 @@ describe('AC4/AC6 — diff is exactly the background block', () => {
   it('web_accessible_resources block byte-identical to HEAD (AC6, cumulative)', () => {
     // 2.1/2.2 pinned the whole tail from "content_scripts" onward; 2.3
     // legitimately extended the js list inside content_scripts per its
-    // contract (exact list pinned in tests/sender.test.js). The cumulative
-    // invariant: web_accessible_resources is untouched.
+    // contract (exact list pinned in tests/sender.test.js); 4.3
+    // legitimately appends "host_permissions": ["https://www.chess.com/*"]
+    // AFTER the web_accessible_resources block per its contract. The
+    // cumulative invariant: web_accessible_resources itself is untouched,
+    // and the tail is exactly that block plus the 4.3 host_permissions.
     const tailMarker = '"web_accessible_resources"';
+    const newTail = manifestRaw.slice(manifestRaw.indexOf(tailMarker));
+    const oldTail = oldRaw.slice(oldRaw.indexOf(tailMarker));
     assert.strictEqual(
-      manifestRaw.slice(manifestRaw.indexOf(tailMarker)),
-      oldRaw.slice(oldRaw.indexOf(tailMarker)),
-      'web_accessible_resources block changed'
+      newTail,
+      oldTail.slice(0, oldTail.lastIndexOf(']') + 1) +
+        ',\n    "host_permissions": ["https://www.chess.com/*"]\n}',
+      'tail changed beyond the 4.3 host_permissions addition'
     );
   });
 
@@ -159,9 +171,11 @@ describe('AC4/AC6 — diff is exactly the background block', () => {
     // 2.1 inserted the background block; 2.2's contract requires the manifest
     // to be byte-identical to HEAD (pinned in tests/db.test.js); 4.1
     // legitimately inserts the "permissions": ["offscreen"] block after
-    // background per its contract. The cumulative invariant: the head is
-    // exactly these five keys, so no other permissions/CSP/version changes
-    // can sneak in.
+    // background per its contract; 4.3 legitimately extends it to
+    // ["offscreen", "tabCapture"] per its contract (host_permissions is
+    // appended at the tail, pinned separately). The cumulative invariant:
+    // the head is exactly these five keys, so no other permissions/CSP/
+    // version changes can sneak in.
     const head = manifestRaw.slice(0, newContentIdx);
     assert.strictEqual(
       head,
@@ -172,7 +186,7 @@ describe('AC4/AC6 — diff is exactly the background block', () => {
       '    "background": {\n' +
       '        "service_worker": "sw.js"\n' +
       '    },\n' +
-      '    "permissions": ["offscreen"],\n' +
+      '    "permissions": ["offscreen", "tabCapture"],\n' +
       '    ',
       'manifest head changed beyond the background + permissions blocks'
     );

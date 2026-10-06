@@ -418,19 +418,23 @@ describe('AC7 — diff discipline (static)', () => {
     ]);
   });
 
-  it('manifest is otherwise meaning-identical to HEAD (js list + 4.1 permissions only)', () => {
+  it('manifest is otherwise meaning-identical to HEAD (js list + 4.1/4.3 permissions only)', () => {
     // Honest cumulative evolution: 4.1 legitimately adds
     // "permissions": ["offscreen"] per its contract (pinned in
-    // tests/recording_host.test.js AC2). The cumulative invariant: the
-    // manifest differs from HEAD only in the js list and the permissions.
+    // tests/recording_host.test.js AC2); 4.3 legitimately extends it with
+    // "tabCapture" and adds host_permissions per its contract. The
+    // cumulative invariant: the manifest differs from HEAD only in the js
+    // list, the permissions, and host_permissions.
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
     const headManifest = JSON.parse(
       execSync('git show HEAD:manifest.json', { cwd: ROOT }).toString()
     );
     headManifest.content_scripts[0].js = manifest.content_scripts[0].js;
     headManifest.permissions = manifest.permissions;
+    headManifest.host_permissions = manifest.host_permissions;
     assert.deepEqual(manifest, headManifest);
-    assert.deepStrictEqual(manifest.permissions, ['offscreen']);
+    assert.deepStrictEqual(manifest.permissions, ['offscreen', 'tabCapture']);
+    assert.deepStrictEqual(manifest.host_permissions, ['https://www.chess.com/*']);
   });
 
   it('content.js still carries exactly the one sender-instantiation line (cumulative)', () => {
@@ -747,6 +751,23 @@ describe('2.5 retry policy', () => {
       // after the pins were evolved (2.x/3.x/4.1 precedent).
       '.autodev/evidence/4.2.review.md',
       '.autodev/evidence/4.2.behavior.md',
+      // Honest cumulative evolution: 4.3 (screen/tab capture selection
+      // and permission handling) legitimately adds capture_selection.js
+      // (offscreen side) + capture_broker.js (SW side), routes the four
+      // capture commands plus the three SW-leg broker messages, adds the
+      // tabCapture permission + host_permissions, and adds its tests +
+      // evidence; its files join the allowlists.
+      'capture_selection.js',
+      'capture_broker.js',
+      'tests/capture_selection.test.js',
+      'tests/capture_broker.test.js',
+      'tests/manifest_sw.test.js',
+      '.autodev/evidence/4.3.contract.md',
+      '.autodev/evidence/4.3.build.md',
+      // Honest cumulative evolution: 4.3's review/behavior evidence lands
+      // after the pins were evolved (2.x/3.x/4.1/4.2 precedent).
+      '.autodev/evidence/4.3.review.md',
+      '.autodev/evidence/4.3.behavior.md',
       'sender.js',
       'tests/sender.test.js',
       '.autodev/evidence/2.5.contract.md',

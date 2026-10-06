@@ -102,6 +102,23 @@ var BlindfoldSession = BlindfoldSession || {};
     var createDocumentCalls = 0;
     var ensureCalls = 0;
 
+    // 4.3: the SW-side capture broker (capture_broker.js). Owns every
+    // chrome.* call the offscreen capture selector needs (tabs.query,
+    // permissions.contains, tabCapture.getMediaStreamId); the SW never
+    // touches a MediaStream. Null when capture_broker.js is not loaded
+    // (the broker is optional in Node tests of the 4.1 surface).
+    var captureBroker = (function () {
+      var BS = shared();
+      if (BS && typeof BS.createCaptureBroker === 'function') {
+        try {
+          return BS.createCaptureBroker(chromeNs);
+        } catch (e) {
+          return null;
+        }
+      }
+      return null;
+    })();
+
     function offscreenNs() {
       return chromeNs.offscreen || null;
     }
@@ -311,7 +328,50 @@ var BlindfoldSession = BlindfoldSession || {};
         }
         return false; // announcement needs no ack
       }
+      // 4.3 SW-leg: the offscreen capture selector's broker client asks
+      // the SW for chrome.* results. Each answers asynchronously with
+      // plain data ({ok:true,...} or {ok:false, error}); a missing
+      // broker or a throwing broker call becomes data, never a thrown
+      // listener error (3.2 SF-1 precedent).
+      if (message.msg === 'capture-resolve-tab' ||
+          message.msg === 'capture-query-permission' ||
+          message.msg === 'capture-get-stream-id') {
+        return handleCaptureBrokerMessage(message, sendResponse);
+      }
       return false; // unknown msg: ignore, no response
+    }
+
+    function handleCaptureBrokerMessage(message, sendResponse) {
+      function answer(promise) {
+        Promise.resolve(promise).then(function (result) {
+          try {
+            sendResponse(isPlainObject(result) ? result :
+                         { ok: false, error: 'internal-error' });
+          } catch (e) { /* channel closed; nothing more to do */ }
+        }, function (err) {
+          try {
+            sendResponse({ ok: false,
+                           error: (err && err.message) || 'internal-error' });
+          } catch (e) { /* channel closed; nothing more to do */ }
+        });
+        return true; // async sendResponse
+      }
+      if (!captureBroker) {
+        try {
+          sendResponse({ ok: false, error: 'broker-unavailable' });
+        } catch (e) { /* channel closed; nothing more to do */ }
+        return false;
+      }
+      if (message.msg === 'capture-resolve-tab') {
+        return answer(captureBroker.resolveTargetTab());
+      }
+      if (message.msg === 'capture-query-permission') {
+        return answer(captureBroker.queryCapturePermission());
+      }
+      if (message.msg === 'capture-get-stream-id') {
+        return answer(captureBroker.getStreamId(message.tabId));
+      }
+      return false;
     }
 
     function installRecorderListener() {
@@ -354,6 +414,8 @@ var BlindfoldSession = BlindfoldSession || {};
       onRuntimeMessage: onRuntimeMessage,
       start: start,
       getLastKnownBootId: function () { return lastKnownBootId; },
+      // 4.3 surface (Node tests drive the broker directly).
+      getCaptureBroker: function () { return captureBroker; },
       stats: function () {
         return {
           ensureCalls: ensureCalls,

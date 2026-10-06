@@ -1,9 +1,11 @@
 <!DOCTYPE html>
-<!-- recorder.html — task 4.1 (PLAN.md §4.1) + task 4.2 (PLAN.md §4.2).
+<!-- recorder.html — task 4.1 (PLAN.md §4.1) + task 4.2 (PLAN.md §4.2) +
+     task 4.3 (PLAN.md §4.3).
      MV3 offscreen document: the extension's dedicated recording context.
-     Loads event_envelope.js (envelope construction for the 4.2 events),
-     device_selection.js (4.2 microphone selection/permission), then
-     recorder.js. Created by the service worker via
+     Loads event_envelope.js (envelope construction for the 4.2/4.3
+     events), device_selection.js (4.2 microphone selection/permission),
+     capture_selection.js (4.3 screen/tab capture selection/permission),
+     then recorder.js. Created by the service worker via
      chrome.offscreen.createDocument(); never opened by the user. -->
 <html>
 <head>
@@ -13,6 +15,7 @@
 <body>
   <script src="event_envelope.js"></script>
   <script src="device_selection.js"></script>
+  <script src="capture_selection.js"></script>
   <script src="recorder.js"></script>
 </body>
 </html>

@@ -41,6 +41,18 @@
 //                    → { ok, permissionState, errorName }
 //   SW → offscreen : 'mic-get-state' {}
 //                    → { ok, selection, permissionState, devicesEnumeratedAt }
+//   4.3 (PLAN.md §4.3): screen/tab capture selection and permission
+//   handling. The recorder instantiates capture_selection.js's
+//   createCaptureSelector (deliberately NOT the 4.2 device factory —
+//   getDisplayMedia has no stable deviceId) and routes four new
+//   recorder-channel messages to it. The selector is purely reactive —
+//   §5's UI drives it. The SW-side chrome.* calls (tabs.query,
+//   permissions.contains, tabCapture.getMediaStreamId) live in
+//   capture_broker.js; the recorder reaches them through a broker client
+//   that sends 'capture-resolve-tab' / 'capture-query-permission' /
+//   'capture-get-stream-id' to the SW on this same channel (recording_host
+//   .js routes them). The streamId travels SW → recorder as a request
+//   field, is never persisted, and is single-use.
 // Command responses are plain {ok,...} objects (no envelope) — the
 // request's sendMessage promise correlates them.
 // 'recorder-pong'.nowMonotonicMs is a performance.now() reading — the hook
@@ -77,6 +89,16 @@ var BlindfoldSession = BlindfoldSession || {};
   var MSG_MIC_SELECT = 'mic-select';
   var MSG_MIC_PERMISSION = 'mic-request-permission';
   var MSG_MIC_STATE = 'mic-get-state';
+  // 4.3 capture-selection commands (§5 drives these).
+  var MSG_CAPTURE_LIST = 'capture-list-modes';
+  var MSG_CAPTURE_SELECT = 'capture-select';
+  var MSG_CAPTURE_PERMISSION = 'capture-request-permission';
+  var MSG_CAPTURE_STATE = 'capture-get-state';
+  // 4.3 SW-leg messages: the recorder's broker client → SW
+  // (recording_host.js routes them to capture_broker.js). Same envelope.
+  var MSG_CAPTURE_RESOLVE_TAB = 'capture-resolve-tab';
+  var MSG_CAPTURE_QUERY_PERMISSION = 'capture-query-permission';
+  var MSG_CAPTURE_GET_STREAM_ID = 'capture-get-stream-id';
 
   // Source context stamped on every event this document emits (1.3's
   // SOURCE_CONTEXTS already includes 'recording_context').
@@ -161,6 +183,14 @@ var BlindfoldSession = BlindfoldSession || {};
   //                absent, the real createDeviceSelector({kind:'audioinput'})
   //                is constructed (Node tests inject a fake to test
   //                routing in isolation).
+  //   captureSelector — optional injected capture selector (4.3). When
+  //                absent, the real createCaptureSelector() is constructed
+  //                (Node tests inject a fake to test routing in isolation).
+  //   broker       — optional injected SW-broker client for the capture
+  //                selector (4.3). When absent, createBrokerClient() builds
+  //                the sendMessage round-trip client (Node tests inject a
+  //                fake; production recorder.html always has
+  //                chrome.runtime).
   //   mediaDevices / storage / permissions — optional pass-throughs for
   //                the internally constructed selector (4.2 testability;
   //                the selector's own read*() fallbacks apply when
@@ -277,6 +307,12 @@ var BlindfoldSession = BlindfoldSession || {};
           message.msg === MSG_MIC_PERMISSION ||
           message.msg === MSG_MIC_STATE) {
         return handleMicCommand(message, sendResponse);
+      }
+      if (message.msg === MSG_CAPTURE_LIST ||
+          message.msg === MSG_CAPTURE_SELECT ||
+          message.msg === MSG_CAPTURE_PERMISSION ||
+          message.msg === MSG_CAPTURE_STATE) {
+        return handleCaptureCommand(message, sendResponse);
       }
       return false; // unknown msg: ignore, no response
     }
@@ -472,20 +508,144 @@ var BlindfoldSession = BlindfoldSession || {};
       return micSelector;
     }
 
+    // ----------------------------------------------------------------
+    // 4.3: the screen/tab capture selector (purely reactive; §5 drives it).
+    // ----------------------------------------------------------------
+
+    // The SW-side broker client: sends the SW-leg messages on this same
+    // recorder channel and returns the SW's answers as promises. The SW
+    // (recording_host.js → capture_broker.js) owns every chrome.* call;
+    // this document only ever sees the opaque streamId string.
+    function createBrokerClient() {
+      var runtime = runtimeOf();
+      function call(msg, fields) {
+        return new Promise(function (resolve, reject) {
+          if (!runtime || typeof runtime.sendMessage !== 'function') {
+            reject(new Error('recorder: the SW capture broker is unreachable'));
+            return;
+          }
+          var envelope = { kind: RECORDER_MSG_KIND, msg: msg,
+                           v: RECORDER_PROTOCOL_V };
+          for (var k in fields) {
+            if (Object.prototype.hasOwnProperty.call(fields, k)) {
+              envelope[k] = fields[k];
+            }
+          }
+          var sent;
+          try {
+            sent = runtime.sendMessage(envelope);
+          } catch (e) {
+            reject(e);
+            return;
+          }
+          Promise.resolve(sent).then(resolve, reject);
+        });
+      }
+      return {
+        resolveTargetTab: function () {
+          return call(MSG_CAPTURE_RESOLVE_TAB, {});
+        },
+        queryCapturePermission: function () {
+          return call(MSG_CAPTURE_QUERY_PERMISSION, {});
+        },
+        getStreamId: function (tabId) {
+          return call(MSG_CAPTURE_GET_STREAM_ID, { tabId: tabId });
+        }
+      };
+    }
+
+    var captureSelector = null;
+    function getCaptureSelector() {
+      if (captureSelector === null) {
+        var BS = shared();
+        if (typeof BS.createCaptureSelector !== 'function') {
+          throw new Error('recorder: createCaptureSelector is unavailable');
+        }
+        if (o.captureSelector !== undefined && o.captureSelector !== null) {
+          captureSelector = o.captureSelector;
+        } else {
+          captureSelector = BS.createCaptureSelector({
+            mediaDevices: o.mediaDevices,
+            storage: o.storage !== undefined ? o.storage : createLocalStorageAdapter(),
+            broker: o.broker !== undefined ? o.broker : createBrokerClient(),
+            nowUtcIso: o.selectorClock,
+            emitEvent: emitRecorderEvent,
+            getSessionId: function () { return sessionId; },
+            getGameId: function () { return gameId; }
+          });
+        }
+      }
+      return captureSelector;
+    }
+
+    function handleCaptureCommand(message, sendResponse) {
+      var sel;
+      try {
+        sel = getCaptureSelector();
+      } catch (e) {
+        try {
+          sendResponse(toCaptureChannelError(e));
+        } catch (w) { /* ignore */ }
+        return false;
+      }
+      // Deferred inside the promise: a synchronously-throwing selector
+      // becomes a rejection, which respondAsync converts to {ok:false} —
+      // the listener never throws (3.2 SF-1 precedent).
+      function deferred(fn) {
+        return respondAsync(Promise.resolve().then(fn), sendResponse,
+                            toCaptureChannelError);
+      }
+      if (message.msg === MSG_CAPTURE_LIST) {
+        return deferred(function () { return sel.listModes(); });
+      }
+      if (message.msg === MSG_CAPTURE_SELECT) {
+        if (message.captureMode !== 'tab' && message.captureMode !== 'screen') {
+          try {
+            sendResponse({ ok: false, error: 'unknown-mode' });
+          } catch (e) { /* ignore */ }
+          return false;
+        }
+        return deferred(function () { return sel.select(message.captureMode); });
+      }
+      if (message.msg === MSG_CAPTURE_PERMISSION) {
+        if (message.captureMode !== 'tab' && message.captureMode !== 'screen') {
+          try {
+            sendResponse({ ok: false, error: 'unknown-mode' });
+          } catch (e) { /* ignore */ }
+          return false;
+        }
+        return deferred(function () { return sel.requestPermission(message.captureMode); });
+      }
+      if (message.msg === MSG_CAPTURE_STATE) {
+        return deferred(function () { return sel.getState(); });
+      }
+      return false; // unknown msg: ignore, no response (4.1 behavior)
+    }
+
     // Best-effort boot restore of the persisted mic selection (silent
     // when inert — no session exists yet at boot). Never throws; the
     // recorder's liveness must not depend on storage.
     function restoreDevices() {
+      var p = null;
       try {
         var sel = getMicSelector();
-        var p = sel.restoreOnBoot();
+        p = sel.restoreOnBoot();
         if (p && typeof p.catch === 'function') {
           p.catch(function () { /* boot restore is best-effort */ });
         }
-        return p;
-      } catch (e) {
-        return null;
-      }
+      } catch (e) { /* mic restore must not block the capture restore */ }
+      // 4.3: the persisted capture mode restores the same way.
+      try {
+        var csel = getCaptureSelector();
+        var cp = csel.restoreOnBoot();
+        if (cp && typeof cp.catch === 'function') {
+          cp.catch(function () { /* boot restore is best-effort */ });
+        }
+        if (p === null) {
+          p = cp;
+        }
+      } catch (e) { /* capture restore must not wedge the recorder */ }
+      return p;
     }
 
     // Map a handler failure to channel data (3.2 SF-1: never throw
@@ -493,8 +653,17 @@ var BlindfoldSession = BlindfoldSession || {};
     // (the contract-pinned 'unknown-device'); TypeError means a malformed
     // request.
     function toChannelError(err) {
+      return toChannelErrorWith(err, 'unknown-device');
+    }
+
+    // 4.3: the capture channel maps RangeError to 'unknown-mode' instead.
+    function toCaptureChannelError(err) {
+      return toChannelErrorWith(err, 'unknown-mode');
+    }
+
+    function toChannelErrorWith(err, rangeErrorCode) {
       if (err instanceof RangeError) {
-        return { ok: false, error: 'unknown-device' };
+        return { ok: false, error: rangeErrorCode };
       }
       if (err instanceof TypeError) {
         return { ok: false, error: 'invalid-request' };
@@ -504,14 +673,17 @@ var BlindfoldSession = BlindfoldSession || {};
 
     // Drive a promise-returning handler and answer asynchronously.
     // Returns true (async sendResponse); every rejection becomes data.
-    function respondAsync(promise, sendResponse) {
+    // mapErr selects the channel's error vocabulary (4.2 mic vs 4.3
+    // capture).
+    function respondAsync(promise, sendResponse, mapErr) {
+      var toErr = (typeof mapErr === 'function') ? mapErr : toChannelError;
       Promise.resolve(promise).then(function (result) {
         try {
           sendResponse(isPlainObject(result) ? result : { ok: true, result: result });
         } catch (e) { /* channel closed; nothing more to do */ }
       }, function (err) {
         try {
-          sendResponse(toChannelError(err));
+          sendResponse(toErr(err));
         } catch (e) { /* channel closed; nothing more to do */ }
       });
       return true;
@@ -536,6 +708,15 @@ var BlindfoldSession = BlindfoldSession || {};
       if (isSessionActive()) {
         try {
           getMicSelector().announceSelectionForSession();
+        } catch (e) {
+          try {
+            sendResponse({ ok: false, error: 'internal-error' });
+          } catch (w) { /* ignore */ }
+          return false;
+        }
+        // 4.3: the capture-mode selection announces the same way.
+        try {
+          getCaptureSelector().announceSelectionForSession();
         } catch (e) {
           try {
             sendResponse({ ok: false, error: 'internal-error' });
@@ -598,6 +779,9 @@ var BlindfoldSession = BlindfoldSession || {};
       onRuntimeMessage: onRuntimeMessage,
       // 4.2 surface (Node tests drive these directly).
       getMicSelector: getMicSelector,
+      // 4.3 surface (Node tests drive these directly).
+      getCaptureSelector: getCaptureSelector,
+      createBrokerClient: createBrokerClient,
       restoreDevices: restoreDevices,
       getSession: function () { return { sessionId: sessionId, gameId: gameId }; }
     };
@@ -618,6 +802,13 @@ var BlindfoldSession = BlindfoldSession || {};
   BlindfoldSession.RECORDER_MSG_MIC_SELECT = MSG_MIC_SELECT;
   BlindfoldSession.RECORDER_MSG_MIC_PERMISSION = MSG_MIC_PERMISSION;
   BlindfoldSession.RECORDER_MSG_MIC_STATE = MSG_MIC_STATE;
+  BlindfoldSession.RECORDER_MSG_CAPTURE_LIST = MSG_CAPTURE_LIST;
+  BlindfoldSession.RECORDER_MSG_CAPTURE_SELECT = MSG_CAPTURE_SELECT;
+  BlindfoldSession.RECORDER_MSG_CAPTURE_PERMISSION = MSG_CAPTURE_PERMISSION;
+  BlindfoldSession.RECORDER_MSG_CAPTURE_STATE = MSG_CAPTURE_STATE;
+  BlindfoldSession.RECORDER_MSG_CAPTURE_RESOLVE_TAB = MSG_CAPTURE_RESOLVE_TAB;
+  BlindfoldSession.RECORDER_MSG_CAPTURE_QUERY_PERMISSION = MSG_CAPTURE_QUERY_PERMISSION;
+  BlindfoldSession.RECORDER_MSG_CAPTURE_GET_STREAM_ID = MSG_CAPTURE_GET_STREAM_ID;
   BlindfoldSession.RECORDER_SOURCE_CONTEXT = RECORDER_SOURCE_CONTEXT;
   BlindfoldSession.isRecorderMessage = isRecorderMessage;
   BlindfoldSession.createOffscreenRecorder = createOffscreenRecorder;

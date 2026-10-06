@@ -430,6 +430,103 @@ describe('recording_host.js — ping and listener', () => {
 });
 
 // ------------------------------------------------------------------
+// 4.3 — SW-leg capture broker routing ('capture-resolve-tab',
+// 'capture-query-permission', 'capture-get-stream-id').
+// ------------------------------------------------------------------
+describe('recording_host.js — 4.3 capture broker leg', () => {
+  const BS_BROKER = require(path.join(REPO, 'capture_broker.js'));
+
+  // The broker factory lives in capture_broker.js; in the SW both files
+  // share one global BlindfoldSession via importScripts. Reproduce that
+  // merge here (per-test, restored afterwards).
+  function makeHostWithBroker(chromeOpts) {
+    const merged = Object.assign({}, BS_BROKER, BS_HOST);
+    globalThis.BlindfoldSession = merged;
+    try {
+      const chromeNs = mockChromeWithCapture(chromeOpts);
+      const host = merged.createRecordingHost(chromeNs);
+      assert.strictEqual(host.installRecorderListener(), true);
+      assert.ok(host.getCaptureBroker() !== null, 'broker must exist');
+      const listener = chromeNs.listeners[0];
+      function send(msg) {
+        return new Promise((resolve) => {
+          const r = listener(Object.assign({ kind: 'recorder', v: 1 }, msg), {}, resolve);
+          if (r === false) {
+            resolve('sync-false');
+          }
+        });
+      }
+      return { host, send, chromeNs };
+    } finally {
+      delete globalThis.BlindfoldSession;
+    }
+  }
+
+  function mockChromeWithCapture(opts) {
+    const o = opts || {};
+    const base = mockChrome(o);
+    base.tabs = {
+      query: async () => (o.tabs || []).map((t) => Object.assign({}, t))
+    };
+    base.permissions = {
+      contains: async () => o.permissionGranted === undefined ? true : o.permissionGranted
+    };
+    base.tabCapture = {
+      getMediaStreamId: async (opts2) => {
+        base.state.streamIdFor = opts2.targetTabId;
+        return 'sw-leg-stream-id';
+      }
+    };
+    return base;
+  }
+
+  it('capture-resolve-tab returns the game tab through the SW', async () => {
+    const { send } = makeHostWithBroker({
+      tabs: [{ id: 9, title: 'Play Computer', lastAccessed: 5 }]
+    });
+    const res = await send({ msg: 'capture-resolve-tab' });
+    assert.deepEqual(res, { ok: true, tabId: 9, tabTitle: 'Play Computer' });
+  });
+
+  it('capture-query-permission reports the install-time permission', async () => {
+    const { send } = makeHostWithBroker({ permissionGranted: false });
+    const res = await send({ msg: 'capture-query-permission' });
+    assert.deepEqual(res, { ok: true, permissionState: 'denied' });
+  });
+
+  it('capture-get-stream-id mints a streamId for the target tab', async () => {
+    const { send, chromeNs } = makeHostWithBroker({});
+    const res = await send({ msg: 'capture-get-stream-id', tabId: 9 });
+    assert.deepEqual(res, { ok: true, streamId: 'sw-leg-stream-id' });
+    assert.strictEqual(chromeNs.state.streamIdFor, 9);
+  });
+
+  it('capture-get-stream-id with a bad tabId answers {ok:false}, never throws', async () => {
+    const { send } = makeHostWithBroker({});
+    const res = await send({ msg: 'capture-get-stream-id', tabId: 'nine' });
+    assert.equal(res.ok, false);
+  });
+
+  it('without the broker module the SW leg answers broker-unavailable', async () => {
+    // No globalThis merge: shared() is recording_host.js's own namespace,
+    // which has no createCaptureBroker — the 4.1-only surface.
+    const chromeNs = mockChrome({});
+    const host = BS_HOST.createRecordingHost(chromeNs);
+    assert.strictEqual(host.getCaptureBroker(), null);
+    host.installRecorderListener();
+    const listener = chromeNs.listeners[0];
+    const res = await new Promise((resolve) => {
+      const r = listener({ kind: 'recorder', v: 1, msg: 'capture-resolve-tab' },
+        {}, resolve);
+      if (r === false) {
+        resolve('sync-false');
+      }
+    });
+    assert.deepEqual(res, { ok: false, error: 'broker-unavailable' });
+  });
+});
+
+// ------------------------------------------------------------------
 // AC7 — recorder.js hosts no capture APIs.
 // ------------------------------------------------------------------
 describe('AC7 — no capture code in the 4.1 surface', () => {
@@ -463,25 +560,24 @@ describe('AC2 — manifest permission change', () => {
   const manifestRaw = fs.readFileSync(path.join(REPO, 'manifest.json'), 'utf8');
   const manifest = JSON.parse(manifestRaw);
 
-  it('permissions is exactly ["offscreen"]', () => {
-    assert.deepStrictEqual(manifest.permissions, ['offscreen']);
+  it('permissions is exactly ["offscreen", "tabCapture"]', () => {
+    // Honest cumulative evolution (4.3): PLAN.md §4.3 legitimately adds
+    // the "tabCapture" permission for programmatic game-tab capture (see
+    // 4.3.contract.md §2). Nothing else.
+    assert.deepStrictEqual(manifest.permissions, ['offscreen', 'tabCapture']);
   });
 
-  it('no other permission change vs the 4.1 parent commit', () => {
-    // Honest cumulative evolution (4.2): the 4.1-era "vs parent commit"
-    // comparison is stale now that HEAD is the 4.1 commit itself (which
-    // legitimately added "offscreen"). The durable 4.2 assertion is
-    // simpler and stronger: 4.2 makes NO manifest changes — permissions
-    // remain exactly ["offscreen"], no host_permissions. (Chrome needs no
-    // manifest permission for extension getUserMedia audio; the runtime
-    // prompt is the permission. The persisted mic selection lives in the
-    // offscreen document's localStorage — offscreen documents expose only
-    // chrome.runtime, so chrome.storage is unavailable there regardless
-    // of the manifest; see 4.2.build.md.)
-    assert.deepStrictEqual(manifest.permissions, ['offscreen']);
-    assert.ok(!('host_permissions' in manifest), 'no host_permissions');
-    const diff = execSync('git diff HEAD -- manifest.json', { cwd: REPO }).toString().trim();
-    assert.strictEqual(diff, '', '4.2 must not touch manifest.json');
+  it('the 4.3 manifest delta vs HEAD is exactly the contract-pinned change', () => {
+    // Honest cumulative evolution (4.3): the 4.2-era "no manifest change"
+    // assertion is superseded — 4.3's contract REQUIRES "tabCapture" +
+    // host_permissions ["https://www.chess.com/*"]. The durable assertion
+    // pins the delta to exactly that: no other manifest change.
+    assert.deepStrictEqual(manifest.permissions, ['offscreen', 'tabCapture']);
+    assert.deepStrictEqual(manifest.host_permissions, ['https://www.chess.com/*']);
+    const diff = execSync('git diff HEAD -- manifest.json', { cwd: REPO }).toString();
+    assert.ok(/tabCapture/.test(diff), 'delta includes the tabCapture permission');
+    assert.ok(/host_permissions/.test(diff), 'delta includes host_permissions');
+    assert.ok(!/content_security_policy/.test(diff), 'no CSP change');
   });
 });
 
@@ -529,6 +625,22 @@ describe('AC6 — diff discipline', () => {
       // after the pins were evolved (2.x/3.x/4.1 precedent).
       '.autodev/evidence/4.2.review.md',
       '.autodev/evidence/4.2.behavior.md',
+      // Honest cumulative evolution: 4.3 (screen/tab capture selection
+      // and permission handling) legitimately adds capture_selection.js
+      // (offscreen side) + capture_broker.js (SW side), routes the four
+      // capture commands plus the three SW-leg broker messages, adds the
+      // tabCapture permission + host_permissions, and adds its tests +
+      // evidence; its files join the allowlists.
+      'capture_selection.js',
+      'capture_broker.js',
+      'tests/capture_selection.test.js',
+      'tests/capture_broker.test.js',
+      '.autodev/evidence/4.3.contract.md',
+      '.autodev/evidence/4.3.build.md',
+      // Honest cumulative evolution: 4.3's review/behavior evidence lands
+      // after the pins were evolved (2.x/3.x/4.1/4.2 precedent).
+      '.autodev/evidence/4.3.review.md',
+      '.autodev/evidence/4.3.behavior.md',
       '.autodev/DECISIONS.md',
       // Cumulative evolution: earlier suites' diff-discipline allowlists are
       // evolved by this task with justification comments.

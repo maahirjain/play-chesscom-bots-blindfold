@@ -86,9 +86,12 @@ describe('AC1 — no auto-deletion exists', () => {
     // fails loudly. The expected set is the union of manifest content-script
     // js + sw.js importScripts + sw.js itself, minus vendored chess.min.js.
     // (4.1 adds recording_host.js to the SW importScripts line per its
-    // contract; recorder.js/recorder.html are the offscreen document, not
-    // SW-loaded, so they are outside the retention-scan surface by design.)
+    // contract; 4.3 adds capture_broker.js per its contract;
+    // recorder.js/recorder.html/device_selection.js/capture_selection.js
+    // are the offscreen document, not SW-loaded, so they are outside the
+    // retention-scan surface by design.)
     assert.deepEqual(PRODUCT_FILES, [
+      'capture_broker.js',
       'chess_utils.js',
       'content.js',
       'db.js',
@@ -248,6 +251,23 @@ describe('AC4 — diff discipline', () => {
       // after the pins were evolved (2.x/3.x/4.1 precedent).
       '.autodev/evidence/4.2.review.md',
       '.autodev/evidence/4.2.behavior.md',
+      // Honest cumulative evolution: 4.3 (screen/tab capture selection
+      // and permission handling) legitimately adds capture_selection.js
+      // (offscreen side) + capture_broker.js (SW side), routes the four
+      // capture commands plus the three SW-leg broker messages, adds the
+      // tabCapture permission + host_permissions, and adds its tests +
+      // evidence; its files join the allowlists.
+      'capture_selection.js',
+      'capture_broker.js',
+      'tests/capture_selection.test.js',
+      'tests/capture_broker.test.js',
+      'tests/manifest_sw.test.js',
+      '.autodev/evidence/4.3.contract.md',
+      '.autodev/evidence/4.3.build.md',
+      // Honest cumulative evolution: 4.3's review/behavior evidence lands
+      // after the pins were evolved (2.x/3.x/4.1/4.2 precedent).
+      '.autodev/evidence/4.3.review.md',
+      '.autodev/evidence/4.3.behavior.md',
       'tests/retention.test.js',
       '.autodev/evidence/2.9.contract.md',
       '.autodev/evidence/2.9.build.md',
@@ -349,19 +369,27 @@ describe('AC4 — diff discipline', () => {
     // sounds.js (speech tracker + link threading) and content.js
     // (link threading + tracker install); 4.1 legitimately modifies
     // manifest.json (the "offscreen" permission) and sw.js (the
-    // recording-context supervisor wiring). All other product files must
-    // remain byte-identical — the retention guarantee. New files that do
-    // not exist at HEAD (4.1's recording_host.js) are skipped: they have no
-    // HEAD content to differ from, and their scan coverage comes from the
-    // deletion-primitive / TTL scans above.
+    // recording-context supervisor wiring); 4.2 legitimately modifies
+    // recorder.js/recorder.html (mic channel); 4.3 legitimately modifies
+    // manifest.json (tabCapture + host_permissions), sw.js (the capture
+    // broker import), recording_host.js (the SW-leg broker routing), and
+    // recorder.js/recorder.html (capture channel). All other product files
+    // must remain byte-identical — the retention guarantee. New files that
+    // do not exist at HEAD (4.1's recording_host.js, 4.2's
+    // device_selection.js, 4.3's capture_selection.js/capture_broker.js)
+    // are skipped: they have no HEAD content to differ from, and their
+    // scan coverage comes from the deletion-primitive / TTL scans above.
     const changedByTasks = new Set(['chess_utils.js', 'content.js',
                                     'manifest.json', 'sounds.js', 'sw.js',
-                                    'recording_host.js']);
+                                    'recording_host.js', 'recorder.js',
+                                    'recorder.html', 'device_selection.js',
+                                    'capture_selection.js',
+                                    'capture_broker.js']);
     for (const f of PRODUCT_FILES) {
       if (changedByTasks.has(f)) continue;
       const head = execSync(`git show HEAD:${f}`, { cwd: ROOT, stdio: 'pipe' }).toString();
       const current = fs.readFileSync(path.join(ROOT, f), 'utf8');
-      assert.strictEqual(current, head, `${f} changed but 3.1/3.4 must not touch it`);
+      assert.strictEqual(current, head, `${f} changed but 3.1/3.4/4.x must not touch it`);
     }
   });
 });

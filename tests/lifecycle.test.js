@@ -909,31 +909,34 @@ describe('AC15 — diff discipline', () => {
     ]);
   });
 
-  it('manifest is otherwise meaning-identical to HEAD (js list + 4.1 permissions only)', () => {
+  it('manifest is otherwise meaning-identical to HEAD (js list + 4.1/4.3 permissions only)', () => {
     // Honest cumulative evolution: 4.1 legitimately adds
     // "permissions": ["offscreen"] per its contract (pinned in
-    // tests/recording_host.test.js AC2).
+    // tests/recording_host.test.js AC2); 4.3 legitimately extends it with
+    // "tabCapture" and adds host_permissions per its contract.
     const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8'));
     const headManifest = JSON.parse(
       execSync('git show HEAD:manifest.json', { cwd: ROOT }).toString()
     );
     headManifest.content_scripts[0].js = manifest.content_scripts[0].js;
     headManifest.permissions = manifest.permissions;
+    headManifest.host_permissions = manifest.host_permissions;
     assert.deepEqual(manifest, headManifest);
   });
 
-  it('sw.js: importScripts carries lifecycle.js + recording_host.js + install calls intact (4.1 committed)', () => {
+  it('sw.js: importScripts carries lifecycle.js + capture_broker.js + recording_host.js + install calls intact (4.3)', () => {
     // Post-commit durable form of the 2.7 diff pin; 4.1 legitimately
     // extends the importScripts line (recording-context supervisor) and
-    // adds the two recordingHost startup lines per its contract. The
-    // working tree now equals HEAD, so assert the contracted content
-    // instead of the diff.
+    // adds the two recordingHost startup lines per its contract; 4.3
+    // legitimately adds the SW-side capture broker (capture_broker.js)
+    // per its contract. The working tree now equals HEAD, so assert the
+    // contracted content instead of the diff.
     const sw = fs.readFileSync(path.join(ROOT, 'sw.js'), 'utf8');
     const calls = (sw.match(/importScripts\s*\(/g) || []).length;
     assert.strictEqual(calls, 1, 'exactly one importScripts call');
     assert.ok(sw.includes(
       "importScripts('db.js', 'event_envelope.js', 'writer.js', " +
-      "'session_identity.js', 'session_conditions.js', 'session_store.js', 'lifecycle.js', 'recording_host.js');"
+      "'session_identity.js', 'session_conditions.js', 'session_store.js', 'lifecycle.js', 'capture_broker.js', 'recording_host.js');"
     ));
     assert.ok(!sw.includes('2.7: page/context start'),
       '2.7 must be removed from the absent list');
@@ -1021,6 +1024,23 @@ describe('AC15 — diff discipline', () => {
       // after the pins were evolved (2.x/3.x/4.1 precedent).
       '.autodev/evidence/4.2.review.md',
       '.autodev/evidence/4.2.behavior.md',
+      // Honest cumulative evolution: 4.3 (screen/tab capture selection
+      // and permission handling) legitimately adds capture_selection.js
+      // (offscreen side) + capture_broker.js (SW side), routes the four
+      // capture commands plus the three SW-leg broker messages, adds the
+      // tabCapture permission + host_permissions, and adds its tests +
+      // evidence; its files join the allowlists.
+      'capture_selection.js',
+      'capture_broker.js',
+      'tests/capture_selection.test.js',
+      'tests/capture_broker.test.js',
+      'tests/manifest_sw.test.js',
+      '.autodev/evidence/4.3.contract.md',
+      '.autodev/evidence/4.3.build.md',
+      // Honest cumulative evolution: 4.3's review/behavior evidence lands
+      // after the pins were evolved (2.x/3.x/4.1/4.2 precedent).
+      '.autodev/evidence/4.3.review.md',
+      '.autodev/evidence/4.3.behavior.md',
       // 2.7's own files:
       'lifecycle.js',
       'tests/lifecycle.test.js',
