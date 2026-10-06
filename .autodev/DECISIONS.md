@@ -160,3 +160,25 @@ Consequential engineering decisions with reasoning and evidence. Newest first.
       per-attempt closure-private. If the timeout mechanism is ever
       refactored (e.g. shared error instance), this must become a
       generation token. (2.5 review NOTE-3.)
+
+## 2.6 SF-1: writer fails honestly on corrupt sequence_state (was: silent renumber to 0)
+
+- **Decision:** `writer.js` seqReq.onsuccess now distinguishes absent
+  counter (new session → `next = 0`, legitimate) from present-but-malformed
+  counter (`nextAppendSeq` non-numeric/non-integer/negative, or
+  `rec.sessionId` mismatch → `fail()` with a `CorruptSequenceState`-named
+  error, producing ack `write-failed:CorruptSequenceState`).
+- **Why:** the 2.6 adversarial review (SF-1) found the old fallback
+  incoherent with 2.6's restore-side corruption honesty: the writer would
+  silently fork the append sequence (duplicate `appendSeq` values, silently
+  corrupted §6.2 ordering) while `restoreSessionState`/`getSequenceState`
+  threw on the same condition. Failing the write routes through the 2.5
+  retry path and gives 2.8 a stable machine-matchable code.
+- **Unreachable via mission code paths** (writer is sole writer, always
+  writes well-formed counters) — only external corruption (devtools,
+  foreign code, disk failure) can trigger it. Defense in depth, not a
+  live-path change.
+- **Test evolution:** 2 new writer tests (corrupt counter, sessionId
+  mismatch); session_store.test.js byte-identical pin for writer.js →
+  exact-diff pin for the repair; sender/session_store git-status
+  allowlists admit writer.js. All honest cumulative evolution.

@@ -167,6 +167,9 @@ var BlindfoldSession = BlindfoldSession || {};
   BlindfoldSession.normalizeProtocolVersion = normalizeProtocolVersion;
   BlindfoldSession.createSessionMetadata = createSessionMetadata;
   BlindfoldSession.addGameToSession = addGameToSession;
+  // Exported for task 2.6 (session_store.js save/restore validation).
+  // Additive only: no behavior change to this module.
+  BlindfoldSession.requireValidMetadata = requireValidMetadata;
 })();
 
 // Node test shim. Content-script and importScripts() consumers use the

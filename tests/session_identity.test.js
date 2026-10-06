@@ -47,7 +47,10 @@ describe('static module constraints (AC17, AC11, contract §3.1)', () => {
     const expected = [
       'SCHEMA_VERSION', 'SESSION_CATEGORIES', 'UUID_V4_RE',
       'newSessionId', 'newGameId', 'isUuidV4', 'isSessionCategory',
-      'normalizeProtocolVersion', 'createSessionMetadata', 'addGameToSession'
+      'normalizeProtocolVersion', 'createSessionMetadata', 'addGameToSession',
+      // Task 2.6 (PLAN §2.6) authorizes this additive export for
+      // session_store.js save/restore validation. No other additions.
+      'requireValidMetadata'
     ];
     assert.deepStrictEqual(Object.keys(BlindfoldSession).sort(), expected.sort());
   });

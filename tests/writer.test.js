@@ -453,6 +453,31 @@ describe('AC5 — appendSeq assignment and commit-awaited ack', () => {
     assert.equal(storedRecord(fake, EID2).appendSeq, 1);
     assert.deepStrictEqual(seqState(fake, SID1), { sessionId: SID1, nextAppendSeq: 2 });
   });
+
+  it('corrupt counter (non-numeric nextAppendSeq) fails the write honestly — no silent renumber (2.6 SF-1)', async () => {
+    const fake = installFakeIDB();
+    await BlindfoldSession.writeEvent(makeEnvelope({ eventId: EID1 }));
+    // Plant a corrupt counter directly (bypasses the writer, the sole writer —
+    // only external corruption can produce this state). Stores exist now that
+    // the DB has been opened once.
+    fake._stores.sequence_state.records.set(JSON.stringify(SID1), { sessionId: SID1, nextAppendSeq: 'abc' });
+    const ack = await BlindfoldSession.writeEvent(makeEnvelope({ eventId: EID2 }));
+    assert.equal(ack.ok, false, 'corrupt counter must fail the write');
+    assert.equal(ack.error, 'write-failed:CorruptSequenceState', 'stable corruption code');
+    assert.equal(fake._stores.events.records.size, 1, 'only the pre-corruption event stored');
+    assert.deepStrictEqual(seqState(fake, SID1), { sessionId: SID1, nextAppendSeq: 'abc' },
+      'corrupt record must not be overwritten or renumbered');
+  });
+
+  it('counter with mismatched sessionId fails the write honestly (2.6 SF-1)', async () => {
+    const fake = installFakeIDB();
+    await BlindfoldSession.writeEvent(makeEnvelope({ eventId: EID1 }));
+    fake._stores.sequence_state.records.set(JSON.stringify(SID1), { sessionId: SID2, nextAppendSeq: 5 });
+    const ack = await BlindfoldSession.writeEvent(makeEnvelope({ eventId: EID2 }));
+    assert.equal(ack.ok, false, 'sessionId-mismatched counter must fail the write');
+    assert.equal(ack.error, 'write-failed:CorruptSequenceState');
+    assert.equal(fake._stores.events.records.size, 1, 'only the pre-corruption event stored');
+  });
 });
 
 // ------------------------------------------------------------------
@@ -650,13 +675,18 @@ describe('AC10 — listener installation and adapter', () => {
 // AC11: diff discipline.
 // ------------------------------------------------------------------
 describe('AC11 — diff discipline', () => {
-  it('sw.js: importScripts line + install call + header update only', () => {
+  it('sw.js: importScripts line + install call + header update only (2.6 cumulative)', () => {
+    // 2.6 legitimately extends the importScripts line per its contract
+    // (session-state storage primitives). Cumulative invariant: exactly
+    // one importScripts call, exactly one installWriterListener call, and
+    // the 2.6 line removed from the absent list.
     const sw = fs.readFileSync(path.join(ROOT, 'sw.js'), 'utf8');
-    assert.ok(sw.includes("importScripts('db.js', 'event_envelope.js', 'writer.js');"),
+    assert.ok(sw.includes("importScripts('db.js', 'event_envelope.js', 'writer.js', 'session_identity.js', 'session_conditions.js', 'session_store.js');"),
       'importScripts line');
     assert.ok(sw.includes('BlindfoldSession.writerListener = BlindfoldSession.installWriterListener();'),
       'install call with lifecycle handle');
     assert.ok(!sw.includes('2.4:'), '2.4 line removed from the absent list');
+    assert.ok(!sw.includes('2.6:'), '2.6 line removed from the absent list');
     // No other functional surface: exactly one importScripts call, exactly
     // one installWriterListener call.
     const codeStripped = sw
@@ -699,7 +729,22 @@ describe('AC11 — diff discipline', () => {
       '.autodev/evidence/2.5.review.md',
       '.autodev/evidence/2.5.behavior.md',
       // 2.5 records its retry-policy findings in DECISIONS.md (contract §3.4).
-      '.autodev/DECISIONS.md'
+      '.autodev/DECISIONS.md',
+      // Honest cumulative evolution: task 2.6 legitimately extends sw.js
+      // (session-state storage primitives), adds the two 1.1/1.2 validator
+      // export lines, and extends the suites that pin those files; 2.6's
+      // own evidence lands after its builder ran.
+      'session_store.js',
+      'session_identity.js',
+      'session_conditions.js',
+      'tests/session_store.test.js',
+      'tests/session_identity.test.js',
+      'tests/event_envelope.test.js',
+      'tests/game_records.test.js',
+      '.autodev/evidence/2.6.contract.md',
+      '.autodev/evidence/2.6.build.md',
+      '.autodev/evidence/2.6.review.md',
+      '.autodev/evidence/2.6.behavior.md'
     ]);
     for (const f of changed) {
       assert.ok(allowed.has(f), `unexpected modified file: ${f}`);

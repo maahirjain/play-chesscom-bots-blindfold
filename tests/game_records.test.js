@@ -782,11 +782,28 @@ describe('game_ended — 1.4.5 (AC18, AC19)', () => {
 });
 
 describe('cross-cutting (AC21–AC23)', () => {
-  it('AC21: session_identity.js, session_conditions.js, event_envelope.js are byte-identical (git diff)', () => {
+  it('AC21: 1.1/1.2 diffs are only the 2.6 validator export lines; event_envelope.js byte-identical (git diff)', () => {
+    // Task 2.6 (PLAN §2.6) authorizes exactly one additive export line in
+    // each of session_identity.js / session_conditions.js
+    // (requireValidMetadata / requireValidConditions). event_envelope.js
+    // must remain byte-identical.
     execSync(
-      'git diff --exit-code -- session_identity.js session_conditions.js event_envelope.js',
+      'git diff --exit-code -- event_envelope.js',
       { cwd: REPO_ROOT, stdio: 'pipe' }
     );
+    const diff = execSync(
+      'git diff -- session_identity.js session_conditions.js',
+      { cwd: REPO_ROOT, stdio: 'pipe' }
+    ).toString();
+    const added = diff.split('\n').filter((l) => l.startsWith('+') && !l.startsWith('+++'));
+    assert.deepEqual(added, [
+      '+  // Exported for task 2.6 (session_store.js save/restore validation).',
+      '+  // Additive only: no behavior change to this module.',
+      '+  BlindfoldSession.requireValidConditions = requireValidConditions;',
+      '+  // Exported for task 2.6 (session_store.js save/restore validation).',
+      '+  // Additive only: no behavior change to this module.',
+      '+  BlindfoldSession.requireValidMetadata = requireValidMetadata;'
+    ]);
   });
 
   it('AC22: plain script — no import/export statements', () => {

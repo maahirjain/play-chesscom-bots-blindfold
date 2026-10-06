@@ -701,7 +701,7 @@ describe('2.5 retry policy', () => {
     assert.equal(s.getStatus().lastError, null);
   });
 
-  it('AC10: diff discipline — only sender.js, tests/sender.test.js (+2.5 evidence) differ', () => {
+  it('AC10: diff discipline — only sender.js, tests/sender.test.js (+2.5/2.6 evidence) differ', () => {
     const status = execSync('git status --porcelain', { cwd: ROOT }).toString();
     const changed = status.split('\n').filter((l) => l.trim()).map((l) => l.slice(3).trim());
     const allowed = new Set([
@@ -715,7 +715,27 @@ describe('2.5 retry policy', () => {
       // Honest cumulative evolution (2.2/2.3/2.4 precedent): 2.4's
       // git-status allowlist pins the file set, so 2.5's legitimate
       // sender.js change requires extending that allowlist.
-      'tests/writer.test.js'
+      'tests/writer.test.js',
+      // Honest cumulative evolution: task 2.6 legitimately extends sw.js
+      // (session-state storage primitives), adds the two 1.1/1.2 export
+      // lines, and extends the suites that pin those files.
+      // 2.6's SF-1 repair (adversarial review should-fix) legitimately
+      // touches writer.js: corrupt counter → honest write failure.
+      'writer.js',
+      'sw.js',
+      'session_store.js',
+      'session_identity.js',
+      'session_conditions.js',
+      'tests/session_store.test.js',
+      'tests/db.test.js',
+      'tests/manifest_sw.test.js',
+      'tests/session_identity.test.js',
+      'tests/event_envelope.test.js',
+      'tests/game_records.test.js',
+      '.autodev/evidence/2.6.contract.md',
+      '.autodev/evidence/2.6.build.md',
+      '.autodev/evidence/2.6.review.md',
+      '.autodev/evidence/2.6.behavior.md'
     ]);
     for (const f of changed) {
       assert.ok(allowed.has(f), `unexpected modified file: ${f}`);

@@ -293,6 +293,9 @@ var BlindfoldSession = BlindfoldSession || {};
   BlindfoldSession.createInitialConditions = createInitialConditions;
   BlindfoldSession.createConditionChange = createConditionChange;
   BlindfoldSession.applyConditionChange = applyConditionChange;
+  // Exported for task 2.6 (session_store.js save/restore validation).
+  // Additive only: no behavior change to this module.
+  BlindfoldSession.requireValidConditions = requireValidConditions;
 })();
 
 // Node test shim. Content-script and importScripts() consumers use the

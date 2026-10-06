@@ -283,9 +283,26 @@ var BlindfoldSession = BlindfoldSession || {};
         seqReq.onerror = function () { fail(seqReq.error); };
         seqReq.onsuccess = function () {
           var rec = seqReq.result;
-          var next = (rec && typeof rec.nextAppendSeq === 'number')
-            ? rec.nextAppendSeq
-            : 0;
+          var next;
+          if (rec === undefined || rec === null) {
+            next = 0; // new session: legitimate
+          } else if (typeof rec.nextAppendSeq === 'number' &&
+              Number.isInteger(rec.nextAppendSeq) &&
+              rec.nextAppendSeq >= 0 &&
+              rec.sessionId === sessionId) {
+            next = rec.nextAppendSeq;
+          } else {
+            // Corrupt counter: fail the write honestly (→ {ok:false} →
+            // 2.5 retry → 2.8 status) instead of silently forking the
+            // sequence. Coherent with session_store.js restore-side
+            // corruption errors (2.6 review SF-1). The distinctive name
+            // survives toWriteFailed as 'write-failed:CorruptSequenceState'
+            // so 2.8 can match on it.
+            var corruptErr = new Error('writer: corrupt sequence_state for session ' + sessionId);
+            corruptErr.name = 'CorruptSequenceState';
+            fail(corruptErr);
+            return;
+          }
           // New record — never mutate the intake object (1.3 §2.8 pure
           // pattern; the intake arrives structured-cloned but is treated
           // as read-only regardless).
