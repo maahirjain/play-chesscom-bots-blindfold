@@ -1,0 +1,579 @@
+// tests/clock_link.test.js
+//
+// V1 verification for task 4.10 (PLAN.md §4.10) per
+// .autodev/evidence/4.10.contract.md. Covers acceptance criteria AC1–AC8
+// (static/unit). AC9–AC10 (real Chrome) run separately via
+// ~/workspace/tools/ext-verify/sw-clock-link.js; AC11 (real-device
+// wall-clock reconstruction) is deferred to owner verification (§7).
+//
+// 4.10 is the link between the two identity systems: at stream start
+// the active recording-context clock segment's ID (the clock_anchor's
+// segmentId) is written into the recording's manifest record as
+// clockSegmentId. 4.10 mints nothing (4.6 mints segmentIds), computes
+// no offsets (4.12's), emits no events.
+//
+// Run: node --test tests/clock_link.test.js   (from repo root)
+
+const { describe, it } = require('node:test');
+const assert = require('node:assert/strict');
+const { execSync } = require('node:child_process');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const REPO = path.resolve(__dirname, '..');
+const BS_CLK = require(path.join(REPO, 'clock_link.js'));
+const BS_STR = require(path.join(REPO, 'stream_starter.js'));
+const BS_FMT = require(path.join(REPO, 'format_support.js'));
+const BS_POL = require(path.join(REPO, 'audio_policy.js'));
+const BS_ENV = require(path.join(REPO, 'event_envelope.js'));
+const BS_DB = require(path.join(REPO, 'db.js'));
+const BS_DEV = require(path.join(REPO, 'device_selection.js'));
+const BS_CAP = require(path.join(REPO, 'capture_selection.js'));
+
+// The Node test harness publishes the merged namespace on
+// globalThis (sender.js precedent): stream_starter.js resolves
+// createClockLink the same way.
+const BS = Object.assign({},
+  BS_ENV, BS_STR, BS_FMT, BS_DEV, BS_CAP, BS_DB, BS_POL, BS_CLK);
+globalThis.BlindfoldSession = BS;
+
+const SID = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa';
+const GID = 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb';
+const SEGS = [
+  '11111111-1111-4111-8111-111111111111',
+  '22222222-2222-4222-8222-222222222222',
+  '33333333-3333-4333-8333-333333333333',
+  '44444444-4444-4444-8444-444444444444'
+];
+// Two distinct clock anchors (two document generations).
+const ANCHOR_A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const ANCHOR_B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+
+const REQUESTED = {
+  microphone: 'audio/webm;codecs=opus',
+  screen: 'video/webm;codecs=vp9,opus',
+  webcam: 'video/webm;codecs=vp8,opus'
+};
+const NEGOTIATED = {
+  microphone: 'audio/webm',
+  screen: 'video/webm',
+  webcam: 'video/webm'
+};
+
+// ------------------------------------------------------------------
+// Compact fakes (stream_starter.test.js pattern, trimmed).
+// ------------------------------------------------------------------
+
+function makeTrack(kind, deviceId) {
+  return {
+    kind,
+    stopped: false,
+    getSettings: () => ({ deviceId: deviceId || null }),
+    stop() { this.stopped = true; }
+  };
+}
+
+function makeStream(tracks) {
+  return { tracks: tracks.slice(), getTracks() { return this.tracks; } };
+}
+
+function makeMediaRecorderClass() {
+  const instances = [];
+  class FakeMR {
+    constructor(stream, mrOpts) {
+      this.stream = stream;
+      this.requestedMimeType = mrOpts ? mrOpts.mimeType : undefined;
+      const kind = stream === FakeMR._mic ? 'microphone' :
+        (stream === FakeMR._cam ? 'webcam' : 'screen');
+      this.mimeType = NEGOTIATED[kind] || this.requestedMimeType;
+      this.state = 'inactive';
+      instances.push(this);
+    }
+    start() { this.state = 'recording'; }
+    stop() { this.state = 'inactive'; }
+  }
+  return { FakeMR, instances };
+}
+
+function makeWorld(overrides = {}) {
+  const micStream = makeStream([makeTrack('audio', 'mic-1')]);
+  const camStream = makeStream([makeTrack('video', 'cam-1')]);
+  const tabStream = makeStream(
+    [makeTrack('video', null), makeTrack('audio', null)]);
+  const { FakeMR, instances } = makeMediaRecorderClass();
+  FakeMR._mic = micStream;
+  FakeMR._cam = camStream;
+
+  const route = (c) => {
+    if (c.audio && !c.video) { return micStream; }
+    if (c.video && !c.audio) { return camStream; }
+    if (c.video && c.video.mandatory &&
+        c.video.mandatory.chromeMediaSource === 'tab') { return tabStream; }
+    throw new Error('unexpected constraints in test route');
+  };
+  const mediaDevices = {
+    getUserMedia: (c) => Promise.resolve().then(() => route(c))
+  };
+  const broker = {
+    resolveTargetTab: () => Promise.resolve({ ok: true, tabId: 42 }),
+    getStreamId: () => Promise.resolve({ ok: true, streamId: 'stream-tab-42' })
+  };
+  const sel = (state) => ({
+    getState: () => Promise.resolve(state),
+    recordDefault: () => Promise.resolve({ ok: true }),
+    announceSelectionForSession: () => Promise.resolve({ ok: true })
+  });
+  const micSelector = sel({ ok: true, selection: 'mic-1' });
+  const cameraSelector = sel({ ok: true, selection: 'cam-1' });
+  const captureSelector = sel({
+    ok: true, captureMode: 'tab', tabId: 42,
+    tabTitle: 't', permissionState: 'granted'
+  });
+
+  // Real format support over an injected in-memory manifest store.
+  const manifest = new Map();
+  const db = overrides.db || {
+    put: async (store, record) => {
+      manifest.set(record.segmentId, JSON.parse(JSON.stringify(record)));
+    },
+    get: async (store, key) =>
+      (manifest.has(key) ? JSON.parse(JSON.stringify(manifest.get(key))) : undefined),
+    getAll: async () => Array.from(manifest.values())
+  };
+  const formatSupport = BS.createFormatSupport({
+    mediaRecorder: { isTypeSupported: () => true },
+    db,
+    nowUtcIso: () => '2026-10-06T12:00:00.000Z'
+  });
+  const audioPolicy = BS.createAudioPolicy();
+  const clockLink = ('clockLink' in overrides) ?
+    overrides.clockLink : BS.createClockLink();
+
+  let mono = overrides.anchorMonotonicMs !== undefined ?
+    overrides.anchorMonotonicMs + 100 : 1100;
+  const starter = BS.createStreamStarter({
+    mediaDevices,
+    getDisplayMedia: () =>
+      Promise.reject(new Error('should not be called in tab mode')),
+    MediaRecorder: FakeMR,
+    micSelector,
+    cameraSelector,
+    captureSelector,
+    broker,
+    formatSupport,
+    audioPolicy,
+    clockLink,
+    getAnchor: overrides.getAnchor,
+    getSessionId: () => SID,
+    getGameId: () => GID,
+    nowUtcIso: () => '2026-10-06T12:00:00.000Z',
+    perfNowMs: () => { mono += 7; return mono; },
+    newUuidV4: (() => { let i = 0; return () => SEGS[i++ % SEGS.length]; })()
+  });
+  return { starter, formatSupport, manifest, db };
+}
+
+function makeAnchor(id, monotonicMs) {
+  return { segmentId: id, utcEpochMs: 1728216000000, monotonicMs };
+}
+
+// Strip // and /* */ comments so the scan pins test executable code,
+// not prose (4.6/4.7 precedent).
+function codeOnly(src) {
+  return src
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|\s)\/\/.*$/gm, '$1');
+}
+
+// ------------------------------------------------------------------
+// AC1 — link written at stream start.
+// ------------------------------------------------------------------
+
+describe('AC1 — link written at stream start', () => {
+  it('manifest records carry the active anchor id; same-clock sanity holds', async () => {
+    const anchor = makeAnchor(ANCHOR_A, 900);
+    let anchorCalls = 0;
+    const { starter, manifest } = makeWorld({
+      getAnchor: () => { anchorCalls++; return anchor; },
+      anchorMonotonicMs: 900
+    });
+    const res = await starter.startStreams();
+    assert.equal(res.ok, true);
+    // The linker forced the lazy capture (getAnchor was called).
+    assert.ok(anchorCalls >= 3, 'expected forced anchor capture');
+    assert.equal(manifest.size, 3);
+    for (const rec of manifest.values()) {
+      assert.equal(rec.clockSegmentId, ANCHOR_A,
+        'record must carry the active anchor id');
+      // Same monotonic clock (contract AC1): the stream started after
+      // the anchor was captured.
+      assert.ok(rec.streamStartedAtMonotonicMs >= anchor.monotonicMs,
+        'streamStartedAtMonotonicMs must be on the anchor clock');
+    }
+    // The link rides the channel response alongside the record
+    // (4.6/4.7 precedent).
+    for (const kind of ['microphone', 'screen', 'webcam']) {
+      assert.equal(res.streams[kind].clockSegmentId, ANCHOR_A);
+    }
+  });
+});
+
+// ------------------------------------------------------------------
+// AC2 — lazy anchor forced; failures become null, never a failure.
+// ------------------------------------------------------------------
+
+describe('AC2 — linking never fails the stream', () => {
+  async function startWith(getAnchor, clockLink) {
+    const { starter, manifest } = makeWorld({ getAnchor, clockLink });
+    const res = await starter.startStreams();
+    return { res, manifest };
+  }
+
+  it('throwing getAnchor → null links, streams still start', async () => {
+    const { res, manifest } = await startWith(() => {
+      throw new Error('captureClockAnchor is unavailable');
+    });
+    assert.equal(res.ok, true);
+    for (const rec of manifest.values()) {
+      assert.equal(rec.clockSegmentId, null);
+    }
+  });
+
+  it('malformed anchor (non-uuid id) → null links, streams still start', async () => {
+    const { res, manifest } = await startWith(
+      () => ({ segmentId: 'not-a-uuid', utcEpochMs: 1, monotonicMs: 2 }));
+    assert.equal(res.ok, true);
+    for (const rec of manifest.values()) {
+      assert.equal(rec.clockSegmentId, null);
+    }
+  });
+
+  it('missing getAnchor thunk → null links, streams still start', async () => {
+    const { res, manifest } = await startWith(undefined);
+    assert.equal(res.ok, true);
+    for (const rec of manifest.values()) {
+      assert.equal(rec.clockSegmentId, null);
+    }
+  });
+
+  it('unavailable linker (none injected, none in namespace) → null links', async () => {
+    // Remove the namespace fallback as well: with no linker anywhere,
+    // the link is honestly null and the streams still start.
+    const saved = globalThis.BlindfoldSession.createClockLink;
+    delete globalThis.BlindfoldSession.createClockLink;
+    try {
+      const { starter, manifest } = makeWorld({
+        getAnchor: () => makeAnchor(ANCHOR_A, 900),
+        clockLink: {}
+      });
+      const res = await starter.startStreams();
+      assert.equal(res.ok, true);
+      for (const rec of manifest.values()) {
+        assert.equal(rec.clockSegmentId, null);
+      }
+    } finally {
+      globalThis.BlindfoldSession.createClockLink = saved;
+    }
+  });
+
+  it('linkClockSegment never throws on garbage input', () => {
+    const link = BS.createClockLink().linkClockSegment;
+    for (const bad of [null, undefined, 42, 'x', {}, { getAnchor: 42 },
+        { getAnchor: () => null }, { getAnchor: () => 42 },
+        { getAnchor: () => { throw new Error('boom'); } }]) {
+      assert.deepEqual(link(bad), { clockSegmentId: null });
+    }
+  });
+});
+
+// ------------------------------------------------------------------
+// AC3 — manifest widening is deliberate (15 → 16).
+// ------------------------------------------------------------------
+
+describe('AC3 — manifest widening is deliberate', () => {
+  it('MANIFEST_KEYS is exactly the 16-key shape with the 4.10-owned field', () => {
+    const keys = BS.MANIFEST_KEYS;
+    assert.equal(keys.length, 16);
+    assert.ok(keys.includes('clockSegmentId'), 'missing clockSegmentId');
+    const src = fs.readFileSync(path.join(REPO, 'format_support.js'), 'utf8');
+    assert.ok(/\/\/ 4\.10-owned:\s*\n\s*'clockSegmentId'/.test(src),
+      'expected the // 4.10-owned: comment convention');
+  });
+
+  it('requireValidManifestRecord rejects extra keys; clockSegmentId nullable/uuid', () => {
+    const fst = BS.createFormatSupport({
+      mediaRecorder: { isTypeSupported: () => true },
+      db: { put: async () => {} },
+      nowUtcIso: () => '2026-10-06T12:00:00.000Z'
+    });
+    const base = {
+      segmentId: SEGS[0], sessionId: SID, gameId: GID,
+      streamKind: 'microphone', requestedMimeType: 'audio/webm',
+      actualMimeType: 'audio/webm', fileExtension: '.webm',
+      createdAtUtc: '2026-10-06T12:00:00.000Z',
+      streamStartedAtUtc: null, streamStartedAtMonotonicMs: null,
+      effectiveDeviceId: null, audioTrackPresent: null,
+      videoTrackPresent: null, screenAudioContent: null,
+      micAudioContent: null, clockSegmentId: null
+    };
+    assert.doesNotThrow(() => fst.requireValidManifestRecord(base));
+    assert.doesNotThrow(() => fst.requireValidManifestRecord(
+      Object.assign({}, base, { clockSegmentId: ANCHOR_A })));
+    // Exact-keys discipline: a 17th key is rejected.
+    assert.throws(() => fst.requireValidManifestRecord(
+      Object.assign({}, base, { futureField: 1 })), TypeError);
+    // Non-uuid link is rejected.
+    assert.throws(() => fst.requireValidManifestRecord(
+      Object.assign({}, base, { clockSegmentId: 'nope' })), TypeError);
+  });
+
+  it('recordSegmentFormat accepts clockSegmentId, defaults to null', async () => {
+    const puts = [];
+    const fst = BS.createFormatSupport({
+      mediaRecorder: { isTypeSupported: () => true },
+      db: { put: async (s, r) => { puts.push(r); } },
+      nowUtcIso: () => '2026-10-06T12:00:00.000Z'
+    });
+    await fst.recordSegmentFormat({
+      segmentId: SEGS[1], sessionId: SID, gameId: GID,
+      streamKind: 'screen', requestedMimeType: 'video/webm',
+      actualMimeType: 'video/webm', clockSegmentId: ANCHOR_A
+    });
+    assert.equal(puts[0].clockSegmentId, ANCHOR_A);
+    await fst.recordSegmentFormat({
+      segmentId: SEGS[2], sessionId: SID, gameId: GID,
+      streamKind: 'screen', requestedMimeType: 'video/webm',
+      actualMimeType: 'video/webm'
+    });
+    assert.equal(puts[1].clockSegmentId, null);
+  });
+
+  it('getManifestRecord reads one segment or null (no new index)', async () => {
+    const store = new Map();
+    const rec = {
+      segmentId: SEGS[3], sessionId: SID, gameId: GID,
+      streamKind: 'webcam', requestedMimeType: 'video/webm',
+      actualMimeType: 'video/webm', fileExtension: '.webm',
+      createdAtUtc: '2026-10-06T12:00:00.000Z',
+      streamStartedAtUtc: null, streamStartedAtMonotonicMs: null,
+      effectiveDeviceId: null, audioTrackPresent: null,
+      videoTrackPresent: null, screenAudioContent: null,
+      micAudioContent: null, clockSegmentId: ANCHOR_B
+    };
+    store.set(SEGS[3], rec);
+    const fst = BS.createFormatSupport({
+      mediaRecorder: { isTypeSupported: () => true },
+      db: {
+        put: async () => {},
+        get: async (s, k) => store.get(k),
+        getAll: async () => []
+      },
+      nowUtcIso: () => '2026-10-06T12:00:00.000Z'
+    });
+    const got = await fst.getManifestRecord(SEGS[3]);
+    assert.equal(got.clockSegmentId, ANCHOR_B);
+    assert.equal(await fst.getManifestRecord(SEGS[0]), null);
+    assert.throws(() => fst.getManifestRecord('nope'), TypeError);
+  });
+});
+
+// ------------------------------------------------------------------
+// AC5 — identity-only (code-scan pin).
+// ------------------------------------------------------------------
+
+describe('AC5 — the linker is identity-only', () => {
+  it('clock_link.js performs no wall-clock derivation in executable code', () => {
+    const src = codeOnly(
+      fs.readFileSync(path.join(REPO, 'clock_link.js'), 'utf8'));
+    assert.ok(!src.includes('utcEpochMs'),
+      'linker must not touch utcEpochMs');
+    assert.ok(!src.includes('monotonicMs'),
+      'linker must not touch monotonicMs');
+    assert.ok(!src.includes('deriveWallUtcMs'),
+      'linker must not derive wall time');
+    // The only anchor property the linker reads is the identity.
+    const reads = src.match(/anchor\.[a-zA-Z]+/g) || [];
+    assert.deepEqual(reads.sort(), ['anchor.segmentId'],
+      'linker must read only anchor.segmentId');
+  });
+});
+
+// ------------------------------------------------------------------
+// AC6 — 4.13 seam: the linker is callable standalone.
+// ------------------------------------------------------------------
+
+describe('AC6 — 4.13 seam', () => {
+  it('links a caller-minted post-discontinuity segmentId', () => {
+    // 4.13 mints; 4.10 owns all linking. The linker takes
+    // {segmentId, getAnchor} — not hardwired to 4.6's pipeline.
+    const synthetic = '55555555-5555-4555-8555-555555555555';
+    const out = BS.createClockLink().linkClockSegment({
+      segmentId: synthetic,
+      getAnchor: () => makeAnchor(ANCHOR_A, 900)
+    });
+    assert.deepEqual(out, { clockSegmentId: ANCHOR_A });
+    // Same-document clock: the value equals the generation's anchor
+    // id, written fresh (never copied from another record).
+    assert.equal(typeof BS.linkClockSegment, 'function',
+      'direct export for the seam');
+  });
+});
+
+// ------------------------------------------------------------------
+// AC7 — discontinuities don't re-link.
+// ------------------------------------------------------------------
+
+describe('AC7 — discontinuities do not re-link', () => {
+  it('no 4.9/4.8 module writes the manifest in executable code', () => {
+    for (const f of ['track_monitor.js', 'chunk_writer.js']) {
+      const src = codeOnly(
+        fs.readFileSync(path.join(REPO, f), 'utf8'));
+      assert.ok(!src.includes('recordSegmentFormat'),
+        f + ' must not call the manifest writer');
+      assert.ok(!src.includes('recording_manifest'),
+        f + ' must not reference the manifest store');
+    }
+    // Only the stream starter calls the manifest writer (4.6/4.7/4.10
+    // write stage); format_support.js defines it.
+    const writers = [];
+    for (const f of ['stream_starter.js', 'recorder.js', 'track_monitor.js',
+        'chunk_writer.js', 'audio_policy.js', 'clock_link.js']) {
+      const src = codeOnly(
+        fs.readFileSync(path.join(REPO, f), 'utf8'));
+      if (/[^a-zA-Z]recordSegmentFormat\s*\(/.test(src)) {
+        writers.push(f);
+      }
+    }
+    assert.deepEqual(writers, ['stream_starter.js'],
+      'only the starter writes manifest records');
+  });
+
+  it('the link written at stream start is the only link (one put per stream)', async () => {
+    let puts = 0;
+    const anchor = makeAnchor(ANCHOR_A, 900);
+    const backing = new Map();
+    const { starter } = makeWorld({
+      getAnchor: () => anchor,
+      db: {
+        put: async (store, record) => {
+          puts++;
+          backing.set(record.segmentId, JSON.parse(JSON.stringify(record)));
+        },
+        get: async (store, key) => backing.get(key),
+        getAll: async () => Array.from(backing.values())
+      }
+    });
+    const res = await starter.startStreams();
+    assert.equal(res.ok, true);
+    // Exactly one manifest put per started stream: the write stage is
+    // the only writer (4.9's monitor writes events, never the
+    // manifest — see the scan pin above).
+    assert.equal(puts, 3);
+    for (const rec of backing.values()) {
+      assert.equal(rec.clockSegmentId, ANCHOR_A);
+    }
+  });
+
+  it('restart: new anchor → new links; old records keep old links', async () => {
+    // Generation 1 (document A).
+    const w1 = makeWorld({ getAnchor: () => makeAnchor(ANCHOR_A, 900) });
+    const r1 = await w1.starter.startStreams();
+    assert.equal(r1.ok, true);
+    // Generation 2 (document B, same session — the 4.9 'restart' case):
+    // new anchor → new clock segment → new links.
+    const w2 = makeWorld({ getAnchor: () => makeAnchor(ANCHOR_B, 5000) });
+    const r2 = await w2.starter.startStreams();
+    assert.equal(r2.ok, true);
+    for (const rec of w1.manifest.values()) {
+      assert.equal(rec.clockSegmentId, ANCHOR_A,
+        'old generation keeps its old link');
+    }
+    for (const rec of w2.manifest.values()) {
+      assert.equal(rec.clockSegmentId, ANCHOR_B,
+        'new generation links against the new anchor');
+    }
+    assert.notEqual(
+      Array.from(w1.manifest.values())[0].clockSegmentId,
+      Array.from(w2.manifest.values())[0].clockSegmentId);
+  });
+});
+
+// ------------------------------------------------------------------
+// AC8 — changed-files discipline.
+// ------------------------------------------------------------------
+
+describe('AC8 — changed-files discipline', () => {
+  it('the 4.10 working-tree diff touches only 4.10 files', () => {
+    // Honest cumulative evolution (4.10): the clock link legitimately
+    // adds clock_link.js, wires the link into the stream starter's
+    // manifest-write stage, widens MANIFEST_KEYS 15 → 16 with the
+    // 4.10-owned field, adds the getManifestRecord read, loads the new
+    // module in recorder.html, exposes getClockLink in recorder.js
+    // (the 4.13 seam), records the ## 4.10 decisions, and adds its
+    // test + evidence; its files join the allowlists.
+    const allowed = new Set([
+      'clock_link.js',
+      'tests/clock_link.test.js',
+      'stream_starter.js',
+      'format_support.js',
+      'recorder.html',
+      'recorder.js',
+      '.autodev/evidence/4.10.contract.md',
+      '.autodev/evidence/4.10.build.md',
+      // Honest cumulative evolution: 4.10's review/behavior evidence
+      // lands after the pins were evolved (2.x/3.x/4.1-4.9 precedent).
+      '.autodev/evidence/4.10.review.md',
+      '.autodev/evidence/4.10.behavior.md',
+      '.autodev/DECISIONS.md',
+      // Cumulative evolution: earlier suites' diff-discipline
+      // allowlists are evolved by this task with justification
+      // comments.
+      'tests/attempt_tracker.test.js',
+      'tests/audio_policy.test.js',
+      'tests/capture_broker.test.js',
+      'tests/capture_selection.test.js',
+      'tests/chunk_writer.test.js',
+      'tests/db.test.js',
+      'tests/device_selection.test.js',
+      'tests/format_support.test.js',
+      'tests/game_lifecycle.test.js',
+      'tests/history_tracker.test.js',
+      'tests/lifecycle.test.js',
+      'tests/manifest_sw.test.js',
+      'tests/recording_host.test.js',
+      'tests/retention.test.js',
+      'tests/sender.test.js',
+      'tests/session_store.test.js',
+      'tests/speech.test.js',
+      'tests/status_indicator.test.js',
+      'tests/stream_starter.test.js',
+      'tests/track_monitor.test.js',
+      'tests/visibility.test.js',
+      'tests/writer.test.js'
+    ]);
+    const out = execSync('git diff HEAD --name-only', { cwd: REPO })
+      .toString().trim();
+    const changed = out === '' ? [] : out.split('\n');
+    const stray = changed.filter((f) => !allowed.has(f));
+    assert.deepEqual(stray, [],
+      '4.10 has diff hunks beyond its files:\n' + stray.join('\n'));
+  });
+
+  it('no new event types; no new channel message', () => {
+    const rec = fs.readFileSync(path.join(REPO, 'recorder.js'), 'utf8');
+    const clk = fs.readFileSync(path.join(REPO, 'clock_link.js'), 'utf8');
+    // 4.10 emits nothing: no event-type constant, no sendEventMessage
+    // call, no new msg: value in the linker.
+    assert.ok(!/EVENT_TYPE/.test(codeOnly(clk)), 'linker defines no event type');
+    assert.ok(!/sendEventMessage/.test(codeOnly(clk)), 'linker sends no events');
+    assert.ok(!/msg:\s*['"]recorder-/.test(codeOnly(clk)),
+      'linker adds no channel message');
+    void rec;
+  });
+
+  it('PLAN.md is unmodified', () => {
+    const out = execSync('git diff main -- PLAN.md', { cwd: REPO })
+      .toString().trim();
+    assert.equal(out, '', 'PLAN.md must be untouched');
+  });
+});

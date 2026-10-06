@@ -3,7 +3,7 @@
      task 4.3 (PLAN.md §4.3) + task 4.4 (PLAN.md §4.4) +
      task 4.5 (PLAN.md §4.5) + task 4.6 (PLAN.md §4.6) +
      task 4.7 (PLAN.md §4.7) + task 4.8 (PLAN.md §4.8) +
-     task 4.9 (PLAN.md §4.9).
+     task 4.9 (PLAN.md §4.9) + task 4.10 (PLAN.md §4.10).
      MV3 offscreen document: the extension's dedicated recording context.
      Loads event_envelope.js (envelope construction for the 4.2/4.3/4.4
      events), db.js (extension-owned IndexedDB — 4.5's recording
@@ -12,9 +12,11 @@
      selection/permission), capture_selection.js (4.3 screen/tab capture
      selection/permission), format_support.js (4.5 format verification +
      manifest writer), audio_policy.js (4.7 audio-content policy —
-     pure classification, no media APIs), stream_starter.js (4.6 stream
-     acquisition + MediaRecorder start, 4.7 classification at
-     manifest-write time), chunk_writer.js (4.8 requestData() poll loops
+     pure classification, no media APIs), clock_link.js (4.10
+     recording-segment → clock-segment linker — identity-only, no time
+     arithmetic), stream_starter.js (4.6 stream
+     acquisition + MediaRecorder start, 4.7 classification and 4.10 link
+     at manifest-write time), chunk_writer.js (4.8 requestData() poll loops
      writing chunk Blobs incrementally to the media_chunks IDB store),
      track_monitor.js (4.9 track mute/unmute/end + recorder-error
      observation and discontinuity flags, all to the event log),
@@ -33,6 +35,7 @@
   <script src="capture_selection.js"></script>
   <script src="format_support.js"></script>
   <script src="audio_policy.js"></script>
+  <script src="clock_link.js"></script>
   <script src="stream_starter.js"></script>
   <script src="chunk_writer.js"></script>
   <script src="track_monitor.js"></script>

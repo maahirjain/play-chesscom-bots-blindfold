@@ -727,6 +727,30 @@ describe('AC6 — diff discipline', () => {
       // after the pins were evolved (2.x/3.x/4.1-4.8 precedent).
       '.autodev/evidence/4.9.review.md',
       '.autodev/evidence/4.9.behavior.md',
+      // Honest cumulative evolution: 4.10 (clock-segment linking)
+      // legitimately adds clock_link.js, wires the link into the
+      // stream starter's manifest-write stage, widens MANIFEST_KEYS
+      // 15 → 16 with the 4.10-owned clockSegmentId field, adds the
+      // getManifestRecord read, loads the new module in
+      // recorder.html, exposes getClockLink in recorder.js (the
+      // 4.13 seam), records the ## 4.10 decisions, and adds its
+      // test + evidence; its files join the allowlists.
+      'clock_link.js',
+      'tests/clock_link.test.js',
+      // 4.10 also modifies the manifest-write stage (stream_starter.js),
+      // the manifest writer (format_support.js), the wiring
+      // (recorder.js) and the module list (recorder.html); already
+      // listed by earlier tasks where applicable — the Set dedupes.
+      'stream_starter.js',
+      'format_support.js',
+      'recorder.js',
+      'recorder.html',
+      '.autodev/evidence/4.10.contract.md',
+      '.autodev/evidence/4.10.build.md',
+      // Honest cumulative evolution: 4.10's review/behavior evidence lands
+      // after the pins were evolved (2.x/3.x/4.1-4.9 precedent).
+      '.autodev/evidence/4.10.review.md',
+      '.autodev/evidence/4.10.behavior.md',
       // Honest cumulative evolution: 4.3's review/behavior evidence lands
       // after the pins were evolved (2.x/3.x/4.1/4.2 precedent).
       '.autodev/evidence/4.3.review.md',

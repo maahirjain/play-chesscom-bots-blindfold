@@ -24,6 +24,7 @@ const path = require('node:path');
 const REPO = path.resolve(__dirname, '..');
 const BS_STR = require(path.join(REPO, 'stream_starter.js'));
 const BS_POL = require(path.join(REPO, 'audio_policy.js'));
+const BS_CLK = require(path.join(REPO, 'clock_link.js'));
 const BS_FMT = require(path.join(REPO, 'format_support.js'));
 const BS_DB = require(path.join(REPO, 'db.js'));
 const BS_ENV = require(path.join(REPO, 'event_envelope.js'));
@@ -35,7 +36,7 @@ const BS_REC = require(path.join(REPO, 'recorder.js'));
 // globalThis (sender.js precedent): recorder.js resolves
 // createStreamStarter the same way.
 const BS = Object.assign({},
-  BS_ENV, BS_STR, BS_FMT, BS_DEV, BS_CAP, BS_DB, BS_REC, BS_POL);
+  BS_ENV, BS_STR, BS_FMT, BS_DEV, BS_CAP, BS_DB, BS_REC, BS_POL, BS_CLK);
 globalThis.BlindfoldSession = BS;
 
 const SID = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa';
@@ -993,12 +994,15 @@ describe('AC7 — recorder-start-streams channel message', () => {
 // ------------------------------------------------------------------
 
 describe('AC8 — manifest widening is deliberate; no new event types', () => {
-  it('MANIFEST_KEYS grew by exactly the six 4.6-owned + two 4.7-owned fields', () => {
+  it('MANIFEST_KEYS grew by exactly the six 4.6-owned + two 4.7-owned + one 4.10-owned fields', () => {
     // Honest cumulative evolution (4.7): the manifest validator widens
     // deliberately 13 → 15 with the two 4.7-owned audio-content
     // classifications (screenAudioContent, micAudioContent) — see
     // .autodev/evidence/4.7.contract.md §2. The 4.5/4.6 fields below
     // are unchanged.
+    // Honest cumulative evolution (4.10): the validator widens
+    // deliberately 15 → 16 with the 4.10-owned clock link
+    // (clockSegmentId) — see .autodev/evidence/4.10.contract.md §2.
     const keys = BS.MANIFEST_KEYS;
     const extra = keys.filter((k) => ![
       'segmentId', 'sessionId', 'gameId', 'streamKind',
@@ -1007,9 +1011,10 @@ describe('AC8 — manifest widening is deliberate; no new event types', () => {
     assert.deepEqual(extra.sort(), [
       'audioTrackPresent', 'effectiveDeviceId', 'streamStartedAtMonotonicMs',
       'streamStartedAtUtc', 'videoTrackPresent',
-      'screenAudioContent', 'micAudioContent'
+      'screenAudioContent', 'micAudioContent',
+      'clockSegmentId'
     ].sort());
-    assert.equal(keys.length, 15);
+    assert.equal(keys.length, 16);
   });
 
   it('recordSegmentFormat accepts the widened shape (real values)', async () => {
@@ -1083,7 +1088,10 @@ describe('AC8 — manifest widening is deliberate; no new event types', () => {
       effectiveDeviceId: null, audioTrackPresent: null, videoTrackPresent: null,
       // Honest cumulative evolution (4.7): the two 4.7-owned
       // audio-content classifications join the exact-keys shape.
-      screenAudioContent: null, micAudioContent: null
+      screenAudioContent: null, micAudioContent: null,
+      // Honest cumulative evolution (4.10): the 4.10-owned clock link
+      // joins the exact-keys shape (nullable).
+      clockSegmentId: null
     };
     assert.doesNotThrow(() => fst.requireValidManifestRecord(base));
     assert.throws(() => fst.requireValidManifestRecord(
@@ -1181,6 +1189,30 @@ describe('diff-discipline pins (4.6 evolution)', () => {
       // after the pins were evolved (2.x/3.x/4.1-4.8 precedent).
       '.autodev/evidence/4.9.review.md',
       '.autodev/evidence/4.9.behavior.md',
+      // Honest cumulative evolution: 4.10 (clock-segment linking)
+      // legitimately adds clock_link.js, wires the link into the
+      // stream starter's manifest-write stage, widens MANIFEST_KEYS
+      // 15 → 16 with the 4.10-owned clockSegmentId field, adds the
+      // getManifestRecord read, loads the new module in
+      // recorder.html, exposes getClockLink in recorder.js (the
+      // 4.13 seam), records the ## 4.10 decisions, and adds its
+      // test + evidence; its files join the allowlists.
+      'clock_link.js',
+      'tests/clock_link.test.js',
+      // 4.10 also modifies the manifest-write stage (stream_starter.js),
+      // the manifest writer (format_support.js), the wiring
+      // (recorder.js) and the module list (recorder.html); already
+      // listed by earlier tasks where applicable — the Set dedupes.
+      'stream_starter.js',
+      'format_support.js',
+      'recorder.js',
+      'recorder.html',
+      '.autodev/evidence/4.10.contract.md',
+      '.autodev/evidence/4.10.build.md',
+      // Honest cumulative evolution: 4.10's review/behavior evidence lands
+      // after the pins were evolved (2.x/3.x/4.1-4.9 precedent).
+      '.autodev/evidence/4.10.review.md',
+      '.autodev/evidence/4.10.behavior.md',
       '.autodev/DECISIONS.md',
       // Cumulative evolution: earlier suites' diff-discipline allowlists
       // are evolved by this task with justification comments.

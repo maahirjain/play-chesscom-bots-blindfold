@@ -715,6 +715,33 @@ var BlindfoldSession = BlindfoldSession || {};
       return audioPolicy;
     }
 
+    // ----------------------------------------------------------------
+    // 4.10's clock linker (PLAN.md §4.10). recorder.js wires it into
+    // the stream starter the same way as formatSupport / audioPolicy:
+    // lazy, shared-namespace-resolved, test-injectable via o.clockLink.
+    // Absence is a wiring defect → plain Error, like
+    // createAudioPolicy. The linker is identity-only and can never
+    // fail a stream (a missing linker becomes a null link inside the
+    // starter). 4.13 calls this same getter for each post-discontinuity
+    // segmentId it mints (4.10 owns all linking).
+    // ----------------------------------------------------------------
+
+    var clockLink = null;
+    function getClockLink() {
+      if (clockLink === null) {
+        var BS = shared();
+        if (typeof BS.createClockLink !== 'function') {
+          throw new Error('recorder: createClockLink is unavailable');
+        }
+        if (o.clockLink !== undefined && o.clockLink !== null) {
+          clockLink = o.clockLink;
+        } else {
+          clockLink = BS.createClockLink();
+        }
+      }
+      return clockLink;
+    }
+
     // 'recorder-get-formats' → { ok, formats, verifiedAtUtc }. The probe
     // always re-runs; an unavailable MediaRecorder becomes {ok:false}
     // data (never a thrown listener break).
@@ -778,6 +805,13 @@ var BlindfoldSession = BlindfoldSession || {};
             broker: o.broker !== undefined ? o.broker : createBrokerClient(),
             formatSupport: getFormatSupport(),
             audioPolicy: getAudioPolicy(),
+            // 4.10: the clock linker plus the forced-capture anchor
+            // thunk. ensureAnchor() captures the lazy anchor on first
+            // use (honest — the document's clock already runs); a
+            // throw inside the linker becomes a null link, never a
+            // stream failure.
+            clockLink: getClockLink(),
+            getAnchor: ensureAnchor,
             getSessionId: function () { return sessionId; },
             getGameId: function () { return gameId; },
             nowUtcIso: o.selectorClock,
@@ -1288,6 +1322,11 @@ var BlindfoldSession = BlindfoldSession || {};
       // 4.7 surface (Node tests drive these directly; 4.7's
       // classifications are wired into the stream starter).
       getAudioPolicy: getAudioPolicy,
+      // 4.10 surface (Node tests drive this directly; the stream
+      // starter writes the clock link at manifest-write time; 4.13
+      // calls getClockLink().linkClockSegment for each
+      // post-discontinuity segmentId it mints).
+      getClockLink: getClockLink,
       // 4.6 surface (Node tests drive these directly; §5 drives the
       // recorder-start-streams channel message).
       getStreamStarter: getStreamStarter,

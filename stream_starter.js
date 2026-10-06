@@ -120,6 +120,13 @@ var BlindfoldSession = BlindfoldSession || {};
   //                    document's shared namespace at call time.
   //                    Classification can never fail a stream (nulls on
   //                    any failure).
+  //   clockLink      — 4.10's {linkClockSegment}; injected for tests,
+  //                    else resolved lazily from the document's shared
+  //                    namespace at call time. Linking can never fail a
+  //                    stream (null link on any failure).
+  //   getAnchor      — forced-capture thunk for the recording-context
+  //                    clock anchor (recorder.js's ensureAnchor);
+  //                    injected in tests. A throw becomes a null link.
   //   getSessionId / getGameId — thunks (pre-session inertness)
   //   nowUtcIso      — () => UTC ISO string (injectable clock)
   //   perfNowMs      — () => performance.now() (injectable clock)
@@ -192,6 +199,9 @@ var BlindfoldSession = BlindfoldSession || {};
     var broker = o.broker || null;
     var formatSupport = o.formatSupport || null;
     var audioPolicyOpt = o.audioPolicy || null;
+    var clockLinkOpt = o.clockLink || null;
+    var getAnchorThunk = (typeof o.getAnchor === 'function') ?
+      o.getAnchor : null;
 
     // 4.7's audio-content policy ({classifyScreenAudio, assertMicAudio}).
     // Injected for tests; in the offscreen document resolved lazily from
@@ -246,6 +256,54 @@ var BlindfoldSession = BlindfoldSession || {};
         // Webcam records carry null for both (uniform record shape).
       } catch (e) { /* classification can never fail a stream */ }
       return out;
+    }
+
+    // 4.10's clock linker ({linkClockSegment}). Injected for tests; in
+    // the offscreen document resolved lazily from the shared namespace
+    // at call time (recorder.js passes it like formatSupport /
+    // audioPolicy). Linking can NEVER fail a stream: an unavailable
+    // linker yields a null link, recorded honestly.
+    function readClockLink() {
+      if (clockLinkOpt &&
+          typeof clockLinkOpt.linkClockSegment === 'function') {
+        return clockLinkOpt;
+      }
+      var g = readGlobal();
+      var ns = g ? g.BlindfoldSession : null;
+      if (ns && typeof ns.createClockLink === 'function') {
+        try {
+          var cl = ns.createClockLink();
+          if (cl && typeof cl.linkClockSegment === 'function') {
+            clockLinkOpt = cl;
+            return cl;
+          }
+        } catch (e) { /* fall through to null link */ }
+      }
+      return null;
+    }
+
+    // Link this recording segment to the active recording-context
+    // clock segment (4.10). Identity-only and infallible from the
+    // caller's perspective: any failure → null link. The getAnchor
+    // thunk forces the lazy anchor capture (honest — the document's
+    // clock already runs); a throw becomes a null link.
+    function linkStreamClock(segmentId) {
+      try {
+        var cl = readClockLink();
+        if (!cl) {
+          return null;
+        }
+        var linked = cl.linkClockSegment({
+          segmentId: segmentId,
+          getAnchor: getAnchorThunk
+        });
+        if (linked && typeof linked.clockSegmentId === 'string') {
+          return linked.clockSegmentId;
+        }
+        return null;
+      } catch (e) {
+        return null;
+      }
     }
 
     function getSessionId() {
@@ -623,6 +681,11 @@ var BlindfoldSession = BlindfoldSession || {};
           // real acquisition observations (capture mode + track
           // presence). Never content analysis; never fails the stream.
           var audioClass = classifyStreamAudio(kind, acq);
+          // 4.10: link this recording segment to the active
+          // recording-context clock segment. Identity-only (no time
+          // arithmetic); null when the anchor cannot be captured —
+          // linking never fails the stream.
+          var clockSegmentId = linkStreamClock(segmentId);
           var record = {
             segmentId: segmentId,
             sessionId: getSessionId(),
@@ -638,7 +701,10 @@ var BlindfoldSession = BlindfoldSession || {};
             // 4.7: audio-content policy classification (by construction,
             // never content analysis). Pure — cannot fail the stream.
             screenAudioContent: audioClass.screenAudioContent,
-            micAudioContent: audioClass.micAudioContent
+            micAudioContent: audioClass.micAudioContent,
+            // 4.10: the recording-context clock segment this recording
+            // segment is linked to (identity-only).
+            clockSegmentId: clockSegmentId
           };
           return Promise.resolve()
             .then(function () { return fs.recordSegmentFormat(record); })
@@ -676,7 +742,10 @@ var BlindfoldSession = BlindfoldSession || {};
                 // 4.7: the audio-content classifications ride the
                 // response (no new event types, no new channel).
                 screenAudioContent: audioClass.screenAudioContent,
-                micAudioContent: audioClass.micAudioContent
+                micAudioContent: audioClass.micAudioContent,
+                // 4.10: the clock link rides the response alongside
+                // the record (4.6/4.7 precedent).
+                clockSegmentId: clockSegmentId
               };
             }, function (err) {
               try { recorder.stop(); } catch (w) { /* ignore */ }

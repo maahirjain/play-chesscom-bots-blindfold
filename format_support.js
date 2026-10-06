@@ -87,8 +87,8 @@ var BlindfoldSession = BlindfoldSession || {};
   // shape; 4.6's stream starter always provides real values (V1-pinned).
   // 4.7 adds the audio-content classifications (screenAudioContent on
   // screen records, micAudioContent on mic records; null elsewhere —
-  // the record shape stays uniform, per the 4.6 precedent). 4.10
-  // (clockAnchor), 4.12 (timecode/offsets), and 4.13 (status,
+  // the record shape stays uniform, per the 4.6 precedent). 4.10's
+  // clockSegmentId link, 4.12 (timecode/offsets), and 4.13 (status,
   // finalizedAtUtc) own their fields and widen this validator when they
   // add them — the exact-keys convention rejects anything else, so the
   // widening is deliberate, not a silent break.
@@ -109,7 +109,9 @@ var BlindfoldSession = BlindfoldSession || {};
     'videoTrackPresent',
     // 4.7-owned:
     'screenAudioContent',
-    'micAudioContent'
+    'micAudioContent',
+    // 4.10-owned:
+    'clockSegmentId'
   ];
 
   var FILE_EXTENSIONS = ['.webm', '.mp4', '.m4a'];
@@ -314,9 +316,10 @@ var BlindfoldSession = BlindfoldSession || {};
 
     // Exact-keys validator for a manifest record. Covers the eight
     // 4.5-owned fields plus the six 4.6-owned fields plus the two
-    // 4.7-owned audio-content classifications (deliberate widenings —
-    // see MANIFEST_KEYS). The 4.6/4.7 fields are nullable:
-    // recordSegmentFormat derives them only when provided.
+    // 4.7-owned audio-content classifications plus the one 4.10-owned
+    // clock link (deliberate widenings — see MANIFEST_KEYS). The
+    // 4.6/4.7/4.10 fields are nullable: recordSegmentFormat derives
+    // them only when provided.
     function requireValidManifestRecord(record) {
       requireExactKeys(record, MANIFEST_KEYS, 'recording_manifest record');
       requireUuidV4(record.segmentId, 'segmentId');
@@ -365,6 +368,13 @@ var BlindfoldSession = BlindfoldSession || {};
       ap.requireScreenAudioContent(record.screenAudioContent,
         'screenAudioContent');
       ap.requireMicAudioContent(record.micAudioContent, 'micAudioContent');
+      // 4.10-owned: the recording-context clock segment this recording
+      // segment is linked to. Nullable (null = the anchor could not be
+      // captured — recorded honestly); otherwise a uuid-v4. The linker
+      // is identity-only: no other anchor field is stored here.
+      if (record.clockSegmentId !== null) {
+        requireUuidV4(record.clockSegmentId, 'clockSegmentId');
+      }
       return record;
     }
 
@@ -399,6 +409,11 @@ var BlindfoldSession = BlindfoldSession || {};
     // when provided and default to null otherwise — the same deliberate
     // widening pattern. 4.7's stream starter provides the real
     // classifications; null means "not applicable / not observed."
+    //
+    // 4.10's field (clockSegmentId) is accepted when provided and
+    // defaults to null otherwise — the same deliberate widening
+    // pattern. The stream starter provides the real link at
+    // manifest-write time; null means the anchor could not be captured.
     //
     // Pre-session inertness (2.x/3.x/4.2 precedent): null/undefined
     // sessionId or gameId → plain data {ok:false, error:'no-session'},
@@ -450,7 +465,13 @@ var BlindfoldSession = BlindfoldSession || {};
           screenAudioContent: ap.requireScreenAudioContent(
             input.screenAudioContent, 'screenAudioContent'),
           micAudioContent: ap.requireMicAudioContent(
-            input.micAudioContent, 'micAudioContent')
+            input.micAudioContent, 'micAudioContent'),
+          // 4.10-owned (nullable; the stream starter provides the real
+          // link at manifest-write time; null when the anchor could
+          // not be captured or the linker was unavailable).
+          clockSegmentId: (input.clockSegmentId === undefined ||
+            input.clockSegmentId === null) ? null :
+            requireUuidV4(input.clockSegmentId, 'clockSegmentId')
         };
         requireValidManifestRecord(record);
       } catch (e) {
@@ -495,11 +516,30 @@ var BlindfoldSession = BlindfoldSession || {};
         });
     }
 
+    // ----------------------------------------------------------------
+    // 4.10: per-segment manifest read (PLAN.md §4.10). Additive: the
+    // store's keyPath IS segmentId, so no new index and no schema
+    // change. Returns the record or null (unknown is null, never
+    // undefined). 4.12/4.14/§6.3 read the clock link through this;
+    // 4.13 reads each minted segment's record the same way.
+    // ----------------------------------------------------------------
+
+    function getManifestRecord(segmentId) {
+      requireUuidV4(segmentId, 'segmentId');
+      var db = readDb();
+      return Promise.resolve()
+        .then(function () { return db.get(MANIFEST_STORE, segmentId); })
+        .then(function (record) {
+          return (record === undefined || record === null) ? null : record;
+        });
+    }
+
     return {
       verifyFormats: verifyFormats,
       recordSegmentFormat: recordSegmentFormat,
       requireValidManifestRecord: requireValidManifestRecord,
-      getManifestRecordsBySession: getManifestRecordsBySession
+      getManifestRecordsBySession: getManifestRecordsBySession,
+      getManifestRecord: getManifestRecord
     };
   }
 

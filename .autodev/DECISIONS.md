@@ -864,3 +864,46 @@ Consequential engineering decisions with reasoning and evidence. Newest first.
   skipped, throwing emitEvent tolerated, and recorder.js's
   monitoring attach + restart emission are independently best-effort
   from 4.8's chunking kickoff.
+
+## 4.10 clock-segment linking
+
+- **One new manifest field, 15 → 16 (`clockSegmentId`, `// 4.10-owned:`).**
+  The link between the two identity systems: at stream start the
+  active recording-context clock segment's ID (the `clock_anchor`'s
+  `segmentId`) is written into the recording's manifest record, so
+  4.12 can convert any recording-relative timestamp
+  (`streamStartedAtMonotonicMs`, chunk `timecodeMs`) to wall clock via
+  the named anchor. Everything else the link needs is already present
+  or derivable: `streamStartedAtMonotonicMs` (4.6) is on the same
+  monotonic clock, the anchor row lives in the event log, link time =
+  `createdAtUtc`.
+- **The linker forces the lazy anchor capture.** The offscreen
+  document captures its anchor lazily at first emission; the linker
+  calls recorder.js's `ensureAnchor()` before writing the link —
+  honest, because the anchor describes the document's already-running
+  clock. Capture failure → `null` link, never a stream failure.
+- **Identity-only, no arithmetic.** The linker reads `anchor.segmentId`
+  and nothing else — V1 code-scan-pinned (no `utcEpochMs`, no
+  `monotonicMs`, no `deriveWallUtcMs` in executable code). Offset
+  computation is 4.12's.
+- **Links survive media gaps; restart = new link.** A mid-recording
+  discontinuity (4.9) does not change the clock segment — the clock
+  continues; only the media timeline has a gap. Document restart = new
+  `performance.now()` origin → new anchor → new `clockSegmentId`;
+  old manifest records keep their old links (the manifest survives in
+  extension-owned IDB) — which is why the link belongs in the manifest,
+  not document memory. V2-proven: kill/recreate → new anchor → new
+  links; superseded records keep old links.
+- **4.13 seam:** 4.10 owns ALL linking. 4.13 calls the same
+  `linkClockSegment({segmentId, getAnchor})` for each post-discontinuity
+  segmentId it mints (same document → same anchor id, still written
+  fresh so the record is self-describing). Exposed via recorder.js's
+  `getClockLink()`; new additive `getManifestRecord(segmentId)` read
+  on format_support (keyPath IS segmentId — no new index, DB_VERSION
+  stays 2). No new event types, no new channel messages, no manifest
+  writes outside the starter's write stage (4.9's modules are
+  scan-pinned to never touch the manifest).
+- **PLAN reading note (for the section-4 auditor):** PLAN.md §4.10's
+  "Give every recording segment an ID" half was already satisfied by
+  the 4.5 §2 amendment (4.6 mints uuid-v4 segmentIds at stream start);
+  4.10's work is the link half. PLAN.md itself is never modified.
