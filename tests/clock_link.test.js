@@ -758,6 +758,48 @@ describe('AC8 — changed-files discipline', () => {
       'tests/track_monitor.test.js',
       'tests/visibility.test.js',
       'tests/writer.test.js',
+      // Honest cumulative evolution: 5.5 (prevent a duplicate Start from
+      // creating overlapping recording sessions) legitimately modifies
+      // recorder.js (the atomic duplicate-Start guard in handleSetSession:
+      // sessionId-equality discriminator, synchronous check-and-set,
+      // nothing overwritten on refusal) and session_controls.js (the
+      // content-side pre-check, mint reorder, localAbortStart, and
+      // refusal-detail mapping), records the ## 5.5 decisions, and evolves
+      // the cumulative pins in these suites; its tracked files join the
+      // allowlists. (5.5's new test + evidence files are untracked and
+      // never appear in git diff HEAD --name-only. No new channel
+      // messages, events, stores, or permissions.)
+      'recorder.js',
+      'session_controls.js',
+      // 5.5 also evolves the working-tree diff pins in these suites.
+      'tests/clock_link.test.js',
+      'tests/timecode.test.js',
+      'tests/attempt_tracker.test.js',
+      'tests/audio_policy.test.js',
+      'tests/capture_selection.test.js',
+      'tests/chunk_writer.test.js',
+      'tests/detected_conditions.test.js',
+      'tests/device_selection.test.js',
+      'tests/finalizer.test.js',
+      'tests/format_support.test.js',
+      'tests/game_lifecycle.test.js',
+      'tests/history_tracker.test.js',
+      'tests/lifecycle.test.js',
+      'tests/recording_host.test.js',
+      'tests/retention.test.js',
+      'tests/selection_memory.test.js',
+      'tests/sender.test.js',
+      'tests/session_controls.test.js',
+      'tests/session_fields.test.js',
+      'tests/session_store.test.js',
+      'tests/speech.test.js',
+      'tests/status_indicator.test.js',
+      'tests/stream_starter.test.js',
+      'tests/stream_status.test.js',
+      'tests/sync_marker.test.js',
+      'tests/track_monitor.test.js',
+      'tests/visibility.test.js',
+      'tests/writer.test.js',
     ]);
     const out = execSync('git diff HEAD --name-only', { cwd: REPO })
       .toString().trim();

@@ -748,23 +748,54 @@ describe('AC7 — no UI, no policy, no pipeline changes', () => {
 
   it('pipeline modules are untouched except the additive getStreamHealth', () => {
     // git status --porcelain (not git diff HEAD) so new untracked
-    // files are included. After the 4.14 commit the tree is clean, so
-    // the pin is conditional on a non-empty status (2.8/4.4 precedent):
-    // pre-commit it proves exactly the four product files changed;
-    // post-commit it is vacuous.
+    // files are included. The pin proves no UNRELATED pipeline module
+    // is modified: every changed product file must belong to the
+    // cumulative legitimate set (4.14's stream_status.js +
+    // track_monitor.js getStreamHealth seam + recorder.js/recorder.html
+    // wiring; 5.1's session_controls.js + content.js/chess_utils.js/
+    // recording_host.js/overlay.css/manifest.json wiring; 5.2's
+    // session_fields.js + session_controls.js/recorder.js/
+    // recording_host.js/content.js/manifest.json/overlay.css
+    // amendments). Subset (not exact-set): robust to the tree state
+    // (pre-commit with only 5.2's files, or post-commit vacuous).
+    // Honest cumulative evolution: 5.3 legitimately adds
+    // selection_memory.js (the chrome.storage.local-backed
+    // remembered-defaults module), adds the optional onSessionStarted
+    // hook to session_controls.js, wires the memory into content.js,
+    // and appends the "storage" permission + selection_memory.js to
+    // manifest.json per its contract.
+    // Honest cumulative evolution: 5.4 legitimately adds
+    // detected_conditions.js (the detected game conditions + manual
+    // completion panel), wires the panel install + getDetectedConditions
+    // plug-in + attachConditionsPanel composite into content.js, adds
+    // detected_conditions.js to manifest.json, and adds additive panel
+    // classes to overlay.css per its contract.
     const status = execSync('git status --porcelain', { cwd: REPO }).toString();
     if (!status.trim()) return;
     const changed = status.split('\n').filter((l) => l.trim())
       .map((l) => l.slice(3).trim());
     const productChanged = changed.filter((f) =>
-      (f.endsWith('.js') || f.endsWith('.html')) && !f.startsWith('tests/') &&
+      (f.endsWith('.js') || f.endsWith('.html') || f.endsWith('.css') ||
+       f === 'manifest.json') && !f.startsWith('tests/') &&
       !f.includes('.autodev/'));
-    assert.deepEqual(productChanged.sort(), [
-      'recorder.html',
-      'recorder.js',
+    const legitimate = new Set([
       'stream_status.js',
       'track_monitor.js',
-    ].sort());
+      'recorder.js',
+      'recorder.html',
+      'session_controls.js',
+      'session_fields.js',
+      'selection_memory.js',
+      'detected_conditions.js',
+      'content.js',
+      'chess_utils.js',
+      'recording_host.js',
+      'overlay.css',
+      'manifest.json',
+    ]);
+    const stray = productChanged.filter((f) => !legitimate.has(f));
+    assert.deepEqual(stray, [],
+      'unrelated pipeline module modified:\n' + stray.join('\n'));
   });
 });
 
@@ -797,6 +828,31 @@ describe('AC8 — diff discipline', () => {
       // lands after the pins were evolved (2.x/3.x/4.1-4.13 precedent).
       '.autodev/evidence/4.14.review.md',
       '.autodev/evidence/4.14.behavior.md',
+      // Honest cumulative evolution: 5.1 (compact Start/Stop control +
+      // per-stream health lights) legitimately adds session_controls.js
+      // (the in-page control cluster + pure classifyStreamStatus), wires
+      // the install into content.js, adds session_identity.js (ID minting)
+      // and session_controls.js to the manifest content_scripts list,
+      // captures ownerTabId + echoes gameId in recorder.js, adds the
+      // SW-side recorder-ensure handler to recording_host.js, adds the
+      // additive getLastObservedEnd getter to chess_utils.js (the Stop
+      // seam for the observed game_ended reason), adds additive classes
+      // to overlay.css, records the ## 5.1 decisions, and adds its test
+      // + evidence; its files join the allowlists.
+      'session_controls.js',
+      'tests/session_controls.test.js',
+      'manifest.json',
+      'content.js',
+      'overlay.css',
+      'chess_utils.js',
+      'recorder.js',
+      'recording_host.js',
+      '.autodev/evidence/5.1.contract.md',
+      '.autodev/evidence/5.1.build.md',
+      // Honest cumulative evolution: 5.1's review/behavior evidence lands
+      // after the pins were evolved (2.x/3.x/4.x precedent).
+      '.autodev/evidence/5.1.review.md',
+      '.autodev/evidence/5.1.behavior.md',
       '.autodev/DECISIONS.md',
       // Cumulative evolution: 4.14 evolves the earlier suites'
       // diff-discipline allowlists (and 5 MSG_* vocabulary pins)
@@ -824,6 +880,161 @@ describe('AC8 — diff discipline', () => {
       'tests/track_monitor.test.js',
       'tests/visibility.test.js',
       'tests/writer.test.js',
+      // Honest cumulative evolution: 5.2 (baseline/training/evaluation
+      // selection + training approach and verbal scaffolding fields)
+      // legitimately adds session_fields.js (pure buildInitialConditions +
+      // UNDETECTED_CONDITION_FIELDS placeholders + installSessionFields
+      // with the 5.3/5.4 seams), amends session_controls.js's Start
+      // sequence (metadata-first minting, session-save, category echo,
+      // category-required abort), adds the SW-side session-save handler
+      // to recording_host.js, accepts/stores/echoes sessionCategory in
+      // recorder.js, wires the fields install into content.js (+
+      // extensionVersion pass-through), adds session_fields.js to the
+      // manifest content_scripts list, adds additive classes to
+      // overlay.css, records the ## 5.2 decisions, and adds its test +
+      // evidence; its files join the allowlists.
+      'session_fields.js',
+      'tests/session_fields.test.js',
+      'session_controls.js',
+      'recorder.js',
+      'recording_host.js',
+      'content.js',
+      'manifest.json',
+      'overlay.css',
+      '.autodev/evidence/5.2.contract.md',
+      '.autodev/evidence/5.2.build.md',
+      // Honest cumulative evolution: 5.2's review/behavior evidence
+      // lands after the pins were evolved (2.x/3.x/4.x/5.1 precedent).
+      '.autodev/evidence/5.2.review.md',
+      '.autodev/evidence/5.2.behavior.md',
+      // Honest cumulative evolution: 5.3 (remember previous selections
+      // without silently changing a game's recorded conditions)
+      // legitimately adds selection_memory.js (createSelectionMemory +
+      // validateRememberedSelection, chrome.storage.local-backed
+      // remembered defaults, no record-write path), adds the optional
+      // onSessionStarted hook to session_controls.js (fired once at the
+      // phase → 'active' point, guarded in try/catch), wires the memory
+      // construction + restore + onSessionStarted pass-through into
+      // content.js, adds the "storage" permission and selection_memory.js
+      // to manifest.json, records the ## 5.3 decisions, and adds its test
+      // + evidence; its files join the allowlists. (session_controls.js,
+      // content.js, manifest.json and .autodev/DECISIONS.md are already
+      // allowlisted from 5.1/5.2.)
+      'selection_memory.js',
+      'tests/selection_memory.test.js',
+      // 5.3 also evolves the exact-permissions pins in these suites
+      // (they carry no git-status allowlist of their own, so they join
+      // here).
+      'tests/db.test.js',
+      'tests/manifest_sw.test.js',
+      // 5.3 also evolves the working-tree diff pins in these suites.
+      'tests/clock_link.test.js',
+      'tests/timecode.test.js',
+      '.autodev/evidence/5.3.contract.md',
+      '.autodev/evidence/5.3.build.md',
+      // Honest cumulative evolution: 5.3's review/behavior evidence
+      // lands after the pins are evolved (2.x/3.x/4.x/5.1/5.2 precedent).
+      '.autodev/evidence/5.3.review.md',
+      '.autodev/evidence/5.3.behavior.md',
+      // Honest cumulative evolution: 5.4 (show detected game conditions
+      // and allow manual completion of unavailable fields before
+      // recording) legitimately adds detected_conditions.js
+      // (detectGameConditions + CONDITION_PROBES + installConditionsPanel
+      // + attachConditionsPanel; playerColor detected via the verified
+      // wc-chess-board/flipped probe, the other four fields manual-only),
+      // wires the panel install + getDetectedConditions plug-in +
+      // attachConditionsPanel composite into content.js, adds
+      // detected_conditions.js to manifest.json, adds additive panel
+      // classes to overlay.css, records the ## 5.4 decisions, and adds
+      // its test + evidence; its files join the allowlists.
+      // (content.js, manifest.json, overlay.css and .autodev/DECISIONS.md
+      // are already allowlisted from 5.1/5.2/5.3.)
+      'detected_conditions.js',
+      'tests/detected_conditions.test.js',
+      '.autodev/evidence/5.4.contract.md',
+      '.autodev/evidence/5.4.build.md',
+      '.autodev/evidence/5.4.review.md',
+      '.autodev/evidence/5.4.behavior.md',
+      // 5.4 also evolves the cumulative pins in these suites (each
+      // carries its own git-status allowlist, so they join here).
+      'tests/attempt_tracker.test.js',
+      'tests/audio_policy.test.js',
+      'tests/capture_selection.test.js',
+      'tests/chunk_writer.test.js',
+      'tests/device_selection.test.js',
+      'tests/finalizer.test.js',
+      'tests/format_support.test.js',
+      'tests/game_lifecycle.test.js',
+      'tests/history_tracker.test.js',
+      'tests/lifecycle.test.js',
+      'tests/recording_host.test.js',
+      'tests/retention.test.js',
+      'tests/selection_memory.test.js',
+      'tests/sender.test.js',
+      'tests/session_controls.test.js',
+      'tests/session_fields.test.js',
+      'tests/session_store.test.js',
+      'tests/speech.test.js',
+      'tests/status_indicator.test.js',
+      'tests/stream_starter.test.js',
+      'tests/stream_status.test.js',
+      'tests/sync_marker.test.js',
+      'tests/track_monitor.test.js',
+      'tests/visibility.test.js',
+      'tests/writer.test.js',
+      // 5.4 also evolves the working-tree diff pins in these suites.
+      'tests/clock_link.test.js',
+      'tests/timecode.test.js',
+      // Honest cumulative evolution: 5.5 (prevent a duplicate Start
+      // from creating overlapping recording sessions) legitimately adds
+      // the atomic duplicate-Start guard to recorder.js's
+      // handleSetSession (sessionId-equality discriminator, synchronous
+      // check-and-set, nothing overwritten on refusal), adds the
+      // content-side pre-check + mint reorder + localAbortStart +
+      // refusal-detail mapping to session_controls.js, records the
+      // ## 5.5 decisions, and adds its test + evidence; its files join
+      // the allowlists. No new channel messages, events, stores, or
+      // permissions.
+      'recorder.js',
+      'session_controls.js',
+      'tests/duplicate_start.test.js',
+      '.autodev/DECISIONS.md',
+      '.autodev/evidence/5.5.contract.md',
+      '.autodev/evidence/5.5.build.md',
+      // Honest cumulative evolution: 5.5's review/behavior evidence lands
+      // after the pins are evolved (2.x/3.x/4.x/5.1-5.4 precedent).
+      '.autodev/evidence/5.5.review.md',
+      '.autodev/evidence/5.5.behavior.md',
+      // 5.5 also evolves the cumulative pins in these suites (each
+      // carries its own git-status allowlist, so they join here).
+      'tests/attempt_tracker.test.js',
+      'tests/audio_policy.test.js',
+      'tests/capture_selection.test.js',
+      'tests/chunk_writer.test.js',
+      'tests/device_selection.test.js',
+      'tests/finalizer.test.js',
+      'tests/format_support.test.js',
+      'tests/game_lifecycle.test.js',
+      'tests/history_tracker.test.js',
+      'tests/lifecycle.test.js',
+      'tests/recording_host.test.js',
+      'tests/retention.test.js',
+      'tests/selection_memory.test.js',
+      'tests/sender.test.js',
+      'tests/session_controls.test.js',
+      'tests/session_fields.test.js',
+      'tests/session_store.test.js',
+      'tests/speech.test.js',
+      'tests/status_indicator.test.js',
+      'tests/stream_starter.test.js',
+      'tests/stream_status.test.js',
+      'tests/sync_marker.test.js',
+      'tests/track_monitor.test.js',
+      'tests/visibility.test.js',
+      'tests/writer.test.js',
+      // 5.5 also evolves the working-tree diff pins in these suites.
+      'tests/clock_link.test.js',
+      'tests/timecode.test.js',
     ]);
     const stray = changed.filter((f) => !allowed.has(f));
     assert.deepEqual(stray, [],
@@ -836,7 +1047,10 @@ describe('AC8 — diff discipline', () => {
   });
 
   it('content scripts are byte-identical', () => {
-    for (const f of ['content.js', 'sync_flash.js']) {
+    // Honest cumulative evolution (5.1): content.js leaves this pin —
+    // 5.1 legitimately wires the Start/Stop install into content.js
+    // (pinned in tests/session_controls.test.js AC7).
+    for (const f of ['sync_flash.js']) {
       const diff = execSync(`git diff HEAD -- ${f}`, { cwd: REPO }).toString();
       assert.equal(diff, '', f + ' changed');
     }

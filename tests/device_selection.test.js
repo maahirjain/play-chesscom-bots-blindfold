@@ -621,12 +621,18 @@ describe('AC7 — recorder channel routing', () => {
     assert.ok(/^[0-9a-f-]{36}$/.test(env.eventId));
     assert.equal(env.appendSeq, null);
     assert.equal(env.refs, null);
-    // A second session gets its own anchor.
+    // 5.5: a second set-session with a DIFFERENT sessionId while one is
+    // active is refused ({ok:false, error:'session-active'}) by the
+    // duplicate-Start guard — no state is overwritten. The active
+    // session remains SID, so no clock_anchor is emitted for SID2, and
+    // the permission event still belongs to SID.
     const SID2 = 'cccccccc-3333-4333-8333-cccccccccccc';
-    await send({ msg: 'recorder-set-session', sessionId: SID2, gameId: GID });
+    const refused = await send({ msg: 'recorder-set-session', sessionId: SID2, gameId: GID });
+    assert.deepEqual(refused, { ok: false, error: 'session-active' });
     await send({ msg: 'mic-request-permission' });
     const types2 = sentToWriter.slice(2).map((m) => m.event.eventType);
-    assert.deepEqual(types2, ['clock_anchor', 'microphone_permission_changed']);
+    assert.deepEqual(types2, ['microphone_permission_changed']);
+    assert.equal(sentToWriter[2].event.sessionId, SID);
   });
 
   it('pre-session emission is inert: commands work, no writer traffic', async () => {
@@ -1086,6 +1092,56 @@ describe('AC8 — diff discipline', () => {
       'tests/visibility.test.js',
       'tests/writer.test.js',
       // 5.4 also evolves the working-tree diff pins in these suites.
+      'tests/clock_link.test.js',
+      'tests/timecode.test.js',
+      // Honest cumulative evolution: 5.5 (prevent a duplicate Start
+      // from creating overlapping recording sessions) legitimately adds
+      // the atomic duplicate-Start guard to recorder.js's
+      // handleSetSession (sessionId-equality discriminator, synchronous
+      // check-and-set, nothing overwritten on refusal), adds the
+      // content-side pre-check + mint reorder + localAbortStart +
+      // refusal-detail mapping to session_controls.js, records the
+      // ## 5.5 decisions, and adds its test + evidence; its files join
+      // the allowlists. No new channel messages, events, stores, or
+      // permissions.
+      'recorder.js',
+      'session_controls.js',
+      'tests/duplicate_start.test.js',
+      '.autodev/DECISIONS.md',
+      '.autodev/evidence/5.5.contract.md',
+      '.autodev/evidence/5.5.build.md',
+      // Honest cumulative evolution: 5.5's review/behavior evidence lands
+      // after the pins are evolved (2.x/3.x/4.x/5.1-5.4 precedent).
+      '.autodev/evidence/5.5.review.md',
+      '.autodev/evidence/5.5.behavior.md',
+      // 5.5 also evolves the cumulative pins in these suites (each
+      // carries its own git-status allowlist, so they join here).
+      'tests/attempt_tracker.test.js',
+      'tests/audio_policy.test.js',
+      'tests/capture_selection.test.js',
+      'tests/chunk_writer.test.js',
+      'tests/device_selection.test.js',
+      'tests/finalizer.test.js',
+      'tests/format_support.test.js',
+      'tests/game_lifecycle.test.js',
+      'tests/history_tracker.test.js',
+      'tests/lifecycle.test.js',
+      'tests/recording_host.test.js',
+      'tests/retention.test.js',
+      'tests/selection_memory.test.js',
+      'tests/sender.test.js',
+      'tests/session_controls.test.js',
+      'tests/session_fields.test.js',
+      'tests/session_store.test.js',
+      'tests/speech.test.js',
+      'tests/status_indicator.test.js',
+      'tests/stream_starter.test.js',
+      'tests/stream_status.test.js',
+      'tests/sync_marker.test.js',
+      'tests/track_monitor.test.js',
+      'tests/visibility.test.js',
+      'tests/writer.test.js',
+      // 5.5 also evolves the working-tree diff pins in these suites.
       'tests/clock_link.test.js',
       'tests/timecode.test.js',
     ]);

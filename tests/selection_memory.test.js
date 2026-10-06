@@ -413,10 +413,37 @@ describe('AC5 — no-silent-change architectural pins', () => {
     const diff = execSync('git diff HEAD --stat', { cwd: REPO }).toString();
     // session_controls.js / content.js / manifest.json / selection_memory.js
     // only — recorder.js and recording_host.js are untouched by 5.3.
+    // Honest cumulative evolution: 5.5's duplicate-Start guard touches
+    // recorder.js (the handleSetSession guard only — purely additive);
+    // recording_host.js and sw.js stay untouched.
     const touched = diff.split('\n').filter((l) => l.includes('|'))
       .map((l) => l.split('|')[0].trim());
-    for (const f of ['recorder.js', 'recording_host.js', 'sw.js']) {
-      assert.ok(!touched.includes(f), f + ' must be untouched by 5.3');
+    for (const f of ['recording_host.js', 'sw.js']) {
+      assert.ok(!touched.includes(f), f + ' must be untouched by 5.5');
+    }
+    if (touched.includes('recorder.js')) {
+      // 5.5's guard is purely additive: the session-active refusal block
+      // in handleSetSession. No lines removed, no new messages.
+      const rdiff = execSync('git diff HEAD -- recorder.js', { cwd: REPO }).toString();
+      const radded = rdiff.split('\n')
+        .filter((l) => l.startsWith('+') && !l.startsWith('+++'))
+        .map((l) => l.slice(1));
+      const bad = radded.filter((l) => {
+        const t = l.trim();
+        return !(t === '' || t.startsWith('//') || t.startsWith('}') ||
+          t.startsWith('{') || t.startsWith('try {') ||
+          t.startsWith('} catch') || t.includes('5.5') ||
+          t.includes('session-active') || t.includes('isSessionActive()') ||
+          t.includes('sid') || t.includes('sendResponse') ||
+          t === 'return false;');
+      });
+      assert.deepEqual(bad, [],
+        'recorder.js diff is only the 5.5 guard:\n' + bad.join('\n'));
+      const rremoved = rdiff.split('\n')
+        .filter((l) => l.startsWith('-') && !l.startsWith('---'))
+        .map((l) => l.slice(1).trim())
+        .filter((l) => l !== '');
+      assert.deepEqual(rremoved, [], '5.5 removes nothing from recorder.js');
     }
     const controls = codeOnly('session_controls.js');
     const ensureCount = (controls.match(/onSessionStarted/g) || []).length;
@@ -543,6 +570,56 @@ describe('AC6 — wiring and diff discipline', () => {
       'tests/track_monitor.test.js',
       'tests/visibility.test.js',
       'tests/writer.test.js',
+      // Honest cumulative evolution: 5.5 (prevent a duplicate Start
+      // from creating overlapping recording sessions) legitimately adds
+      // the atomic duplicate-Start guard to recorder.js's
+      // handleSetSession (sessionId-equality discriminator, synchronous
+      // check-and-set, nothing overwritten on refusal), adds the
+      // content-side pre-check + mint reorder + localAbortStart +
+      // refusal-detail mapping to session_controls.js, records the
+      // ## 5.5 decisions, and adds its test + evidence; its files join
+      // the allowlists. No new channel messages, events, stores, or
+      // permissions.
+      'recorder.js',
+      'session_controls.js',
+      'tests/duplicate_start.test.js',
+      '.autodev/DECISIONS.md',
+      '.autodev/evidence/5.5.contract.md',
+      '.autodev/evidence/5.5.build.md',
+      // Honest cumulative evolution: 5.5's review/behavior evidence lands
+      // after the pins are evolved (2.x/3.x/4.x/5.1-5.4 precedent).
+      '.autodev/evidence/5.5.review.md',
+      '.autodev/evidence/5.5.behavior.md',
+      // 5.5 also evolves the cumulative pins in these suites (each
+      // carries its own git-status allowlist, so they join here).
+      'tests/attempt_tracker.test.js',
+      'tests/audio_policy.test.js',
+      'tests/capture_selection.test.js',
+      'tests/chunk_writer.test.js',
+      'tests/device_selection.test.js',
+      'tests/finalizer.test.js',
+      'tests/format_support.test.js',
+      'tests/game_lifecycle.test.js',
+      'tests/history_tracker.test.js',
+      'tests/lifecycle.test.js',
+      'tests/recording_host.test.js',
+      'tests/retention.test.js',
+      'tests/selection_memory.test.js',
+      'tests/sender.test.js',
+      'tests/session_controls.test.js',
+      'tests/session_fields.test.js',
+      'tests/session_store.test.js',
+      'tests/speech.test.js',
+      'tests/status_indicator.test.js',
+      'tests/stream_starter.test.js',
+      'tests/stream_status.test.js',
+      'tests/sync_marker.test.js',
+      'tests/track_monitor.test.js',
+      'tests/visibility.test.js',
+      'tests/writer.test.js',
+      // 5.5 also evolves the working-tree diff pins in these suites.
+      'tests/clock_link.test.js',
+      'tests/timecode.test.js',
     ]);
     const stray = changed.filter((f) => !allowed.has(f));
     assert.deepEqual(stray, [],
@@ -564,18 +641,41 @@ describe('AC6 — wiring and diff discipline', () => {
     // The 'extensionVersion: extensionVersion,' added line is the
     // comma-only change where the new onSessionStarted field joins the
     // returned options object (the comma-less version is the only
-    // removed line, asserted below).
-    const bad = added.filter((l) =>
-      !(structural(l) || l.includes('onSessionStarted') || l.includes('5.3') ||
-        l.trim() === 'extensionVersion: extensionVersion,'));
-    assert.deepEqual(bad, [], 'unexpected added lines in session_controls.js:\n' + bad.join('\n'));
+    // removed line in the 5.3 delta, asserted below).
+    // Honest cumulative evolution: 5.5's duplicate-Start defense adds
+    // the localAbortStart helper, the pre-check after recorder-ensure,
+    // moves minting after the pre-check, and maps the session-active
+    // refusal to the honest abort path. Its added lines are 5.5-keyworded
+    // or moved verbatim from the old minting block (they also appear as
+    // removed lines, asserted below).
+    const kw55 = (l) =>
+      l.includes('5.5') || l.includes('localAbortStart') ||
+      l.includes('duplicate-start') || l.includes('session-active') ||
+      l.includes('MSG_GET_STATUS') || l.includes('statusResp') ||
+      l.includes('ensureResp') || l.includes('pre-check') ||
+      l.includes('handledAbort') || l.includes('detailText') ||
+      l.includes('factoriesOk') || l.includes('setSlots(null, null)') ||
+      l.includes('lastStartResults = {}') || l.includes('return null;') ||
+      l.includes('fieldsHandle !== null');
     const removed = diff.split('\n')
       .filter((l) => l.startsWith('-') && !l.startsWith('---'))
       .map((l) => l.slice(1).trim())
       .filter((l) => l !== '');
-    assert.deepEqual(removed, ['extensionVersion: extensionVersion'],
-      'the only removed line is the comma-less version it replaces');
-    // No new offscreen MSG_* constants (5.3 adds no channel messages).
+    const bad55 = added.filter((l) =>
+      !(structural(l) || l.includes('onSessionStarted') || l.includes('5.3') ||
+        l.trim() === 'extensionVersion: extensionVersion,' ||
+        kw55(l) || removed.includes(l.trim())));
+    assert.deepEqual(bad55, [], 'unexpected added lines in session_controls.js:\n' + bad55.join('\n'));
+    const badRemoved = removed.filter((l) =>
+      !(l === 'extensionVersion: extensionVersion' ||
+        added.some((a) => a.trim() === l) || // 5.5 moved the minting block
+        l.startsWith('//') || // 5.5 rewrote the contract-order comment
+        l.includes('abortStart(') || // → localAbortStart
+        l === 'return;' || // → throw { handledAbort: true }
+        l === 'var factoriesOk =')); // 5.5 restructured the declaration
+    assert.deepEqual(badRemoved, [],
+      'unexpected removed lines in session_controls.js:\n' + badRemoved.join('\n'));
+    // No new offscreen MSG_* constants (5.3 and 5.5 add no channel messages).
     const addedMsgConsts = added.filter((l) => /var MSG_[A-Z_]+ =/.test(l));
     assert.deepEqual(addedMsgConsts, [], 'no new MSG_* constants');
   });
@@ -663,9 +763,12 @@ describe('AC6 — wiring and diff discipline', () => {
   });
 
   it('recorder.js, recording_host.js, sw.js are untouched by 5.3 (no new messages)', () => {
-    for (const f of ['recorder.js', 'recording_host.js', 'sw.js']) {
+    // Honest cumulative evolution: 5.5's duplicate-Start guard touches
+    // recorder.js (the handleSetSession guard only — purely additive,
+    // asserted above); recording_host.js and sw.js stay untouched.
+    for (const f of ['recording_host.js', 'sw.js']) {
       const diff = execSync(`git diff HEAD -- ${f}`, { cwd: REPO }).toString();
-      assert.equal(diff.trim(), '', f + ' must be untouched by 5.3');
+      assert.equal(diff.trim(), '', f + ' must be untouched by 5.5');
     }
   });
 });

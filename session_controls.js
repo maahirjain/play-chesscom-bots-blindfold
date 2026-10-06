@@ -595,6 +595,20 @@ var BlindfoldSession = BlindfoldSession || {};
       setButton('Start', true, detailText, 'Start recording session');
     }
 
+    // 5.5: local-only abort — resets this tab's control WITHOUT
+    // touching recorder-side state. Used when the failure means
+    // another tab may hold the active session (pre-check refusal,
+    // set-session 'session-active' refusal, post-pre-check mint
+    // failure): clearRecorderSession would send
+    // set-session{null,null}, which the 5.5 guard allows as the
+    // Stop-clear — wiping the other tab's session.
+    function localAbortStart(detailText) {
+      setSlots(null, null);
+      lastStartResults = {};
+      phase = CONTROL_PHASE_IDLE;
+      setButton('Start', true, detailText, 'Start recording session');
+    }
+
     // 5.2: resolve the fields handle for this Start. null → the 5.1
     // path. A malformed handle is a programming error — fail the
     // Start honestly rather than silently dropping the category.
@@ -625,7 +639,11 @@ var BlindfoldSession = BlindfoldSession || {};
 
       var fieldsHandle = resolveFieldsHandle();
       if (fieldsHandle === false) {
-        abortStart('fields-malformed');
+        // 5.5 (review N2): local-only abort — this tab has minted
+        // nothing and owns no recorder session here, so
+        // clearRecorderSession() would only risk wiping another tab's
+        // active session via the Stop-clear path.
+        localAbortStart('fields-malformed');
         return;
       }
 
@@ -637,16 +655,22 @@ var BlindfoldSession = BlindfoldSession || {};
       // recorder IS metadata.sessionId. protocolVersion is null
       // (unknown): the user maintains protocol.md outside the
       // extension (1.1 normalizeProtocolVersion).
+      //
+      // 5.5: the minting itself happens AFTER recorder-ensure, in the
+      // chain below — so the duplicate-Start pre-check aborts before
+      // anything is minted. Only the selection read and the category
+      // validation stay here; they mint nothing.
       var metadata = null;
       var conditions = null;
       var sessionCategory = null;
+      var factoriesOk = false;
+      var selection = null;
       if (fieldsHandle !== null) {
-        var factoriesOk =
+        factoriesOk =
           typeof BS.isSessionCategory === 'function' &&
           typeof BS.createSessionMetadata === 'function' &&
           typeof BS.addGameToSession === 'function' &&
           typeof BS.buildInitialConditions === 'function';
-        var selection = null;
         if (factoriesOk) {
           try {
             selection = fieldsHandle.getSelection();
@@ -670,42 +694,18 @@ var BlindfoldSession = BlindfoldSession || {};
             'Start recording session');
           return;
         }
-        try {
-          metadata = BS.createSessionMetadata({
-            extensionVersion: opts.extensionVersion,
-            protocolVersion: null,
-            sessionCategory: sessionCategory
-          });
-          gameId = BS.newGameId();
-          metadata = BS.addGameToSession(metadata, gameId);
-          conditions = BS.buildInitialConditions(selection,
-            fieldsHandle.getDetectedConditions());
-        } catch (e) {
-          phase = CONTROL_PHASE_IDLE;
-          setButton('Start', true, 'record-build-failed',
-            'Start recording session');
-          return;
-        }
-        sessionId = metadata.sessionId;
-      } else {
-        try {
-          sessionId = BS.newSessionId();
-          gameId = BS.newGameId();
-        } catch (e) {
-          abortStart('id-mint-failed');
-          return;
-        }
       }
 
-      // Contract §3.3 order (5.2): interlock → validate selection →
-      // metadata-first minting → recorder-ensure → session-save →
-      // recorder-set-session → recorder-start-streams → slots +
-      // emitPageStart + poll. session-save sits AFTER recorder-ensure
-      // and BEFORE recorder-set-session: an ensure-failure persists
-      // nothing, and a save-failure aborts before the recorder ever
-      // sees the session — persisted state and recorder state stay
-      // consistent. Per-stream start failures do not abort Start (4.6
-      // isolation); only channel-level failures do.
+      // Contract §3.2 order (5.5): interlock → validate selection →
+      // recorder-ensure → pre-check → mint → build records →
+      // session-save → recorder-set-session → recorder-start-streams
+      // → slots + emitPageStart + poll. session-save sits AFTER
+      // recorder-ensure and BEFORE recorder-set-session: an
+      // ensure-failure persists nothing, and a save-failure aborts
+      // before the recorder ever sees the session — persisted state
+      // and recorder state stay consistent. Per-stream start failures
+      // do not abort Start (4.6 isolation); only channel-level
+      // failures do.
       //
       // session-save timeout (open question #2): no client-side timer
       // beyond the platform's. The SW handler is total — every path
@@ -730,6 +730,71 @@ var BlindfoldSession = BlindfoldSession || {};
             // Reject the chain with a sentinel the tail recognizes as
             // "already handled" so it does not double-report.
             throw { handledAbort: true };
+          }
+          // 5.5 pre-check: after recorder-ensure, before minting. A
+          // fresh document (created:true) cannot hold a session, so
+          // no query is needed. Otherwise ask the document whether a
+          // session is already active — {ok:true} with a sessionId
+          // while this tab passed the local interlock means ANOTHER
+          // tab holds the session.
+          if (isPlainObject(ensureResp) && ensureResp.created === true) {
+            return null; // pre-check skipped: fresh document
+          }
+          // The rejection handler is attached HERE (not at the tail):
+          // a dead document cannot hold a session, so no-response
+          // proceeds — the atomic guard in the offscreen document
+          // remains the correctness arbiter.
+          return channelCall(MSG_GET_STATUS).then(null, function () {
+            return null;
+          });
+        })
+        .then(function (statusResp) {
+          // Pre-check verdict (null when skipped). Refusal aborts
+          // BEFORE minting: nothing minted, nothing persisted, no
+          // further messages — and crucially no clearRecorderSession,
+          // which would wipe the other tab's session. {ok:false} or
+          // no-response: proceed — the atomic guard in the offscreen
+          // document remains the correctness arbiter (it closes the
+          // pre-check's TOCTOU race).
+          if (isPlainObject(statusResp) && statusResp.ok === true &&
+              typeof statusResp.sessionId === 'string' &&
+              statusResp.sessionId !== '') {
+            localAbortStart('duplicate-start:session-active');
+            throw { handledAbort: true };
+          }
+          // 5.5: minting moved after recorder-ensure (it used to run
+          // synchronously above) so the pre-check aborts before
+          // anything is minted.
+          if (fieldsHandle !== null) {
+            try {
+              metadata = BS.createSessionMetadata({
+                extensionVersion: opts.extensionVersion,
+                protocolVersion: null,
+                sessionCategory: sessionCategory
+              });
+              gameId = BS.newGameId();
+              metadata = BS.addGameToSession(metadata, gameId);
+              conditions = BS.buildInitialConditions(selection,
+                fieldsHandle.getDetectedConditions());
+            } catch (e) {
+              phase = CONTROL_PHASE_IDLE;
+              setButton('Start', true, 'record-build-failed',
+                'Start recording session');
+              throw { handledAbort: true };
+            }
+            sessionId = metadata.sessionId;
+          } else {
+            try {
+              sessionId = BS.newSessionId();
+              gameId = BS.newGameId();
+            } catch (e) {
+              // Local-only: the recorder holds no session of ours
+              // here (pre-check passed, no set-session sent), so
+              // clearRecorderSession would only risk wiping another
+              // tab's post-pre-check session.
+              localAbortStart('id-mint-failed');
+              throw { handledAbort: true };
+            }
           }
           if (metadata === null) {
             return null; // 5.1 path: no session-save
@@ -766,6 +831,16 @@ var BlindfoldSession = BlindfoldSession || {};
             var err = (isPlainObject(setResp) &&
               typeof setResp.error === 'string') ?
               setResp.error : 'no-response';
+            if (err === 'session-active') {
+              // 5.5: the atomic guard refused — another tab holds the
+              // session (the pre-check's TOCTOU race). Local reset
+              // ONLY: clearRecorderSession would send
+              // set-session{null,null} and wipe their session. The
+              // race-loser's session-save record stays as honest raw
+              // data (contract §4); §6 tolerates media-less sessions.
+              localAbortStart('duplicate-start:session-active');
+              throw { handledAbort: true };
+            }
             abortStart('set-session-failed:' + err);
             throw { handledAbort: true };
           }

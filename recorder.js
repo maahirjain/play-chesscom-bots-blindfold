@@ -1509,6 +1509,22 @@ var BlindfoldSession = BlindfoldSession || {};
         } catch (e) { /* ignore */ }
         return false;
       }
+      // 5.5: duplicate-Start guard. Refuse a *new* session while one is
+      // active; allow idempotent re-set (same sessionId — 5.9's game
+      // change) and the Stop-clear (null). The discriminator is
+      // sessionId equality, not tab identity. Synchronous
+      // check-and-set: no await/promise/callback between this check
+      // and the assignments below, so two racing set-session messages
+      // cannot interleave (single-threaded message dispatch). On
+      // refusal nothing is overwritten — the refused tab never
+      // becomes the owner — and the response carries no session
+      // details (discretion).
+      if (isSessionActive() && sid !== null && sid !== sessionId) {
+        try {
+          sendResponse({ ok: false, error: 'session-active' });
+        } catch (e) { /* ignore */ }
+        return false;
+      }
       sessionId = sid;
       gameId = gid;
       // 5.1: capture the owning tab for 5.5's duplicate-Start guard.
