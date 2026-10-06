@@ -3,7 +3,7 @@
   "checkpoints": {
     "checkpoint-01-data-contract": {
       "branch": "autodev/checkpoint-01-data-contract",
-      "local_sha": "6bf8248",
+      "local_sha": "6bf82481916d98f662bae348af5dd321ea7de77a",
       "remote_sha": null,
       "remote_sync": "PENDING_REMOTE_SYNC"
     },
