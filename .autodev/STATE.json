@@ -132,7 +132,7 @@
     },
     "1.2": {
       "status": "DONE",
-      "commit": null,
+      "commit": "0774fc4",
       "verification": "V1 PASS (47/47 node --test, 2 independent reviews); V2 PASS (headless-Chrome renderer smoke); V3/V4 deferred N/A",
       "deferred": [
         "AC3 Start wiring -> 5.1/5.5",
