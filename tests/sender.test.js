@@ -406,10 +406,13 @@ describe('AC7 — diff discipline (static)', () => {
   it('manifest js list is exactly the contracted order', () => {
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
     // 2.7 legitimately inserts lifecycle.js after sender.js per its
-    // contract (page/context lifecycle events).
+    // contract (page/context lifecycle events). 2.8 inserts
+    // status_indicator.js after lifecycle.js (deviation from the 2.8
+    // contract AC10 documented in 2.8.build.md — the module cannot load
+    // in the content script without the manifest entry).
     assert.deepEqual(manifest.content_scripts[0].js, [
-      'event_envelope.js', 'sender.js', 'lifecycle.js', 'sounds.js',
-      'chess.min.js', 'chess_utils.js', 'content.js'
+      'event_envelope.js', 'sender.js', 'lifecycle.js', 'status_indicator.js',
+      'sounds.js', 'chess.min.js', 'chess_utils.js', 'content.js'
     ]);
   });
 
@@ -734,11 +737,26 @@ describe('2.5 retry policy', () => {
       'tests/lifecycle.test.js',
       '.autodev/evidence/2.7.contract.md',
       '.autodev/evidence/2.7.build.md',
+      // Honest cumulative evolution (2.2–2.7 precedent): 2.8 legitimately
+      // adds status_indicator.js (new), wires it in content.js + the
+      // manifest js list + overlay.css, and evolves these pins.
+      'status_indicator.js',
+      'tests/status_indicator.test.js',
+      'content.js',
+      'manifest.json',
+      'overlay.css',
+      '.autodev/evidence/2.8.contract.md',
+      '.autodev/evidence/2.8.build.md',
       // Honest cumulative evolution: the adversarial review and
       // behavioral verification evidence land after the builder
       // evolved these pins (2.6 precedent).
       '.autodev/evidence/2.7.review.md',
       '.autodev/evidence/2.7.behavior.md',
+      // Honest cumulative evolution: the 2.8 adversarial review and
+      // behavioral verification evidence land after the builder
+      // evolved these pins (2.6/2.7 precedent).
+      '.autodev/evidence/2.8.review.md',
+      '.autodev/evidence/2.8.behavior.md',
       'sw.js',
       'session_store.js',
       'session_identity.js',

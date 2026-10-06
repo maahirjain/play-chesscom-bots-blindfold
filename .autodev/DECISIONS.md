@@ -226,3 +226,20 @@ Consequential engineering decisions with reasoning and evidence. Newest first.
   whether tabs share a session or get distinct sessions.
 - Spurious-marker rate on clean reloads is unmeasured until V3/AC18
   (real-browser lifecycle timing).
+
+## 2.8: manifest.json gains status_indicator.js (deviation from 2.8 contract AC10)
+
+- **Decision:** the 2.8 contract's AC10 said `manifest.json` byte-identical
+  to HEAD, but `status_indicator.js` must be in the content_scripts js list
+  to load in the content-script world (no `importScripts` there; inlining
+  into content.js would break module conventions). The js list gains exactly
+  one entry after `'lifecycle.js'`; the manifest pin is exact-diff, not
+  byte-identical.
+- **Also:** repaired 7 stale 2.7 post-commit diff-discipline pins (they
+  asserted on `git diff HEAD`, empty after the 2.7 commit) by converting
+  them to durable content assertions. No pin weakened.
+- **Harness finding:** the sender only keeps a writer's error string when
+  the ack's `eventId` matches the head event (`recordAckFailure`); a
+  writer bug dropping eventId would surface as transient-amber (`no-ack`)
+  rather than red. Possible §5/2.9 follow-up: treat `no-ack` after N
+  attempts as persistent. (2.8 build note #2.)

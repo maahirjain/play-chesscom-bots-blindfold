@@ -12,3 +12,28 @@ wc-chess-board .piece {
   background-repeat: no-repeat !important;
   background-position: center !important;
 }
+
+/* Task 2.8: session status indicator (recorder health light).
+   Additive classes only — no changes to existing rules. One small glyph
+   adjacent to the extension's move input; fixed-corner fallback when the
+   input anchor is absent. Green/amber/red per classified state. */
+.blindfold-status-indicator {
+  display: inline-block;
+  font-size: 14px;
+  line-height: 1;
+  margin-left: 6px;
+  vertical-align: middle;
+  cursor: default;
+  user-select: none;
+}
+.blindfold-status-healthy { color: #2fae4e; }
+.blindfold-status-degraded-retrying { color: #e0a800; }
+.blindfold-status-failed-persistent { color: #d33; }
+.blindfold-status-failed-storage-full { color: #d33; }
+.blindfold-status-fallback {
+  position: fixed;
+  right: 12px;
+  bottom: 12px;
+  z-index: 2147483647;
+  font-size: 18px;
+}

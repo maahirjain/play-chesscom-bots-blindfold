@@ -767,11 +767,26 @@ describe('AC11 — diff discipline', () => {
       'tests/game_records.test.js',
       '.autodev/evidence/2.7.contract.md',
       '.autodev/evidence/2.7.build.md',
+      // Honest cumulative evolution (2.2–2.7 precedent): 2.8 legitimately
+      // adds status_indicator.js (new), wires it in content.js + the
+      // manifest js list + overlay.css, and evolves these pins.
+      'status_indicator.js',
+      'tests/status_indicator.test.js',
+      'content.js',
+      'manifest.json',
+      'overlay.css',
+      '.autodev/evidence/2.8.contract.md',
+      '.autodev/evidence/2.8.build.md',
       // Honest cumulative evolution: the adversarial review and
       // behavioral verification evidence land after the builder
       // evolved these pins (2.6 precedent).
       '.autodev/evidence/2.7.review.md',
-      '.autodev/evidence/2.7.behavior.md'
+      '.autodev/evidence/2.7.behavior.md',
+      // Honest cumulative evolution: the 2.8 adversarial review and
+      // behavioral verification evidence land after the builder
+      // evolved these pins (2.6/2.7 precedent).
+      '.autodev/evidence/2.8.review.md',
+      '.autodev/evidence/2.8.behavior.md',
     ]);
     for (const f of changed) {
       assert.ok(allowed.has(f), `unexpected modified file: ${f}`);

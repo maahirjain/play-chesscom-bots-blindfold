@@ -899,11 +899,11 @@ describe('AC14 — SW anchor discipline', () => {
 // AC15: diff discipline.
 // ------------------------------------------------------------------
 describe('AC15 — diff discipline', () => {
-  it('manifest js list is exactly the contracted order (lifecycle.js after sender.js)', () => {
+  it('manifest js list is exactly the contracted order (lifecycle.js, status_indicator.js after sender.js)', () => {
     const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8'));
     assert.deepEqual(manifest.content_scripts[0].js, [
-      'event_envelope.js', 'sender.js', 'lifecycle.js', 'sounds.js',
-      'chess.min.js', 'chess_utils.js', 'content.js'
+      'event_envelope.js', 'sender.js', 'lifecycle.js', 'status_indicator.js',
+      'sounds.js', 'chess.min.js', 'chess_utils.js', 'content.js'
     ]);
   });
 
@@ -916,10 +916,9 @@ describe('AC15 — diff discipline', () => {
     assert.deepEqual(manifest, headManifest);
   });
 
-  it('sw.js diff: importScripts gains lifecycle.js + header note only', () => {
-    const diff = execSync('git diff HEAD -- sw.js', { cwd: ROOT }).toString();
-    assert.ok(diff.includes("'lifecycle.js'"), 'importScripts must gain lifecycle.js');
-    // Exactly one importScripts line, with the full 2.7 module set.
+  it('sw.js: importScripts carries lifecycle.js + install call intact (2.7 committed)', () => {
+    // Post-commit durable form of the 2.7 diff pin: the working tree now
+    // equals HEAD, so assert the contracted content instead of the diff.
     const sw = fs.readFileSync(path.join(ROOT, 'sw.js'), 'utf8');
     const calls = (sw.match(/importScripts\s*\(/g) || []).length;
     assert.strictEqual(calls, 1, 'exactly one importScripts call');
@@ -927,39 +926,36 @@ describe('AC15 — diff discipline', () => {
       "importScripts('db.js', 'event_envelope.js', 'writer.js', " +
       "'session_identity.js', 'session_conditions.js', 'session_store.js', 'lifecycle.js');"
     ));
-    // The 2.7 line is gone from the intentionally-absent list.
     assert.ok(!sw.includes('2.7: page/context start'),
       '2.7 must be removed from the absent list');
-    // The install call is untouched.
     assert.ok(sw.includes(
       'BlindfoldSession.writerListener = BlindfoldSession.installWriterListener();'
     ));
   });
 
-  it('writer.js diff: the §3.2 hook + header note only', () => {
-    const diff = execSync('git diff HEAD -- writer.js', { cwd: ROOT }).toString();
-    const added = diff.split('\n').filter((l) => l.startsWith('+') && !l.startsWith('+++'));
-    // The hook: helper + two call sites + header comment adjustments.
-    assert.ok(added.some((l) => l.includes('function fireAfterEventStored')),
-      'hook helper must be added');
-    assert.ok(added.some((l) => l.includes('fireAfterEventStored(message, ack)')),
+  it('writer.js: the 2.7 §3.2 hook is present and type-agnostic (2.7 committed)', () => {
+    // Post-commit durable form of the 2.7 diff pin.
+    const src = fs.readFileSync(path.join(ROOT, 'writer.js'), 'utf8');
+    assert.ok(src.includes('function fireAfterEventStored'),
+      'hook helper must be present');
+    assert.ok(src.includes('fireAfterEventStored(message, ack)'),
       'success-path call site');
-    assert.ok(added.some((l) => l.includes('fireAfterEventStored(message, failAck)')),
+    assert.ok(src.includes('fireAfterEventStored(message, failAck)'),
       'failure-path call site');
-    assert.ok(added.some((l) => l.includes('afterEventStored')),
+    assert.ok(src.includes('afterEventStored'),
       'hook consumer reference');
     // The hook never inspects event types.
-    assert.ok(!added.some((l) => l.includes('eventType')),
+    const hookBlock = src.slice(src.indexOf('function fireAfterEventStored'));
+    assert.ok(!hookBlock.slice(0, 800).includes('eventType'),
       'writer hook must stay type-agnostic');
   });
 
-  it('content.js diff: exactly the §3.3 install line', () => {
-    const diff = execSync('git diff HEAD -- content.js', { cwd: ROOT }).toString();
-    const added = diff.split('\n').filter((l) => l.startsWith('+') && !l.startsWith('+++'));
-    const removed = diff.split('\n').filter((l) => l.startsWith('-') && !l.startsWith('---'));
-    assert.strictEqual(removed.length, 0, 'content.js: no lines removed');
-    assert.strictEqual(added.length, 1, 'content.js: exactly one line added');
-    assert.ok(added[0].includes('BlindfoldSession.installPageEndHook(BlindfoldSession.sender);'));
+  it('content.js: the 2.7 §3.3 install line is present (2.7 committed)', () => {
+    // Post-commit durable form of the 2.7 diff pin. (2.8 adds its own
+    // install wiring; pinned in tests/status_indicator.test.js.)
+    const src = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
+    const occurrences = src.split('BlindfoldSession.installPageEndHook(BlindfoldSession.sender);').length - 1;
+    assert.strictEqual(occurrences, 1, 'content.js: exactly one 2.7 install line');
   });
 
   it('db.js, sender.js, event_envelope.js, session_identity.js, session_conditions.js, session_store.js byte-identical to HEAD', () => {
@@ -992,11 +988,26 @@ describe('AC15 — diff discipline', () => {
       'manifest.json',
       '.autodev/evidence/2.7.contract.md',
       '.autodev/evidence/2.7.build.md',
+      // Honest cumulative evolution (2.2–2.7 precedent): 2.8 legitimately
+      // adds status_indicator.js (new), wires it in content.js + the
+      // manifest js list + overlay.css, and evolves these pins.
+      'status_indicator.js',
+      'tests/status_indicator.test.js',
+      'content.js',
+      'manifest.json',
+      'overlay.css',
+      '.autodev/evidence/2.8.contract.md',
+      '.autodev/evidence/2.8.build.md',
       // Honest cumulative evolution: the adversarial review and
       // behavioral verification evidence land after the builder
       // evolved these pins (2.6 precedent).
       '.autodev/evidence/2.7.review.md',
       '.autodev/evidence/2.7.behavior.md',
+      // Honest cumulative evolution: the 2.8 adversarial review and
+      // behavioral verification evidence land after the builder
+      // evolved these pins (2.6/2.7 precedent).
+      '.autodev/evidence/2.8.review.md',
+      '.autodev/evidence/2.8.behavior.md',
       // Honest cumulative evolution (2.2–2.6 precedent): earlier tasks'
       // suites pin files 2.7 legitimately touches, so their pins evolve
       // in this task's commit.
@@ -1013,7 +1024,10 @@ describe('AC15 — diff discipline', () => {
     for (const f of changed) {
       assert.ok(allowed.has(f), `unexpected modified file: ${f}`);
     }
-    assert.ok(changed.includes('lifecycle.js'), 'lifecycle.js must be new');
+    // NOTE (2.8): the 2.7 "lifecycle.js must be new" assertion was transient
+    // — it could only pass before the 2.7 feature commit. The durable
+    // invariant is no unexpected files (above) plus 2.8's own novelty:
+    assert.ok(changed.includes('status_indicator.js'), 'status_indicator.js must be new');
   });
 
   it('PLAN.md untouched', () => {

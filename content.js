@@ -52,6 +52,11 @@ if (!document.getElementById("blindfold-chess-move-input")) {
     })
 }
 
+// Task 2.8 (PLAN.md §2.8): recorder-health indicator. Installed after the
+// move input exists so it anchors adjacent to it (fixed-corner fallback
+// otherwise). Never throws into page code.
+BlindfoldSession.installStatusIndicator(BlindfoldSession.sender);
+
 document.addEventListener("keydown", (e) => {
     if (e.key == "j" || e.key == "J") {
         e.preventDefault();
