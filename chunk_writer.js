@@ -24,8 +24,10 @@
 // in-flight data the encoder holds but 4.8 has not yet requested dies
 // with the offscreen document — there is no API to recover it, and 4.8
 // does not fabricate recovery or resurrect recorders. Poll timers die
-// with the document. 4.9 logs the discontinuity; 4.13 re-segments on
-// restart; §5 decides whether to restart streams at all.
+// with the document. 4.9 logs the discontinuity (via the optional
+// onTerminalState seam — exact-once per stream — and recorder.js's
+// manifest pre-check); 4.13 re-segments on restart; §5 decides whether
+// to restart streams at all.
 //
 // 4.13 seam: stopForStream()/stopAll() stop the poll loops. The final
 // dataavailable from recorder.stop() is stored as a chunk like any
@@ -149,6 +151,18 @@ var BlindfoldSession = BlindfoldSession || {};
       o.clearTimeout : defaultClearTimeout;
     var randomFn = (typeof o.random === 'function') ?
       o.random : Math.random;
+    // 4.9 seam: optional onTerminalState({streamKind, terminalState}),
+    // invoked exactly once per stream when a poll loop reaches a terminal
+    // state (chunk-stalled, chunk-quota-exceeded, chunk-write-error).
+    // Absent → 4.8's behavior is unchanged. Never throws into the
+    // chunker: monitoring must not break chunking, just as chunking must
+    // not break recording.
+    var onTerminalState = (('onTerminalState' in o) &&
+      o.onTerminalState !== undefined && o.onTerminalState !== null) ?
+      o.onTerminalState : null;
+    if (onTerminalState !== null && typeof onTerminalState !== 'function') {
+      throw new TypeError('chunk_writer: onTerminalState must be a function');
+    }
 
     function defaultPerformanceNow() {
       var g = (typeof globalThis !== 'undefined') ? globalThis : null;
@@ -194,8 +208,27 @@ var BlindfoldSession = BlindfoldSession || {};
         consecutiveMisses: 0,
         emptyPolls: 0,
         lastErrorName: null,
-        lastErrorMessage: null
+        lastErrorMessage: null,
+        // 4.9: whether the onTerminalState seam has fired for this poll
+        // generation (exact-once per stream; a re-started kind gets a
+        // fresh state and may notify again).
+        terminalNotified: false
       };
+    }
+
+    // 4.9: report a terminal chunker state through the optional seam,
+    // exactly once per poll generation. Never throws into the chunker.
+    function notifyTerminalState(kind) {
+      var p = polls[kind];
+      if (!p || p.terminalNotified) {
+        return;
+      }
+      p.terminalNotified = true;
+      if (onTerminalState !== null) {
+        try {
+          onTerminalState({ streamKind: kind, terminalState: p.status });
+        } catch (e) { /* monitoring must never break the chunker */ }
+      }
     }
 
     function stopLoop(kind) {
@@ -224,6 +257,7 @@ var BlindfoldSession = BlindfoldSession || {};
         // decides the durable log shape; the recorder keeps running.
         p.status = STATUS_STALLED;
         stopLoop(kind);
+        notifyTerminalState(kind);
       }
     }
 
@@ -244,6 +278,7 @@ var BlindfoldSession = BlindfoldSession || {};
       p.lastErrorName = name;
       p.lastErrorMessage = errMessage(err);
       stopLoop(kind);
+      notifyTerminalState(kind);
     }
 
     function storeChunk(kind, blob, timecodeMs) {

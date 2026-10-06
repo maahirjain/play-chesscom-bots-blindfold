@@ -661,6 +661,10 @@ describe('AC7/AC8 — discipline and no overreach', () => {
       'chunk_writer.js',
       'recorder.js',
       'recorder.html',
+      // Honest cumulative evolution: 4.9 adds the additive
+      // getManifestRecordsBySession read to format_support.js (restart
+      // detection); its file joins this allowlist.
+      'format_support.js',
       'tests/chunk_writer.test.js',
       '.autodev/evidence/4.8.contract.md',
       '.autodev/evidence/4.8.build.md',
@@ -668,6 +672,22 @@ describe('AC7/AC8 — discipline and no overreach', () => {
       // after the pins were evolved (2.x/3.x/4.1-4.7 precedent).
       '.autodev/evidence/4.8.review.md',
       '.autodev/evidence/4.8.behavior.md',
+      // Honest cumulative evolution: 4.9 (track/error/discontinuity
+      // monitoring) legitimately adds track_monitor.js, wires it into
+      // recorder.js's recorder-start-streams handler (restart pre-check,
+      // attach, restart events), adds the onTerminalState seam to
+      // chunk_writer.js, the getManifestRecordsBySession read to
+      // format_support.js, the script tag in recorder.html, records the
+      // ## 4.9 decisions, and adds its test + evidence; its files join
+      // the allowlists.
+      'track_monitor.js',
+      'tests/track_monitor.test.js',
+      '.autodev/evidence/4.9.contract.md',
+      '.autodev/evidence/4.9.build.md',
+      // Honest cumulative evolution: 4.9's review/behavior evidence lands
+      // after the pins were evolved (2.x/3.x/4.1-4.8 precedent).
+      '.autodev/evidence/4.9.review.md',
+      '.autodev/evidence/4.9.behavior.md',
       '.autodev/DECISIONS.md',
       // Cumulative evolution: earlier suites' diff-discipline allowlists
       // are evolved by this task with justification comments.

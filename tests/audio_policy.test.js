@@ -507,6 +507,12 @@ describe('AC5 — no new event types; no new channel message', () => {
       'microphone_device_selected',
       'microphone_permission_changed',
       'piece_visibility_changed',
+      // Honest cumulative evolution: 4.9 deliberately adds
+      // 'recorder_track_state_changed' (its other two event types,
+      // 'recorder_error' and 'stream_discontinuity', do not match this
+      // scan's regex — they are pinned in tests/track_monitor.test.js
+      // AC5 instead).
+      'recorder_track_state_changed',
       'screen_capture_permission_changed',
       'screen_capture_selected'
     ]);
@@ -576,6 +582,22 @@ describe('AC7 — changed-files discipline', () => {
       // after the pins were evolved (2.x/3.x/4.1-4.7 precedent).
       '.autodev/evidence/4.8.review.md',
       '.autodev/evidence/4.8.behavior.md',
+      // Honest cumulative evolution: 4.9 (track/error/discontinuity
+      // monitoring) legitimately adds track_monitor.js, wires it into
+      // recorder.js's recorder-start-streams handler (restart pre-check,
+      // attach, restart events), adds the onTerminalState seam to
+      // chunk_writer.js, the getManifestRecordsBySession read to
+      // format_support.js, the script tag in recorder.html, records the
+      // ## 4.9 decisions, and adds its test + evidence; its files join
+      // the allowlists.
+      'track_monitor.js',
+      'tests/track_monitor.test.js',
+      '.autodev/evidence/4.9.contract.md',
+      '.autodev/evidence/4.9.build.md',
+      // Honest cumulative evolution: 4.9's review/behavior evidence lands
+      // after the pins were evolved (2.x/3.x/4.1-4.8 precedent).
+      '.autodev/evidence/4.9.review.md',
+      '.autodev/evidence/4.9.behavior.md',
       '.autodev/DECISIONS.md',
       // Cumulative evolution: earlier suites' diff-discipline allowlists
       // are evolved by this task with justification comments.

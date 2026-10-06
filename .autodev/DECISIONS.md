@@ -804,3 +804,63 @@ Consequential engineering decisions with reasoning and evidence. Newest first.
   exposes no promise for it. 4.13's contract must address how finalization
   waits for (or times out on) that last chunk. 4.13 must also tolerate
   non-contiguous chunk indexes (failed writes leave gaps by design).
+
+## 4.9 track/error/discontinuity monitoring
+
+- **Log-shape decision: events, not the manifest.** All 4.9
+  observations (track mute/unmute/end, recorder errors, discontinuity
+  flags) go to the append-only event log (2.4); the manifest gains
+  nothing. Rationale: observations are timestamped occurrences (the
+  event system's purpose); `emitRecorderEvent` already stamps
+  `clockSegmentId` + `monotonicMs` at the source, which is exactly the
+  time model 4.10/4.12 need; §6.3 export and 4.14 status read one
+  timeline, not two stores; the `{kind:'event'}` writer transport is
+  proven by the 4.2/4.3/4.4 selector events, so no new channel message
+  and the `MSG_*` vocabulary is unchanged. Known limitation: sends are
+  best-effort (no retry queue); chunk/manifest records are the backstop
+  for gap detection.
+- **Three new event types** (1.3 convention, own constants in
+  `track_monitor.js`): `recorder_track_state_changed`
+  `{streamKind, trackKind, muted, ended, baseline}` (every transition,
+  no debounce — a debounce policy would be lossy; baseline at attach so
+  4.14 knows the starting state; listeners detached after `onended`),
+  `recorder_error` `{streamKind, errorName, errorMessage,
+  recorderState}` (verbatim platform strings, no diagnosis), and
+  `stream_discontinuity` `{streamKind, reason, lastChunkIndex,
+  supersededSegmentIds, detail}`. The six reasons: `track-ended`,
+  `recorder-error`, `chunk-stalled`, `chunk-quota-exceeded`,
+  `chunk-write-error` (exactly chunk_writer.js's terminal statuses —
+  the mapping is the identity), `restart`.
+- **Chained emission is deliberate:** the observation event
+  (`recorder_track_state_changed` / `recorder_error`) fires *then* the
+  `stream_discontinuity` flag, same tick. Different consumers read
+  different events (4.14 status vs 4.13 re-segmentation); deriving
+  discontinuities instead of logging them would violate "explicit".
+- **Chunk-writer terminal seam:** optional `onTerminalState` factory
+  option on chunk_writer.js, exact-once per stream per terminal
+  generation (a re-started kind gets a fresh state), never throws into
+  the chunker. Rationale for a callback over monitor-side polling:
+  exact-once, no second timer, no timing ambiguity. Absent → 4.8's
+  behavior is unchanged.
+- **Restart detection:** the manifest (extension-owned IDB) survives
+  document death; the dead document's recorders do not. So the new
+  document's `recorder-start-streams` handler pre-checks the manifest
+  for this sessionId *before* starting new streams
+  (`getManifestRecordsBySession`, additive on format_support.js);
+  pre-existing unfinalized records → one `stream_discontinuity`
+  `{reason:'restart', supersededSegmentIds}` per affected kind, with
+  `refs.segmentId` = the new segmentId (null when that kind failed —
+  the old generation is dead either way). 4.13's finalized marker is
+  4.13's to define; until defined the exclusion matches nothing.
+  Streams that never start (4.6 failure stages) get no 4.9 logging —
+  the start-streams response is the record.
+- **muted ≠ silent; no why.** `track.muted` is a platform flag; 4.9
+  logs the flag, never claims silence (the 4.7 no-content-inference
+  rule, applied to track state). No device diagnostics, no
+  "the user unplugged the mic" claims. `recorder.onstop` at Stop is the
+  expected end — 4.13's territory, not a discontinuity.
+- **Monitoring can never fail the pipeline** (the 4.8 precedent,
+  extended): every handler body try/catch-guarded, malformed tracks
+  skipped, throwing emitEvent tolerated, and recorder.js's
+  monitoring attach + restart emission are independently best-effort
+  from 4.8's chunking kickoff.

@@ -2,7 +2,8 @@
 <!-- recorder.html — task 4.1 (PLAN.md §4.1) + task 4.2 (PLAN.md §4.2) +
      task 4.3 (PLAN.md §4.3) + task 4.4 (PLAN.md §4.4) +
      task 4.5 (PLAN.md §4.5) + task 4.6 (PLAN.md §4.6) +
-     task 4.7 (PLAN.md §4.7) + task 4.8 (PLAN.md §4.8).
+     task 4.7 (PLAN.md §4.7) + task 4.8 (PLAN.md §4.8) +
+     task 4.9 (PLAN.md §4.9).
      MV3 offscreen document: the extension's dedicated recording context.
      Loads event_envelope.js (envelope construction for the 4.2/4.3/4.4
      events), db.js (extension-owned IndexedDB — 4.5's recording
@@ -15,6 +16,8 @@
      acquisition + MediaRecorder start, 4.7 classification at
      manifest-write time), chunk_writer.js (4.8 requestData() poll loops
      writing chunk Blobs incrementally to the media_chunks IDB store),
+     track_monitor.js (4.9 track mute/unmute/end + recorder-error
+     observation and discontinuity flags, all to the event log),
      then recorder.js. Created by the service
      worker via chrome.offscreen.createDocument(); never opened by the
      user. -->
@@ -32,6 +35,7 @@
   <script src="audio_policy.js"></script>
   <script src="stream_starter.js"></script>
   <script src="chunk_writer.js"></script>
+  <script src="track_monitor.js"></script>
   <script src="recorder.js"></script>
 </body>
 </html>

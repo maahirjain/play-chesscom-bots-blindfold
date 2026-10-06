@@ -467,10 +467,39 @@ var BlindfoldSession = BlindfoldSession || {};
         });
     }
 
+    // ----------------------------------------------------------------
+    // 4.9: manifest read for restart detection (PLAN.md §4.9). Additive:
+    // the manifest store and its bySessionId index already exist (4.5).
+    // Returns the session's manifest records ([] when none) — unknown
+    // is [], never null. recorder.js's start-streams handler calls this
+    // BEFORE starting new streams: pre-existing unfinalized records
+    // mean a previous document generation died mid-session.
+    // ----------------------------------------------------------------
+
+    function getManifestRecordsBySession(sessionId) {
+      if (typeof sessionId !== 'string' || sessionId === '') {
+        throw new TypeError(
+          'format_support: sessionId must be a non-empty string');
+      }
+      var db = readDb();
+      return Promise.resolve()
+        .then(function () {
+          return db.getAll(MANIFEST_STORE, {
+            index: 'bySessionId',
+            lower: sessionId,
+            upper: sessionId
+          });
+        })
+        .then(function (records) {
+          return Array.isArray(records) ? records : [];
+        });
+    }
+
     return {
       verifyFormats: verifyFormats,
       recordSegmentFormat: recordSegmentFormat,
-      requireValidManifestRecord: requireValidManifestRecord
+      requireValidManifestRecord: requireValidManifestRecord,
+      getManifestRecordsBySession: getManifestRecordsBySession
     };
   }
 

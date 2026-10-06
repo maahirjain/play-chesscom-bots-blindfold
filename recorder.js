@@ -812,14 +812,140 @@ var BlindfoldSession = BlindfoldSession || {};
           // lazily from the shared namespace (format_support precedent)
           // — the chunk writes go direct to the extension-owned IDB
           // from the offscreen document (4.1's direct-IDB path).
+          // 4.9: the writer reports its terminal states (chunk-stalled,
+          // chunk-quota-exceeded, chunk-write-error) to the track
+          // monitor through the optional onTerminalState seam
+          // (exact-once per stream; never throws into the chunker).
           chunkWriter = BS.createChunkWriter({
-            nowUtcIso: o.selectorClock
+            nowUtcIso: o.selectorClock,
+            onTerminalState: function (info) {
+              try {
+                getTrackMonitor().onChunkTerminalState(info);
+              } catch (e) {
+                // Monitoring is best-effort; the chunker already
+                // recorded its terminal state.
+              }
+            }
           });
         }
       }
       return chunkWriter;
     }
 
+    // ----------------------------------------------------------------
+    // 4.9: track/error/discontinuity monitoring (PLAN.md §4.9). recorder.js
+    // wires the track monitor the same way as formatSupport / audioPolicy /
+    // chunkWriter: lazy, shared-namespace-resolved, test-injectable via
+    // o.trackMonitor. Absence is a wiring defect → plain Error, like
+    // createFormatSupport. The monitor observes only (event log); it
+    // never fails the streams or the channel response.
+    // ----------------------------------------------------------------
+
+    var trackMonitor = null;
+    function getTrackMonitor() {
+      if (trackMonitor === null) {
+        var BS = shared();
+        if (typeof BS.createTrackMonitor !== 'function') {
+          throw new Error('recorder: createTrackMonitor is unavailable');
+        }
+        if (o.trackMonitor !== undefined && o.trackMonitor !== null) {
+          trackMonitor = o.trackMonitor;
+        } else {
+          trackMonitor = BS.createTrackMonitor({
+            emitEvent: emitRecorderEvent,
+            // Lazy: the chunk writer may not exist yet when the monitor
+            // is constructed (construction order is monitor-then-writer
+            // in the start-streams handler below).
+            getChunkState: function (streamKind) {
+              return getChunkWriter().getChunkState(streamKind);
+            }
+          });
+        }
+      }
+      return trackMonitor;
+    }
+
+    // 4.9's finalized-marker exclusion for the restart pre-check. The
+    // marker name is 4.13's to define (db.js already anticipates "4.13
+    // marks it finalized"); until defined this matches nothing, so every
+    // manifest record counts as unfinalized.
+    var MANIFEST_FINALIZED_FIELD = null;
+    function isManifestRecordFinalized(record) {
+      return MANIFEST_FINALIZED_FIELD !== null &&
+        !!record[MANIFEST_FINALIZED_FIELD];
+    }
+
+    // 4.9: restart detection. Called BEFORE starter.startStreams():
+    // pre-existing unfinalized manifest records for this sessionId mean a
+    // previous document generation died mid-session (its recorders died
+    // with it; the manifest survived in extension-owned IDB). Returns a
+    // map streamKind → [segmentIds] of the superseded generation ({} when
+    // none — the first start emits nothing). Best-effort: monitoring
+    // never fails the start, so a failed read degrades to "no restart".
+    function checkRestartSuperseded() {
+      if (!isSessionActive()) {
+        return Promise.resolve({});
+      }
+      var fs;
+      try {
+        fs = getFormatSupport();
+      } catch (e) {
+        return Promise.resolve({});
+      }
+      return Promise.resolve()
+        .then(function () { return fs.getManifestRecordsBySession(sessionId); })
+        .then(function (records) {
+          var map = {};
+          for (var i = 0; i < records.length; i++) {
+            var r = records[i];
+            if (!r || isManifestRecordFinalized(r)) {
+              continue;
+            }
+            var kind = r.streamKind;
+            if (typeof kind !== 'string' || kind === '') {
+              continue;
+            }
+            if (!map[kind]) {
+              map[kind] = [];
+            }
+            if (typeof r.segmentId === 'string' &&
+                map[kind].indexOf(r.segmentId) === -1) {
+              map[kind].push(r.segmentId);
+            }
+          }
+          return map;
+        }, function () {
+          return {};
+        });
+    }
+
+    // 4.9: emit one stream_discontinuity {reason:'restart'} per affected
+    // kind after the new generation starts. refs.segmentId is the NEW
+    // segmentId — null when that kind failed to start (the old
+    // generation is dead either way).
+    function emitRestartDiscontinuities(monitor, superseded, result) {
+      var kinds = Object.keys(superseded);
+      for (var i = 0; i < kinds.length; i++) {
+        var kind = kinds[i];
+        var newSegmentId = null;
+        try {
+          var per = result && result.streams ? result.streams[kind] : null;
+          if (per && per.ok === true && typeof per.segmentId === 'string' &&
+              per.segmentId !== '') {
+            newSegmentId = per.segmentId;
+          }
+        } catch (e) { /* ignore */ }
+        try {
+          monitor.emitRestartDiscontinuity({
+            streamKind: kind,
+            newSegmentId: newSegmentId,
+            supersededSegmentIds: superseded[kind]
+          });
+        } catch (e) {
+          // Tolerated: monitoring never fails the channel response.
+        }
+      }
+    }
     // 'recorder-start-streams' → {ok, streams:{microphone,screen,webcam}}
     // (or top-level {ok:false, error} guards). Failure-isolated like
     // every other command (3.2 SF-1 precedent): the starter returns data,
@@ -830,6 +956,14 @@ var BlindfoldSession = BlindfoldSession || {};
     // is best-effort and wrapped: chunking can never fail the streams or
     // the channel response (the writer's own state exposes any issue to
     // 4.9/4.14).
+    //
+    // 4.9: the wiring order is (1) restart pre-check → superseded map,
+    // (2) starter.startStreams() (unchanged), (3) chunking kickoff (4.8,
+    // unchanged — the writer now carries the monitor's onTerminalState),
+    // (4) monitor.attachStream for each successfully started kind,
+    // (5) pending 'restart' discontinuity events. Steps 3–5 are
+    // best-effort and try/catch-wrapped like 4.8's kickoff: monitoring
+    // can never fail the streams or the channel response.
     function handleStartStreams(message, sendResponse) {
       var starter;
       try {
@@ -840,28 +974,58 @@ var BlindfoldSession = BlindfoldSession || {};
         } catch (w) { /* ignore */ }
         return false;
       }
-      return respondAsync(Promise.resolve().then(function () {
-        return starter.startStreams();
-      }).then(function (result) {
-        try {
-          var active = starter.getActiveStreams();
+      return respondAsync(Promise.resolve()
+        .then(function () { return checkRestartSuperseded(); })
+        .then(function (superseded) {
+          return starter.startStreams().then(function (result) {
+            return { superseded: superseded, result: result };
+          });
+        })
+        .then(function (both) {
+          var result = both.result;
+          var active = null;
+          try {
+            active = starter.getActiveStreams();
+          } catch (e) { /* ignore */ }
           if (active) {
-            var writer = getChunkWriter();
-            var kinds = Object.keys(active);
-            for (var i = 0; i < kinds.length; i++) {
-              var rec = active[kinds[i]];
-              if (rec && rec.recorder) {
-                writer.startForStream({
-                  streamKind: kinds[i],
-                  segmentId: rec.segmentId,
-                  recorder: rec.recorder
-                });
+            // 4.8 chunking kickoff (unchanged): best-effort and wrapped —
+            // chunking can never fail the streams or the channel response.
+            try {
+              var writer = getChunkWriter();
+              var kinds = Object.keys(active);
+              for (var i = 0; i < kinds.length; i++) {
+                var rec = active[kinds[i]];
+                if (rec && rec.recorder) {
+                  writer.startForStream({
+                    streamKind: kinds[i],
+                    segmentId: rec.segmentId,
+                    recorder: rec.recorder
+                  });
+                }
               }
-            }
+            } catch (e) { /* chunking is best-effort; streams are recording */ }
+            // 4.9 monitoring attach + restart discontinuities:
+            // independently best-effort — monitoring can never fail the
+            // streams, the chunking, or the channel response.
+            try {
+              var monitor = getTrackMonitor();
+              var mkeys = Object.keys(active);
+              for (var j = 0; j < mkeys.length; j++) {
+                var mrec = active[mkeys[j]];
+                if (mrec && mrec.recorder) {
+                  monitor.attachStream({
+                    streamKind: mkeys[j],
+                    stream: mrec.stream,
+                    recorder: mrec.recorder,
+                    segmentId: mrec.segmentId
+                  });
+                }
+              }
+              emitRestartDiscontinuities(monitor, both.superseded, result);
+            } catch (e) { /* monitoring best-effort; streams are recording */ }
           }
-        } catch (e) { /* chunking is best-effort; streams are recording */ }
-        return result;
-      }), sendResponse, toChannelError);
+          return result;
+        }), sendResponse, toChannelError);
     }
 
     function handleCaptureCommand(message, sendResponse) {
@@ -1131,6 +1295,10 @@ var BlindfoldSession = BlindfoldSession || {};
       // recorder-start-streams handler starts chunking automatically for
       // every successfully started stream — no new channel message).
       getChunkWriter: getChunkWriter,
+      // 4.9 surface (Node tests drive this directly; the
+      // recorder-start-streams handler attaches monitoring for every
+      // successfully started stream and emits restart discontinuities).
+      getTrackMonitor: getTrackMonitor,
       restoreDevices: restoreDevices,
       getSession: function () { return { sessionId: sessionId, gameId: gameId }; }
     };
@@ -1191,6 +1359,11 @@ if ((typeof module === 'undefined' || !module.exports) &&
       // 4.2: best-effort boot restore of the persisted mic selection.
       // Silent when inert (no session yet); never throws.
       recorder.restoreDevices();
+      // 4.9 V2 introspection seam: the sw-track-monitor harness reaches
+      // the recorder's getTrackMonitor() through this handle to force
+      // track.stop() on a real track and observe the resulting events.
+      // Test-only; product code never reads this.
+      g.__blindfoldRecorderForTests = recorder;
     } catch (e) {
       // A recorder that cannot boot must not take the document down with
       // an uncaught error; the SW re-discovers via hasDocument() + ping.
