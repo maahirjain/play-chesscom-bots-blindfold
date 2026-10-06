@@ -784,6 +784,55 @@ describe('AC7 — diff discipline', () => {
       // lands after the pins are evolved (2.x/3.x/4.x/5.1/5.2 precedent).
       '.autodev/evidence/5.3.review.md',
       '.autodev/evidence/5.3.behavior.md',
+      // Honest cumulative evolution: 5.4 (show detected game conditions
+      // and allow manual completion of unavailable fields before
+      // recording) legitimately adds detected_conditions.js
+      // (detectGameConditions + CONDITION_PROBES + installConditionsPanel
+      // + attachConditionsPanel; playerColor detected via the verified
+      // wc-chess-board/flipped probe, the other four fields manual-only),
+      // wires the panel install + getDetectedConditions plug-in +
+      // attachConditionsPanel composite into content.js, adds
+      // detected_conditions.js to manifest.json, adds additive panel
+      // classes to overlay.css, records the ## 5.4 decisions, and adds
+      // its test + evidence; its files join the allowlists.
+      // (content.js, manifest.json, overlay.css and .autodev/DECISIONS.md
+      // are already allowlisted from 5.1/5.2/5.3.)
+      'detected_conditions.js',
+      'tests/detected_conditions.test.js',
+      '.autodev/evidence/5.4.contract.md',
+      '.autodev/evidence/5.4.build.md',
+      '.autodev/evidence/5.4.review.md',
+      '.autodev/evidence/5.4.behavior.md',
+      // 5.4 also evolves the cumulative pins in these suites (each
+      // carries its own git-status allowlist, so they join here).
+      'tests/attempt_tracker.test.js',
+      'tests/audio_policy.test.js',
+      'tests/capture_selection.test.js',
+      'tests/chunk_writer.test.js',
+      'tests/device_selection.test.js',
+      'tests/finalizer.test.js',
+      'tests/format_support.test.js',
+      'tests/game_lifecycle.test.js',
+      'tests/history_tracker.test.js',
+      'tests/lifecycle.test.js',
+      'tests/recording_host.test.js',
+      'tests/retention.test.js',
+      'tests/selection_memory.test.js',
+      'tests/sender.test.js',
+      'tests/session_controls.test.js',
+      'tests/session_fields.test.js',
+      'tests/session_store.test.js',
+      'tests/speech.test.js',
+      'tests/status_indicator.test.js',
+      'tests/stream_starter.test.js',
+      'tests/stream_status.test.js',
+      'tests/sync_marker.test.js',
+      'tests/track_monitor.test.js',
+      'tests/visibility.test.js',
+      'tests/writer.test.js',
+      // 5.4 also evolves the working-tree diff pins in these suites.
+      'tests/clock_link.test.js',
+      'tests/timecode.test.js',
       '.autodev/DECISIONS.md',
       // Cumulative pin evolutions by the 5.2 build (honest cumulative
       // evolution — earlier suites' allowlists admit 5.2's files).
@@ -844,16 +893,19 @@ describe('AC7 — diff discipline', () => {
   it('content.js diff is only the 5.2 install wiring', () => {
     const diff = execSync('git diff HEAD -- content.js', { cwd: REPO }).toString();
     if (!diff.trim()) return; // committed
-    // The 5.1/5.2 installs are committed (in HEAD), so the uncommitted
-    // diff's only new BlindfoldSession.* call is 5.3's
-    // createSelectionMemory (honest cumulative evolution: 5.3 wires the
-    // remembered-defaults memory into content.js per its contract —
-    // construction + restore + the onSessionStarted pass-through).
+    // 5.3's createSelectionMemory wiring is committed (in HEAD), so the
+    // uncommitted diff's only new BlindfoldSession.* calls are 5.4's
+    // installConditionsPanel + attachConditionsPanel (honest cumulative
+    // evolution: 5.4 wires the detected-conditions panel into content.js
+    // per its contract — install before the fields, the
+    // getDetectedConditions plug-in pass-through, and the composite
+    // wrap).
     const calls = new Set();
     const re = /^\+.*BlindfoldSession\.([A-Za-z0-9_]+)/gm;
     let m;
     while ((m = re.exec(diff)) !== null) calls.add(m[1]);
-    assert.deepEqual([...calls].sort(), ['createSelectionMemory']);
+    assert.deepEqual([...calls].sort(),
+      ['attachConditionsPanel', 'installConditionsPanel']);
     // No new top-level function declarations, no gameplay identifiers.
     assert.ok(!/^\+function /m.test(diff), 'no new functions in content.js');
     assert.ok(!/move_input|piece_set|chess\.move/i.test(

@@ -124,3 +124,104 @@ wc-chess-board .piece {
   padding: 4px 8px;
   border-radius: 4px;
 }
+/* 5.4: detected game conditions + manual completion of unavailable
+ * fields. Additive only (2.8/5.1/5.2 precedent): the panel sits between
+ * the 5.2 fields and the 5.1 control cluster — "select then Start".
+ * Minimal footprint: one compact row per condition field.
+ */
+.blindfold-conditions-panel {
+  display: inline-block;
+  vertical-align: middle;
+  margin-right: 6px;
+  font-size: 12px;
+}
+.blindfold-conditions-row {
+  display: inline-block;
+  vertical-align: middle;
+  margin-right: 6px;
+}
+.blindfold-conditions-label {
+  margin-right: 3px;
+  color: #555;
+}
+.blindfold-conditions-botName,
+.blindfold-conditions-botDisplayedRating,
+.blindfold-conditions-timeControl,
+.blindfold-conditions-color,
+.blindfold-conditions-pair-name,
+.blindfold-conditions-pair-value {
+  font-size: 12px;
+  margin-right: 3px;
+  vertical-align: middle;
+}
+.blindfold-conditions-botName,
+.blindfold-conditions-timeControl {
+  width: 90px;
+}
+.blindfold-conditions-botDisplayedRating {
+  width: 60px;
+}
+.blindfold-conditions-detected {
+  font-weight: bold;
+  margin-right: 3px;
+}
+.blindfold-conditions-tag {
+  font-size: 10px;
+  color: #777;
+  border: 1px solid #ccc;
+  border-radius: 3px;
+  padding: 0 3px;
+  margin-right: 3px;
+  white-space: nowrap;
+}
+.blindfold-conditions-tag[data-source="observed"] {
+  color: #1a6e1a;
+  border-color: #1a6e1a;
+}
+.blindfold-conditions-tag[data-source="manual"] {
+  color: #8a5a00;
+  border-color: #8a5a00;
+}
+.blindfold-conditions-redetect {
+  font-size: 11px;
+  margin-right: 3px;
+  vertical-align: middle;
+}
+.blindfold-conditions-error {
+  font-size: 11px;
+  color: #a00;
+  margin-right: 3px;
+}
+.blindfold-conditions-pairs {
+  display: inline-block;
+  vertical-align: middle;
+}
+.blindfold-conditions-pair {
+  display: inline-block;
+  margin-right: 3px;
+}
+.blindfold-conditions-pair-name {
+  width: 80px;
+}
+.blindfold-conditions-pair-value {
+  width: 60px;
+}
+.blindfold-conditions-pair-remove {
+  font-size: 11px;
+  vertical-align: middle;
+}
+.blindfold-conditions-adopted-note {
+  font-size: 11px;
+  color: #555;
+  font-style: italic;
+  margin-bottom: 2px;
+}
+.blindfold-conditions-panel-fallback {
+  position: fixed;
+  right: 12px;
+  bottom: 104px;
+  z-index: 2147483647;
+  background: rgba(255, 255, 255, 0.9);
+  padding: 4px 8px;
+  border-radius: 4px;
+}

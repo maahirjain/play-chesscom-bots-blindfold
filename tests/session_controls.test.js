@@ -1156,6 +1156,55 @@ describe('AC7 — diff discipline and scope', () => {
       // lands after the pins are evolved (2.x/3.x/4.x/5.1/5.2 precedent).
       '.autodev/evidence/5.3.review.md',
       '.autodev/evidence/5.3.behavior.md',
+      // Honest cumulative evolution: 5.4 (show detected game conditions
+      // and allow manual completion of unavailable fields before
+      // recording) legitimately adds detected_conditions.js
+      // (detectGameConditions + CONDITION_PROBES + installConditionsPanel
+      // + attachConditionsPanel; playerColor detected via the verified
+      // wc-chess-board/flipped probe, the other four fields manual-only),
+      // wires the panel install + getDetectedConditions plug-in +
+      // attachConditionsPanel composite into content.js, adds
+      // detected_conditions.js to manifest.json, adds additive panel
+      // classes to overlay.css, records the ## 5.4 decisions, and adds
+      // its test + evidence; its files join the allowlists.
+      // (content.js, manifest.json, overlay.css and .autodev/DECISIONS.md
+      // are already allowlisted from 5.1/5.2/5.3.)
+      'detected_conditions.js',
+      'tests/detected_conditions.test.js',
+      '.autodev/evidence/5.4.contract.md',
+      '.autodev/evidence/5.4.build.md',
+      '.autodev/evidence/5.4.review.md',
+      '.autodev/evidence/5.4.behavior.md',
+      // 5.4 also evolves the cumulative pins in these suites (each
+      // carries its own git-status allowlist, so they join here).
+      'tests/attempt_tracker.test.js',
+      'tests/audio_policy.test.js',
+      'tests/capture_selection.test.js',
+      'tests/chunk_writer.test.js',
+      'tests/device_selection.test.js',
+      'tests/finalizer.test.js',
+      'tests/format_support.test.js',
+      'tests/game_lifecycle.test.js',
+      'tests/history_tracker.test.js',
+      'tests/lifecycle.test.js',
+      'tests/recording_host.test.js',
+      'tests/retention.test.js',
+      'tests/selection_memory.test.js',
+      'tests/sender.test.js',
+      'tests/session_controls.test.js',
+      'tests/session_fields.test.js',
+      'tests/session_store.test.js',
+      'tests/speech.test.js',
+      'tests/status_indicator.test.js',
+      'tests/stream_starter.test.js',
+      'tests/stream_status.test.js',
+      'tests/sync_marker.test.js',
+      'tests/track_monitor.test.js',
+      'tests/visibility.test.js',
+      'tests/writer.test.js',
+      // 5.4 also evolves the working-tree diff pins in these suites.
+      'tests/clock_link.test.js',
+      'tests/timecode.test.js',
     ]);
     const stray = changed.filter((f) => !allowed.has(f));
     assert.deepEqual(stray, [],
@@ -1202,8 +1251,21 @@ describe('AC7 — diff discipline and scope', () => {
       l.includes('sessionFieldsHandle') || l.includes('storage: {') ||
       l.includes('get: function') || l.includes('set: function') ||
       l.includes('remove: function');
+    // Honest cumulative evolution: 5.4 wires the detected-conditions
+    // panel into content.js per its contract — the conditionsPanelHandle
+    // declaration, the installConditionsPanel install before the fields,
+    // the getDetectedConditions plug-in pass-through, and the
+    // attachConditionsPanel composite wrap (session_controls.js stays
+    // byte-identical).
+    const kw54 = (l) =>
+      l.includes('5.4') || l.includes('conditionsPanelHandle') ||
+      l.includes('ConditionsPanel') || l.includes('installConditionsPanel') ||
+      l.includes('attachConditionsPanel') ||
+      l.includes('getDetectedConditions') || l.includes('panelErr') ||
+      l.includes('rmErr') || l.includes('undefined');
     const structural = (l) =>
       l.trim() === '' || l.trim().startsWith('//') ||
+      l.trim().startsWith('/*') ||
       l.trim().startsWith('}') || l.trim().startsWith('try {') ||
       l.trim().startsWith('} catch') || l.trim().startsWith('{') ||
       l.trim().startsWith('(') || l.trim() === '});';
@@ -1211,12 +1273,15 @@ describe('AC7 — diff discipline and scope', () => {
       .filter((l) => l.startsWith('+') && !l.startsWith('+++'))
       .map((l) => l.slice(1));
     assert.ok(added.length > 0, 'expected the install wiring as added lines');
-    assert.ok(added.every((l) => kw51(l) || kw52(l) || kw53(l) || structural(l)),
+    assert.ok(added.every((l) => kw51(l) || kw52(l) || kw53(l) || kw54(l) || structural(l)),
       'unexpected added lines in content.js:\n' + added.join('\n'));
     const removed = diff.split('\n')
       .filter((l) => l.startsWith('-') && !l.startsWith('---'))
       .map((l) => l.slice(1));
-    assert.ok(removed.every((l) => kw51(l) || structural(l)),
+    // 5.4 restructures the 5.2 install block (the panel installs before
+    // the fields; the fields anchor before the panel) — removed lines
+    // may carry 5.2/5.4 keywords as well.
+    assert.ok(removed.every((l) => kw51(l) || kw52(l) || kw54(l) || structural(l)),
       'unexpected removed lines in content.js:\n' + removed.join('\n'));
   });
 

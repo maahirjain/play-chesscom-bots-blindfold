@@ -344,19 +344,59 @@ try {
   });
 } catch (installErr) { /* session UI must never break gameplay */ }
 
-// Task 5.2 (PLAN.md §5.2): baseline/training/evaluation selection with
-// training approach and verbal scaffolding fields. Installed after the
-// 5.1 controls so it can anchor immediately before the control
-// cluster. Never throws into page code.
+// Task 5.4 (PLAN.md §5.4): detected game conditions + manual completion
+// of unavailable fields before recording. Installed before the 5.2
+// fields so the DOM reads [fields][panel][Start][lights] ("select then
+// Start"). The panel is additive: if it fails to install, the fields
+// fall back to the UNDETECTED_CONDITION_FIELDS placeholders.
+var conditionsPanelHandle = null;
 try {
-  sessionFieldsHandle = BlindfoldSession.installSessionFields({
-    extensionVersion: chrome.runtime.getManifest().version,
-    // 5.4's plug-in seam: detection is not implemented yet, so the
-    // default (UNDETECTED_CONDITION_FIELDS placeholders) applies.
+  conditionsPanelHandle = BlindfoldSession.installConditionsPanel({
     beforeElement: (sessionControlsHandle && sessionControlsHandle.element) ?
       sessionControlsHandle.element : null
   });
-} catch (fieldsErr) { /* session UI must never break gameplay */ }
+} catch (panelErr) { /* panel is additive; fields fall back to placeholders */ }
+
+// Task 5.2 (PLAN.md §5.2): baseline/training/evaluation selection with
+// training approach and verbal scaffolding fields. Installed after the
+// 5.4 panel so it anchors immediately before the panel (the panel
+// anchors before the 5.1 control cluster). Never throws into page code.
+try {
+  sessionFieldsHandle = BlindfoldSession.installSessionFields({
+    extensionVersion: chrome.runtime.getManifest().version,
+    // 5.4's plug-in seam: the panel's getDetectedConditions performs a
+    // fresh detectGameConditions(document) merged with manual overrides
+    // at Start; when the panel failed to install, undefined selects the
+    // default (UNDETECTED_CONDITION_FIELDS placeholders).
+    getDetectedConditions: (conditionsPanelHandle !== null &&
+      typeof conditionsPanelHandle.getDetectedConditions === 'function') ?
+      function () { return conditionsPanelHandle.getDetectedConditions(); } :
+      undefined,
+    beforeElement: (conditionsPanelHandle && conditionsPanelHandle.element) ?
+      conditionsPanelHandle.element :
+      ((sessionControlsHandle && sessionControlsHandle.element) ?
+        sessionControlsHandle.element : null)
+  });
+  // 5.4: composite handle — setEnabled/showAdoptedCategory drive both
+  // forms; the isFieldsHandle shape is preserved so
+  // session_controls.js stays byte-identical.
+  if (sessionFieldsHandle !== null && conditionsPanelHandle !== null) {
+    sessionFieldsHandle = BlindfoldSession.attachConditionsPanel(
+      sessionFieldsHandle, conditionsPanelHandle);
+  }
+} catch (fieldsErr) {
+  // Fields failed: the panel has no Start wiring — remove it rather
+  // than leave an inert conditions display next to the degraded Start.
+  try {
+    if (conditionsPanelHandle !== null && conditionsPanelHandle.element &&
+        conditionsPanelHandle.element.parentNode) {
+      conditionsPanelHandle.element.parentNode.removeChild(
+        conditionsPanelHandle.element);
+    }
+  } catch (rmErr) { /* never throw into page code */ }
+  conditionsPanelHandle = null;
+  /* session UI must never break gameplay */
+}
 
 // Task 5.3 (PLAN.md §5.3): remember previous selections. The adapter is
 // built inline here so selection_memory.js never touches the chrome

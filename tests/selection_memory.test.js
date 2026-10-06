@@ -463,6 +463,57 @@ describe('AC6 — wiring and diff discipline', () => {
       // lands after the pins are evolved (2.x/3.x/4.x/5.1/5.2 precedent).
       '.autodev/evidence/5.3.review.md',
       '.autodev/evidence/5.3.behavior.md',
+      // Honest cumulative evolution: 5.4 (show detected game conditions
+      // and allow manual completion of unavailable fields before
+      // recording) legitimately adds detected_conditions.js
+      // (detectGameConditions + CONDITION_PROBES + installConditionsPanel
+      // + attachConditionsPanel; playerColor detected via the verified
+      // wc-chess-board/flipped probe, the other four fields manual-only),
+      // wires the panel install + getDetectedConditions plug-in +
+      // attachConditionsPanel composite into content.js, adds
+      // detected_conditions.js to manifest.json, adds additive panel
+      // classes to overlay.css, records the ## 5.4 decisions, and adds
+      // its test + evidence; its files join the allowlists.
+      // (content.js, manifest.json and .autodev/DECISIONS.md are already
+      // allowlisted from 5.1/5.2/5.3; overlay.css is new to this
+      // suite's allowlist — 5.3 did not touch it.)
+      'overlay.css',
+      'detected_conditions.js',
+      'tests/detected_conditions.test.js',
+      '.autodev/evidence/5.4.contract.md',
+      '.autodev/evidence/5.4.build.md',
+      '.autodev/evidence/5.4.review.md',
+      '.autodev/evidence/5.4.behavior.md',
+      // 5.4 also evolves the cumulative pins in these suites (each
+      // carries its own git-status allowlist, so they join here).
+      'tests/attempt_tracker.test.js',
+      'tests/audio_policy.test.js',
+      'tests/capture_selection.test.js',
+      'tests/chunk_writer.test.js',
+      'tests/device_selection.test.js',
+      'tests/finalizer.test.js',
+      'tests/format_support.test.js',
+      'tests/game_lifecycle.test.js',
+      'tests/history_tracker.test.js',
+      'tests/lifecycle.test.js',
+      'tests/recording_host.test.js',
+      'tests/retention.test.js',
+      'tests/selection_memory.test.js',
+      'tests/sender.test.js',
+      'tests/session_controls.test.js',
+      'tests/session_fields.test.js',
+      'tests/session_store.test.js',
+      'tests/speech.test.js',
+      'tests/status_indicator.test.js',
+      'tests/stream_starter.test.js',
+      'tests/stream_status.test.js',
+      'tests/sync_marker.test.js',
+      'tests/track_monitor.test.js',
+      'tests/visibility.test.js',
+      'tests/writer.test.js',
+      // 5.4 also evolves the working-tree diff pins in these suites.
+      'tests/clock_link.test.js',
+      'tests/timecode.test.js',
       '.autodev/DECISIONS.md',
       // Cumulative pin evolutions by the 5.3 build (honest cumulative
       // evolution — earlier suites' allowlists admit 5.3's files).
@@ -534,6 +585,7 @@ describe('AC6 — wiring and diff discipline', () => {
     if (!diff.trim()) return; // committed
     const structural = (l) =>
       l.trim() === '' || l.trim().startsWith('//') ||
+      l.trim().startsWith('/*') ||
       l.trim().startsWith('}') || l.trim().startsWith('try {') ||
       l.trim().startsWith('} catch') || l.trim().startsWith('{') ||
       l.trim() === '});' || l.trim() === '},' || l.trim() === '});' ||
@@ -547,22 +599,45 @@ describe('AC6 — wiring and diff discipline', () => {
       l.includes('sessionFieldsHandle') ||
       l.includes('storage: {') || l.includes('get: function') ||
       l.includes('set: function') || l.includes('remove: function');
+    // Honest cumulative evolution: 5.3's memory wiring is committed (in
+    // HEAD), so the uncommitted delta is 5.4's panel wiring — the
+    // conditionsPanelHandle declaration, the installConditionsPanel
+    // install before the fields, the getDetectedConditions plug-in
+    // pass-through, and the attachConditionsPanel composite wrap.
+    const kw54 = (l) =>
+      l.includes('5.4') || l.includes('conditionsPanelHandle') ||
+      l.includes('ConditionsPanel') || l.includes('installConditionsPanel') ||
+      l.includes('attachConditionsPanel') ||
+      l.includes('getDetectedConditions') || l.includes('panelErr') ||
+      l.includes('rmErr') || l.includes('undefined') ||
+      l.includes('sessionControlsHandle') || l.includes('beforeElement');
     const added = diff.split('\n')
       .filter((l) => l.startsWith('+') && !l.startsWith('+++'))
       .map((l) => l.slice(1));
     assert.ok(added.length > 0, 'expected the memory wiring as added lines');
-    const bad = added.filter((l) => !(structural(l) || kw53(l)));
+    const bad = added.filter((l) => !(structural(l) || kw53(l) || kw54(l)));
     assert.deepEqual(bad, [], 'unexpected added lines in content.js:\n' + bad.join('\n'));
     const removed = diff.split('\n')
       .filter((l) => l.startsWith('-') && !l.startsWith('---'))
       .map((l) => l.slice(1).trim())
       .filter((l) => l !== '');
-    assert.deepEqual(removed, [], '5.3 must not remove content.js lines');
+    // 5.4 restructures the 5.2 install block (the panel installs before
+    // the fields); removed lines are the superseded 5.2 wiring.
+    const badRemoved = removed.filter((l) =>
+      !(structural(l) || l.includes('5.2') || l.includes('installSessionFields') ||
+        l.includes('sessionControlsHandle') || l.includes('beforeElement') ||
+        l.includes('fieldsErr') || l.includes('5.4') ||
+        l.includes('UNDETECTED_CONDITION_FIELDS')));
+    assert.deepEqual(badRemoved, [],
+      'unexpected removed lines in content.js:\n' + badRemoved.join('\n'));
     // No new top-level function declarations.
     assert.ok(!/^\+function /m.test(diff), 'no new functions in content.js');
   });
 
-  it('manifest.json diff is only the storage permission + selection_memory.js line', () => {
+  it('manifest.json diff is only the detected_conditions.js line (5.4)', () => {
+    // 5.3's storage permission + selection_memory.js line are committed
+    // (in HEAD); the uncommitted delta is 5.4's detected_conditions.js
+    // content_scripts line per its contract.
     const diff = execSync('git diff HEAD -- manifest.json', { cwd: REPO }).toString();
     if (!diff.trim()) return; // committed
     const added = diff.split('\n')
@@ -570,15 +645,15 @@ describe('AC6 — wiring and diff discipline', () => {
       .map((l) => l.slice(1));
     assert.ok(added.length >= 1);
     for (const l of added) {
-      assert.ok(l.includes('selection_memory.js') || l.includes('"storage"'),
-        'manifest addition must be the selection_memory.js line or the storage permission: ' + l);
+      assert.ok(l.includes('detected_conditions.js'),
+        'manifest addition must be the detected_conditions.js line: ' + l);
     }
     const removed = diff.split('\n')
       .filter((l) => l.startsWith('-') && !l.startsWith('---'))
       .map((l) => l.slice(1));
     for (const l of removed) {
-      assert.ok(l.includes('"offscreen", "tabCapture"') || l.includes('session_fields.js'),
-        'manifest removal must be the superseded permission/js line: ' + l);
+      assert.ok(l.includes('selection_memory.js'),
+        'manifest removal must be the superseded js line: ' + l);
     }
   });
 

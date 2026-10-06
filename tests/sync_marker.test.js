@@ -258,21 +258,25 @@ describe('AC2 — visible marker correct', () => {
     const head = execSync('git show HEAD:manifest.json', { cwd: REPO }).toString();
     const headJs = JSON.parse(head).content_scripts[0].js;
     const added = js.filter((f) => headJs.indexOf(f) === -1);
-    // Honest cumulative evolution: 5.3 adds selection_memory.js (the
-    // chrome.storage.local-backed remembered-defaults module) to the
-    // content_scripts list per its contract.
-    assert.deepEqual(added, ['selection_memory.js'],
-      'uncommitted js-list delta must be exactly the 5.3 addition');
+    // Honest cumulative evolution: 5.3's selection_memory.js is committed,
+    // so the uncommitted delta is now 5.4's. 5.4 adds detected_conditions.js
+    // (the 5.4 detected-conditions panel) to the content_scripts list per
+    // its contract.
+    assert.deepEqual(added, ['detected_conditions.js'],
+      'uncommitted js-list delta must be exactly the 5.4 addition');
     const diff = execSync('git diff HEAD -- content.js', { cwd: REPO }).toString();
     if (diff.trim() !== '') {
-      // While 5.2 is uncommitted, the content.js delta is the install
-      // wiring (5.1's block, restructured by 5.2, + the fields
-      // install). The detailed line-level pin lives in
-      // tests/session_controls.test.js AC7; here we only require the
-      // control install to still be present and no gameplay identifiers
-      // to appear in added lines.
-      assert.ok(diff.includes('installSessionControls'),
-        'content.js delta must keep the 5.1 install block');
+      // 5.1/5.2/5.3 are committed, so the uncommitted content.js delta
+      // is 5.4's panel wiring only: the installConditionsPanel install,
+      // the getDetectedConditions plug-in pass-through, and the
+      // attachConditionsPanel composite wrap. The detailed line-level
+      // pin lives in tests/session_controls.test.js AC7; here we only
+      // require the 5.2/5.4 wiring to still reference the fields
+      // install and no gameplay identifiers to appear in added lines.
+      assert.ok(diff.includes('installSessionFields'),
+        'content.js delta must keep the 5.2 fields install wiring');
+      assert.ok(diff.includes('installConditionsPanel'),
+        'content.js delta must include the 5.4 panel install');
       const added = diff.split('\n').filter((l) => l.startsWith('+'));
       assert.ok(!/move_input|piece_set|chess\.move/i.test(added.join('\n')),
         'content.js delta must not touch gameplay');
@@ -978,6 +982,55 @@ describe('AC8 — changed-files discipline', () => {
       // lands after the pins are evolved (2.x/3.x/4.x/5.1/5.2 precedent).
       '.autodev/evidence/5.3.review.md',
       '.autodev/evidence/5.3.behavior.md',
+      // Honest cumulative evolution: 5.4 (show detected game conditions
+      // and allow manual completion of unavailable fields before
+      // recording) legitimately adds detected_conditions.js
+      // (detectGameConditions + CONDITION_PROBES + installConditionsPanel
+      // + attachConditionsPanel; playerColor detected via the verified
+      // wc-chess-board/flipped probe, the other four fields manual-only),
+      // wires the panel install + getDetectedConditions plug-in +
+      // attachConditionsPanel composite into content.js, adds
+      // detected_conditions.js to manifest.json, adds additive panel
+      // classes to overlay.css, records the ## 5.4 decisions, and adds
+      // its test + evidence; its files join the allowlists.
+      // (content.js, manifest.json, overlay.css and .autodev/DECISIONS.md
+      // are already allowlisted from 5.1/5.2/5.3.)
+      'detected_conditions.js',
+      'tests/detected_conditions.test.js',
+      '.autodev/evidence/5.4.contract.md',
+      '.autodev/evidence/5.4.build.md',
+      '.autodev/evidence/5.4.review.md',
+      '.autodev/evidence/5.4.behavior.md',
+      // 5.4 also evolves the cumulative pins in these suites (each
+      // carries its own git-status allowlist, so they join here).
+      'tests/attempt_tracker.test.js',
+      'tests/audio_policy.test.js',
+      'tests/capture_selection.test.js',
+      'tests/chunk_writer.test.js',
+      'tests/device_selection.test.js',
+      'tests/finalizer.test.js',
+      'tests/format_support.test.js',
+      'tests/game_lifecycle.test.js',
+      'tests/history_tracker.test.js',
+      'tests/lifecycle.test.js',
+      'tests/recording_host.test.js',
+      'tests/retention.test.js',
+      'tests/selection_memory.test.js',
+      'tests/sender.test.js',
+      'tests/session_controls.test.js',
+      'tests/session_fields.test.js',
+      'tests/session_store.test.js',
+      'tests/speech.test.js',
+      'tests/status_indicator.test.js',
+      'tests/stream_starter.test.js',
+      'tests/stream_status.test.js',
+      'tests/sync_marker.test.js',
+      'tests/track_monitor.test.js',
+      'tests/visibility.test.js',
+      'tests/writer.test.js',
+      // 5.4 also evolves the working-tree diff pins in these suites.
+      'tests/clock_link.test.js',
+      'tests/timecode.test.js',
     ]);
     const stray = changed.filter((f) => !allowed.has(f));
     assert.deepEqual(stray, [],
