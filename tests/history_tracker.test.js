@@ -1159,6 +1159,40 @@ describe('AC13 — diff discipline', () => {
       '.autodev/evidence/6.8.contract.md',
       '.autodev/evidence/6.8.build.md',
       'EXPORT.md',
+      'tests/acceptance_7_2.test.js',
+      'tests/acceptance_7_4_7_7.test.js',
+      'tests/acceptance_7_10.test.js',
+      'tests/acceptance_7_11.test.js',
+      // 7.14 inlined EXPORT.md into README.md and deleted the file.
+      'README.md',
+      // 7.1-7.3 (acceptance tests) evidence files.
+      '.autodev/evidence/7.1.contract.md',
+      '.autodev/evidence/7.1.build.md',
+      '.autodev/evidence/7.1.review.md',
+      '.autodev/evidence/7.1.behavior.md',
+      '.autodev/evidence/7.2.contract.md',
+      '.autodev/evidence/7.2.build.md',
+      '.autodev/evidence/7.3.contract.md',
+      '.autodev/evidence/7.3.build.md',
+      '.autodev/evidence/7.3.review.md',
+      '.autodev/evidence/7.3.behavior.md',
+      '.autodev/evidence/7.1-7.11.review.md',
+      '.autodev/evidence/7.1-7.11+7.14.behavior.md',
+      '.autodev/evidence/7.10.contract.md',
+      '.autodev/evidence/7.10.build.md',
+      '.autodev/evidence/7.11.contract.md',
+      '.autodev/evidence/7.11.build.md',
+      '.autodev/evidence/7.4.contract.md',
+      '.autodev/evidence/7.4.build.md',
+      '.autodev/evidence/7.5.contract.md',
+      '.autodev/evidence/7.5.build.md',
+      '.autodev/evidence/7.6.contract.md',
+      '.autodev/evidence/7.6.build.md',
+      '.autodev/evidence/7.7.contract.md',
+      '.autodev/evidence/7.7.build.md',
+      '.autodev/evidence/7.14.contract.md',
+      '.autodev/evidence/7.14.build.md',
+      '.autodev/evidence/7.14.review.md',
       // 6.4+6.5 review/behavior use combined naming (reviewer/verifier
       // wrote single files for the pair, 6.2+6.3 precedent).
       '.autodev/evidence/6.4+6.5.review.md',
@@ -1199,6 +1233,141 @@ describe('AC14 — 1.4 payload factories', () => {
     assert.deepEqual(Object.keys(sf.payload).sort(),
       ['internalFen', 'observedSan', 'plyIndex', 'reason']);
     assert.ok(BlindfoldSession.SYNC_FAILURE_REASONS.includes(sf.payload.reason));
+  });
+});
+
+// ------------------------------------------------------------------
+// 7.3 — mouse moves are captured without a keyboard attempt.
+//
+// PLAN.md §7.3 acceptance: when the player moves with the mouse (not the
+// extension's keyboard input), the move must still appear as
+// move_confirmed in the event stream.
+//
+// Architectural basis (pinned here): chess_utils.js observeMoves watches
+// the Chess.com DOM move list via MutationObserver. Any move Chess.com
+// accepts — typed, clicked, or dragged — appears in that DOM list. The
+// history tracker's observe() takes SAN string arrays (DOM-free in V1);
+// a DOM mutation adding a move IS the faithful simulation of "Chess.com
+// accepted a mouse move" (the collection observes the DOM consequence,
+// not the input device).
+//
+// The attempt tracker is wired only to the keyboard input path
+// (content.js move-input submit handler). A mouse move therefore yields
+// move_confirmed with NO preceding move_attempt — which is itself an
+// honest record (the move was not attempted via keyboard).
+// ------------------------------------------------------------------
+describe('7.3 — mouse moves without keyboard attempt', () => {
+  // Combined harness: attempt tracker (keyboard path) + history tracker
+  // (DOM observation path) sharing one emitter, so the event stream order
+  // is observable.
+  function makeCombined() {
+    const calls = [];
+    const emitEvent = (eventType, payload, refs) => {
+      const envelope = { eventId: testUuid(), eventType };
+      calls.push({ eventType, payload, refs, eventId: envelope.eventId });
+      return envelope;
+    };
+    const timers = {
+      setTimeoutFn: () => 0,
+      clearTimeoutFn: () => {},
+    };
+    const gameId = gid();
+    const attemptTracker = BlindfoldSession.createAttemptTracker({
+      emitEvent,
+      getSessionId: () => testUuid(),
+      getGameId: () => gameId,
+      unconfirmedTimeoutMs: 30000,
+      setTimeoutFn: timers.setTimeoutFn,
+      clearTimeoutFn: timers.clearTimeoutFn,
+    });
+    const historyTracker = BlindfoldSession.createHistoryTracker({
+      gameId,
+      emitEvent,
+      onGameReset: () => {},
+    });
+    return { attemptTracker, historyTracker, calls };
+  }
+
+  function confirmedMoves(calls) {
+    return calls
+      .filter((c) => c.eventType === 'move_confirmed')
+      .map((c) => `${c.payload.from}-${c.payload.to}`);
+  }
+
+  function attemptTexts(calls) {
+    return calls
+      .filter((c) => c.eventType === 'move_attempt')
+      .map((c) => c.payload.submittedText);
+  }
+
+  it('7.3 AC1 — DOM-observed move yields move_confirmed with no keyboard attempt', () => {
+    const { historyTracker, calls } = makeCombined();
+    // Simulate "Chess.com accepted a mouse move": the move appears in the
+    // DOM move list. No keyboard submission happens.
+    historyTracker.observe(['e4']);
+    const confirmed = confirmedMoves(calls);
+    assert.deepEqual(confirmed, ['e2-e4'], 'mouse move is captured as confirmed');
+    assert.deepEqual(attemptTexts(calls), [],
+      'no move_attempt for a DOM-only (mouse) move');
+  });
+
+  it('7.3 AC2 — multiple mouse moves produce confirmed events, zero attempts', () => {
+    const { historyTracker, calls } = makeCombined();
+    historyTracker.observe(['e4']);
+    historyTracker.observe(['e4', 'e5']);
+    historyTracker.observe(['e4', 'e5', 'Nf3']);
+    assert.deepEqual(confirmedMoves(calls), ['e2-e4', 'e7-e5', 'g1-f3']);
+    assert.deepEqual(attemptTexts(calls), [],
+      'the attempt tracker stays silent for mouse moves');
+  });
+
+  it('7.3 AC3 — mixed keyboard/mouse/keyboard: attempts only for keyboard moves', () => {
+    const { attemptTracker, historyTracker, calls } = makeCombined();
+
+    // Keyboard move d4: submit via the attempt tracker (content.js path),
+    // then Chess.com accepts it and it appears in the DOM.
+    attemptTracker.submitAttempt({
+      submittedText: 'd4',
+      firstEditMonotonicMs: null,
+      validation: 'legal',
+      from: 'd2',
+      to: 'd4',
+      promotion: null,
+    });
+    historyTracker.observe(['d4']);
+
+    // Mouse move d5: NO keyboard submission. Chess.com accepts the mouse
+    // move; it appears in the DOM move list.
+    historyTracker.observe(['d4', 'd5']);
+
+    // Keyboard move c4: submit, then DOM observation.
+    attemptTracker.submitAttempt({
+      submittedText: 'c4',
+      firstEditMonotonicMs: null,
+      validation: 'legal',
+      from: 'c2',
+      to: 'c4',
+      promotion: null,
+    });
+    historyTracker.observe(['d4', 'd5', 'c4']);
+
+    // The event stream shows each confirmed move; attempts exist only for
+    // the two keyboard moves. Note: the first observe() emits
+    // history_recovered (batch/recovery marking for the first observation
+    // — the tracker honestly marks that it adopted an existing history).
+    const stream = calls.map((c) => {
+      if (c.eventType === 'move_attempt') return `attempt:${c.payload.submittedText}`;
+      if (c.eventType === 'move_confirmed') return `confirmed:${c.payload.from}-${c.payload.to}`;
+      return c.eventType;
+    });
+    assert.deepEqual(stream, [
+      'attempt:d4',
+      'history_recovered',
+      'confirmed:d2-d4',
+      'confirmed:d7-d5',
+      'attempt:c4',
+      'confirmed:c2-c4',
+    ], 'mouse move d5 is confirmed without an attempt; provenance is unambiguous');
   });
 });
 

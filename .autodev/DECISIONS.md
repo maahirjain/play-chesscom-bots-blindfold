@@ -1371,3 +1371,90 @@ Consequential engineering decisions with reasoning and evidence. Newest first.
 - **New file `EXPORT.md` (repo root):** User-facing export documentation covering where the ZIP goes (browser download manager, `saveAs: false`), what the user does (extract into experiment directory), bundle contents table (metadata.json, events.jsonl, media-sync.json, numbered media files), re-export after interruption (links 6.7's guarantee), and what the extension does NOT do (no arbitrary filesystem writes, no deletion on export, no upload/sync/backup, no transcoding, no analysis).
 - **Placement:** Standalone `EXPORT.md`, not a README edit. The existing README.md is gameplay-focused; 7.14 ("Update README with setup, recording controls, export instructions, and verified coverage limitations") will integrate this content. `EXPORT.md` gives 7.14 a clean source to merge. Repo-root Markdown is the established pattern.
 - **V1:** AC1 (file exists, covers all five areas), AC2 (honesty — promises no missing features), AC3 (diff discipline). V2/V3 not applicable (documentation). No product-code changes. PLAN.md unmodified.
+
+## 7.14 — Update README with setup, recording controls, export instructions, and verified coverage limitations
+
+- **New "Session Recording (Logging Instrumentation)" section** appended to README.md after `## Disclaimer`. All pre-existing gameplay docs preserved byte-identical (verified: zero removed lines in git diff — purely additive).
+- **Four subsections:** Setup (load-unpacked, permission grants, Chrome permissions matching manifest.json exactly, bot-game URL pattern); Recording controls (every cluster control: category/training fields, conditions panel with manual-wins rule, health lights, readiness badge states with "never gates Stop", Start/Stop, moment marker, Download); Export (EXPORT.md content inlined — see below); Verified coverage and limitations (V1/V2 proven vs V3/V4 pending, explicitly marked "not yet run" with "update after running them").
+- **EXPORT.md deleted** (builder's choice per 7.14 contract §3: inline + delete, no duplication). Satisfies section-6 audit carry-forward "6.8's EXPORT.md awaits 7.14's README integration".
+- **Limitations honesty:** V3/V4 items cite the section audits; the manual termination-reason SHOULD_FIX 1 is disclosed with its pending owner decision.
+- **V1:** 1437/1437 (after 7.14 pin evolutions across 29 test files). Zero product-code changes. PLAN.md unmodified.
+
+## 7.1 — submission-kind vocabulary pinned (2026-10-06)
+
+- **Verification-only task.** No product-code changes. Four new acceptance tests in `tests/attempt_tracker.test.js`.
+- **Key finding:** The `move_attempt.validation` vocabulary is exactly `'legal' | 'illegal'` — there is no `'ambiguous'` outcome (`submitAttempt` and `requireValidMoveAttemptPayload` throw `RangeError` otherwise). Ambiguous SAN (chess.js returns null) is recorded as `'illegal'` with verbatim submitted text, so analysts distinguish ambiguity (well-formed SAN like `'Nd2'`) from malformation (like `'Qxe9'`) by the text itself. Changing the vocabulary would be a new feature (contract non-goal).
+- **Test helper** mirrors content.js's submit path; `normalizeMove`/`isMoveLegal`/`parseMoveSquares` are not exported (browser global scope), so the helper replicates `isMoveLegal` via chess.js directly.
+- **V1:** 6 new tests (AC1 ambiguity, AC1b disambiguated-legal, AC2 repeated, AC3 four-way, AC4 no fabricated move_confirmed, vocabulary RangeError pin). PLAN.md unmodified.
+
+## 7.2 — special-move replay harness is test-only (2026-10-06)
+
+- **Verification-only task.** No product-code changes. New file `tests/acceptance_7_2.test.js` with 10 tests.
+- **Replay harness** (`replayFromFen`) lives in the test file only, per 7.13 ("a collection correctness check, not a shipped analysis command"). Proves exported raw data (gameStartingFen + move_confirmed {from,to,promotion}) suffices for faithful reconstruction: promotion (incl. underpromotion), kingside/queenside castling, en passant (captured pawn removed from the correct square), and full-game chains.
+- **Promotion vocabulary pinned:** lowercase `'q' | 'r' | 'b' | 'n'` (game_records.js `requirePromotion`); chess.js accepts all four; `null` is rejected (3.1.7 — the piece must be recorded, never null).
+- **V1:** 10 tests pass. V2 N/A (pure data replay). V3 deferred (7.13 device context). PLAN.md unmodified.
+
+## 7.3 — DOM mutation is the faithful mouse-move simulation (2026-10-06)
+
+- **Verification-only task.** No product-code changes. Three new acceptance tests in `tests/history_tracker.test.js`.
+- **Key decision:** Tests drive the history tracker's DOM-free `observe(halfMoves)` seam with no attempt-tracker involvement, rather than synthesizing mouse events. The collection observes the Chess.com DOM move list (MutationObserver), not the input device — the DOM mutation is what Chess.com does when it accepts a mouse move, so it is the faithful simulation.
+- **Provenance preserved:** mouse moves yield `move_confirmed` with no preceding `move_attempt`; the mixed keyboard/mouse/keyboard stream keeps each move's provenance unambiguous (attempts only for keyboard moves; all moves confirmed in DOM order; `move_attempt_matched` only for keyboard attempts).
+- **V1:** 3 new tests pass. V2 (real MutationObserver) deferred to harness builder. V3 deferred to device. PLAN.md unmodified.
+
+## 7.10 — Page refresh does not stop the recording context (2026-10-06)
+
+- **Verification-only task.** No product-code changes. New file `tests/acceptance_7_10.test.js` with 7 tests.
+- **Architectural guarantee by construction:** Media capture runs in the offscreen document (owned by SW, not the page); event storage runs in the SW (IndexedDB, durable across navigations); content scripts are ephemeral and re-attach.
+- **AC1 (separation):** Source scan confirms `recorder.js` has no page-bound references (no chess.com DOM queries, no page-specific `chrome.tabs` in capture path).
+- **AC2 (no teardown on unload):** `content.js` and `session_controls.js` have no `beforeunload`/`unload` handlers; the sole `MSG_STOP_STREAMS` send is the explicit Stop button handler.
+- **AC3 (re-binding):** The 5.5 duplicate-Start guard is the re-binding mechanism — same session ID → idempotent re-set (allowed); different session ID → `'session-active'` refusal. Guard discriminates on sessionId equality, not tab identity.
+- **V1:** 7/7 tests pass. V2 (real page navigation) and V3 (device) deferred per contract.
+- PLAN.md unmodified.
+
+## 7.11 — Failure modes produce explicit status and recoverable data (2026-10-06)
+
+- **Verification-only task.** No product-code changes. New file `tests/acceptance_7_11.test.js` with 9 tests.
+- **Four-mode acceptance matrix**, each asserting the two guarantees (explicit incomplete status + recoverable saved data):
+  - **Permission denial (AC1):** `NotAllowedError` → `{ok:false, error:'permission-denied'}` (named, not masked). 6.1 `mediaInventory` shows `{segments:0, finalized:0, formats:[]}` — explicit zero, not omitted.
+  - **Device loss (AC2):** `track-ended` → `stream_discontinuity` event (explicit). `track_monitor.js` has no delete calls — pre-loss chunks retained (4.9's monitor only observes).
+  - **Storage failure (AC3):** Sender `flush()` resolves `{delivered, pending}` with `pending > 0` (honest count, never silent). Queue retains failed events for 2.5 retry (not dropped).
+  - **Interrupted session (AC4):** Segments with `segmentNumber:null` export successfully via 6.5 on-the-fly numbering; `media-sync.json` marks `unfinalized` gaps; 6.1 completion is `'unknown'`, never `'complete'`.
+- **V1:** 9/9 tests pass. V2 (CDP permission override, SW kill) and V3 (physical unplug) deferred per contract.
+- PLAN.md unmodified.
+
+## 7.4 — Batched DOM updates and same-length revisions (acceptance)
+
+**Date:** 2026-10-06. **Task:** PLAN.md §7.4.
+
+Verification-only. New `tests/acceptance_7_4_7_7.test.js` with 3 tests:
+batched 3-move update emits exactly 2 new `move_confirmed` (no duplicates);
+same-length `[e4,e5]`→`[e4,d5]` emits `history_revised` + new d5 (no duplicate e4);
+rapid alternation produces no duplicates. Payload uses UCI `from`/`to`.
+
+## 7.5 — No fabricated timings (acceptance)
+
+**Date:** 2026-10-06. **Task:** PLAN.md §7.5.
+
+Verification-only. 4 tests: new-game isolation via 5.9's separate-tracker
+structure; takeback replacement gets own observation; late attachment emits
+`history_recovered` (not backdated); identical observation is a no-op.
+Timing honesty is structural — the tracker emits move data; `history_recovered`
+marks "timings unknown."
+
+## 7.6 — Help shortcuts (acceptance)
+
+**Date:** 2026-10-06. **Task:** PLAN.md §7.6.
+
+Verification-only. 3 tests pin the shortcut taxonomy from content.js source:
+`w,z,i,s,m` → `help_requested`; `j` intentionally silent (navigation);
+`v` → `piece_visibility_changed` (not help); `Escape` → cancellation;
+`Enter` → `move_attempt`. The `j` silence is documented in content.js.
+
+## 7.7 — Speech outcomes (acceptance)
+
+**Date:** 2026-10-06. **Task:** PLAN.md §7.7.
+
+Verification-only. 3 tests: delivered → `utterance_ended(outcome=completed)`;
+cancelled via `cancelRequested('user')` → no `completed`; each utterance ID
+has exactly one terminal event. Link required for `utterance_started`
+(3.4 inertness design). Outcomes: `completed`|`cancelled`|`error`.

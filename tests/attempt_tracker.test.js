@@ -732,6 +732,152 @@ describe('AC8 — payload validators', () => {
 });
 
 // ------------------------------------------------------------------
+// 7.1 — four submission kinds produce distinct correct event records.
+//
+// PLAN.md §7.1 acceptance: legal, rejected (illegal), ambiguous, and
+// repeated submissions must be distinguishable in events.jsonl from the
+// event records alone.
+//
+// Key vocabulary finding (pinned here, verified against source):
+// `submitAttempt` enforces validation ∈ {'legal','illegal'} (RangeError
+// otherwise — see chess_utils.js submitAttempt). There is NO 'ambiguous'
+// outcome. content.js computes `legal = isMoveLegal(game, move)` where
+// isMoveLegal = (game_copy.move(move) != null). An ambiguous SAN (e.g.
+// 'Nd2' with knights on b1/f1) makes chess.js return null, so it records
+// as validation:'illegal' with the submitted text verbatim — the analyst
+// distinguishes ambiguity (well-formed SAN matching multiple moves) from
+// malformation by the text itself.
+// ------------------------------------------------------------------
+describe('7.1 — four submission kinds', () => {
+  // Position: knights on b1 and f3, d2 empty, white to move.
+  // 'Nd2' is ambiguous (Nb1→d2 and Nf3→d2 both legal).
+  const AMBIGUOUS_FEN = '4k3/8/8/8/8/5N2/8/RN2K3 w - - 0 1';
+
+  // Faithful replication of content.js's submit path (3.2):
+  // legal = isMoveLegal(game, move); validation = legal ? 'legal' : 'illegal'.
+  function submitLikeContentJs(tracker, game, rawText) {
+    const probe = new Chess(game.fen());
+    let legal = false;
+    try {
+      legal = probe.move(rawText) != null;
+    } catch (e) {
+      legal = false;
+    }
+    return tracker.submitAttempt({
+      submittedText: rawText,
+      firstEditMonotonicMs: null,
+      validation: legal ? 'legal' : 'illegal',
+      from: null,
+      to: null,
+      promotion: null,
+    });
+  }
+
+  function attemptsOf(calls) {
+    return calls.filter((c) => c.eventType === 'move_attempt');
+  }
+
+  it('7.1 AC1 — ambiguous SAN records as illegal, never legal, text verbatim', () => {
+    const { tracker, calls } = makeTracker();
+    const game = new Chess(AMBIGUOUS_FEN);
+    // Sanity: the fixture really is ambiguous.
+    assert.equal(new Chess(AMBIGUOUS_FEN).move('Nd2'), null, 'Nd2 must be ambiguous (null)');
+    assert.ok(new Chess(AMBIGUOUS_FEN).move('Nbd2'), 'Nbd2 must be legal');
+    assert.ok(new Chess(AMBIGUOUS_FEN).move('Nfd2'), 'Nfd2 must be legal');
+
+    submitLikeContentJs(tracker, game, 'Nd2');
+    const attempts = attemptsOf(calls);
+    assert.equal(attempts.length, 1);
+    assert.equal(attempts[0].payload.validation, 'illegal',
+      'ambiguous SAN must NOT record as legal');
+    assert.equal(attempts[0].payload.submittedText, 'Nd2',
+      'submitted text recorded verbatim so analysts can see the ambiguity');
+  });
+
+  it('7.1 AC1b — disambiguated SAN records as legal', () => {
+    const { tracker, calls } = makeTracker();
+    const game = new Chess(AMBIGUOUS_FEN);
+    submitLikeContentJs(tracker, game, 'Nbd2');
+    const attempts = attemptsOf(calls);
+    assert.equal(attempts.length, 1);
+    assert.equal(attempts[0].payload.validation, 'legal');
+    assert.equal(attempts[0].payload.submittedText, 'Nbd2');
+  });
+
+  it('7.1 AC2 — repeated submission yields two distinct move_attempt events', () => {
+    const { tracker, calls } = makeTracker();
+    const game = new Chess(); // starting position
+    submitLikeContentJs(tracker, game, 'e4');
+    submitLikeContentJs(tracker, game, 'e4');
+    const attempts = attemptsOf(calls);
+    assert.equal(attempts.length, 2, 'each submission is an observation');
+    assert.notEqual(attempts[0].eventId, attempts[1].eventId,
+      'distinct attemptEventIds — second must not overwrite the first');
+    assert.equal(attempts[0].payload.submittedText, 'e4');
+    assert.equal(attempts[1].payload.submittedText, 'e4');
+    assert.equal(attempts[0].payload.validation, 'legal');
+    assert.equal(attempts[1].payload.validation, 'legal');
+  });
+
+  it('7.1 AC3 — four-way acceptance: legal, rejected, ambiguous, repeated are distinguishable', () => {
+    const { tracker, calls } = makeTracker();
+    const game = new Chess(AMBIGUOUS_FEN);
+
+    // 1. legal: Nbd2 (disambiguated knight move)
+    submitLikeContentJs(tracker, game, 'Nbd2');
+    // 2. rejected: Qxe9 (no queen, illegal)
+    submitLikeContentJs(tracker, game, 'Qxe9');
+    // 3. ambiguous: Nd2 (well-formed SAN, two knights can reach d2)
+    submitLikeContentJs(tracker, game, 'Nd2');
+    // 4. repeated: Nbd2 again (same text as #1)
+    submitLikeContentJs(tracker, game, 'Nbd2');
+
+    const attempts = attemptsOf(calls);
+    assert.equal(attempts.length, 4);
+
+    const validations = attempts.map((a) => a.payload.validation);
+    assert.deepEqual(validations, ['legal', 'illegal', 'illegal', 'legal']);
+
+    const texts = attempts.map((a) => a.payload.submittedText);
+    assert.deepEqual(texts, ['Nbd2', 'Qxe9', 'Nd2', 'Nbd2']);
+
+    // All four have distinct event IDs.
+    const ids = attempts.map((a) => a.eventId);
+    assert.equal(new Set(ids).size, 4, 'all four attempts have distinct IDs');
+
+    // An analyst can distinguish the four kinds from the records alone:
+    // - legal vs rejected: validation field
+    // - ambiguous vs malformed-rejected: submittedText is well-formed SAN
+    //   ('Nd2') vs malformed ('Qxe9' — no queen exists)
+    // - repeated: identical submittedText + validation, distinct eventId
+    assert.equal(attempts[0].payload.submittedText, attempts[3].payload.submittedText);
+    assert.notEqual(attempts[0].eventId, attempts[3].eventId);
+  });
+
+  it('7.1 AC4 — submission path never emits move_confirmed', () => {
+    const { tracker, calls } = makeTracker();
+    const game = new Chess(AMBIGUOUS_FEN);
+    submitLikeContentJs(tracker, game, 'Nbd2'); // legal
+    submitLikeContentJs(tracker, game, 'Qxe9'); // illegal
+    submitLikeContentJs(tracker, game, 'Nd2');  // ambiguous
+    const confirmed = calls.filter((c) => c.eventType === 'move_confirmed');
+    assert.equal(confirmed.length, 0,
+      'move_confirmed comes only from DOM observation, never from submission');
+  });
+
+  it('7.1 vocabulary — submitAttempt rejects non legal/illegal validation', () => {
+    const { tracker } = makeTracker();
+    assert.throws(() => {
+      tracker.submitAttempt({
+        submittedText: 'Nd2',
+        firstEditMonotonicMs: null,
+        validation: 'ambiguous',
+      });
+    }, /RangeError/, "there is no 'ambiguous' validation outcome");
+  });
+});
+
+// ------------------------------------------------------------------
 // AC9 — diff discipline. AC10 — scope.
 // ------------------------------------------------------------------
 describe('AC9/AC10 — diff discipline and scope', () => {
@@ -1364,8 +1510,47 @@ describe('AC9/AC10 — diff discipline and scope', () => {
       '.autodev/evidence/6.4+6.5.review.md',
       '.autodev/evidence/6.4+6.5.behavior.md',
       '.autodev/evidence/6.3.build.md',
-      
-      
+      // 7.x acceptance tests (verification-only, no product-code changes):
+      // 7.2 (special-move replay), 7.4-7.7 (history/timing/UI/speech),
+      // 7.10 (page refresh), 7.11 (failure modes).
+      'tests/acceptance_7_2.test.js',
+      'tests/acceptance_7_4_7_7.test.js',
+      '.autodev/evidence/7.4.contract.md',
+      '.autodev/evidence/7.4.build.md',
+      '.autodev/evidence/7.5.contract.md',
+      '.autodev/evidence/7.5.build.md',
+      '.autodev/evidence/7.6.contract.md',
+      '.autodev/evidence/7.6.build.md',
+      '.autodev/evidence/7.7.contract.md',
+      '.autodev/evidence/7.7.build.md',
+      'tests/acceptance_7_10.test.js',
+      'tests/acceptance_7_11.test.js',
+      // 7.14 (README docs) legitimately modifies README.md.
+      'README.md',
+      // 7.1-7.3 (acceptance tests) evidence files.
+      '.autodev/evidence/7.1.contract.md',
+      '.autodev/evidence/7.1.build.md',
+      '.autodev/evidence/7.1.review.md',
+      '.autodev/evidence/7.1.behavior.md',
+      '.autodev/evidence/7.1.review.md',
+      '.autodev/evidence/7.1.behavior.md',
+      '.autodev/evidence/7.2.contract.md',
+      '.autodev/evidence/7.2.build.md',
+      '.autodev/evidence/7.3.contract.md',
+      '.autodev/evidence/7.3.build.md',
+      '.autodev/evidence/7.3.review.md',
+      '.autodev/evidence/7.3.behavior.md',
+      '.autodev/evidence/7.1-7.11.review.md',
+      '.autodev/evidence/7.1-7.11+7.14.behavior.md',
+      '.autodev/evidence/7.10.contract.md',
+      '.autodev/evidence/7.10.build.md',
+      '.autodev/evidence/7.11.contract.md',
+      '.autodev/evidence/7.11.build.md',
+      '.autodev/evidence/7.14.contract.md',
+      '.autodev/evidence/7.14.build.md',
+      '.autodev/evidence/7.14.review.md',
+      'tests/acceptance_7_10.test.js',
+      'tests/acceptance_7_11.test.js',
     ]);
     for (const f of changed) {
       assert.ok(allowed.has(f), `unexpected modified file: ${f}`);
