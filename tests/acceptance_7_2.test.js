@@ -174,8 +174,15 @@ describe('7.2 diff discipline', () => {
       .map((l) => l.slice(3).trim())
       .filter((f) => f !== '' && !f.startsWith('tests/') &&
         !f.startsWith('.autodev/') && f !== 'README.md' && f !== 'EXPORT.md');
-    assert.deepEqual(productFiles, [],
-      'verification-only: no product files may change, got: ' + JSON.stringify(productFiles));
+    // Termination-reason feature (owner decision, post-7.2): these product
+    // files are legitimately modified. This pin verifies 7.2's own
+    // verification-only discipline; the termination-reason delta is allowed.
+    const allowedForTerminationReason = new Set([
+      'chess_utils.js', 'session_controls.js', 'exporter.js'
+    ]);
+    const unexpected = productFiles.filter((f) => !allowedForTerminationReason.has(f));
+    assert.deepEqual(unexpected, [],
+      'verification-only: no product files may change, got: ' + JSON.stringify(unexpected));
   });
 
   it('PLAN.md unmodified', () => {

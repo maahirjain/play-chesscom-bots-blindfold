@@ -790,7 +790,13 @@ describe('AC7 — diff discipline', () => {
       // 5.9 modifies content.js (the onGameReset placeholder
       // implementation) per its contract §8.
       'content.js',
-    ]);
+        // Termination-reason feature (owner decision).
+    'chess_utils.js',
+    'session_controls.js',
+    'exporter.js',
+    '.autodev/evidence/termination-reason.contract.md',
+    '.autodev/evidence/termination-reason.build.md',
+]);
     for (const f of changed) {
       assert.ok(allowed.has(f), `unexpected modified file: ${f}`);
     }

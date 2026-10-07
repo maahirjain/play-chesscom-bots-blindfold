@@ -1551,7 +1551,13 @@ describe('AC9/AC10 — diff discipline and scope', () => {
       '.autodev/evidence/7.14.review.md',
       'tests/acceptance_7_10.test.js',
       'tests/acceptance_7_11.test.js',
-    ]);
+        // Termination-reason feature (owner decision).
+    'chess_utils.js',
+    'session_controls.js',
+    'exporter.js',
+    '.autodev/evidence/termination-reason.contract.md',
+    '.autodev/evidence/termination-reason.build.md',
+]);
     for (const f of changed) {
       assert.ok(allowed.has(f), `unexpected modified file: ${f}`);
     }

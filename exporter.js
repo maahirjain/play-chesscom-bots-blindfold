@@ -212,7 +212,10 @@ var BlindfoldSession = BlindfoldSession || {};
       verdict: stopVerdict.verdict,
       warnings: warnings,
       finalizedAtUtc: finalizedAtUtc,
-      undeliveredEvents: undeliveredEvents
+      undeliveredEvents: undeliveredEvents,
+      manualTerminationReason: (typeof stopVerdict.manualTerminationReason === 'string')
+        ? stopVerdict.manualTerminationReason
+        : null
     };
     return out;
   }

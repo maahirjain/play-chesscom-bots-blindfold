@@ -1201,7 +1201,13 @@ describe('AC8 — diff discipline', () => {
       'session_controls.js',
       
       
-    ]);
+        // Termination-reason feature (owner decision).
+    'chess_utils.js',
+    'session_controls.js',
+    'exporter.js',
+    '.autodev/evidence/termination-reason.contract.md',
+    '.autodev/evidence/termination-reason.build.md',
+]);
     const stray = changed.filter((f) => !allowed.has(f));
     assert.deepEqual(stray, [],
       'working tree has non-4.14 changes:\n' + stray.join('\n'));

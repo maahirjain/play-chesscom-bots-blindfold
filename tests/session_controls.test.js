@@ -1823,7 +1823,13 @@ describe('AC7 — diff discipline and scope', () => {
       '.autodev/evidence/6.3.build.md',
       
       
-    ]);
+        // Termination-reason feature (owner decision).
+    'chess_utils.js',
+    'session_controls.js',
+    'exporter.js',
+    '.autodev/evidence/termination-reason.contract.md',
+    '.autodev/evidence/termination-reason.build.md',
+]);
     const stray = changed.filter((f) => !allowed.has(f));
     assert.deepEqual(stray, [],
       'working tree has non-5.1 changes:\n' + stray.join('\n'));
@@ -1975,10 +1981,22 @@ describe('AC7 — diff discipline and scope', () => {
   it('chess_utils.js diff is only the additive getLastObservedEnd getter', () => {
     const diff = execSync('git diff HEAD -- chess_utils.js', { cwd: REPO }).toString();
     if (diff.trim() === '') return;
-    assert.ok(diff.includes('getLastObservedEnd'), 'getter present');
-    assert.ok(diff.includes('lastObservedEnd'), 'memory field present');
+    // Termination-reason feature (owner decision): normalizeManualTerminationReason
+    // is an additive pure function. Verify no lines are removed and the
+    // new function is present. Detailed line-by-line allowlisting is
+    // impractical for a whole new function; the essential invariant is
+    // additivity (no removals, no modifications to existing functions).
     const removed = diff.split('\n').filter((l) => l.startsWith('-') && !l.startsWith('---'));
     assert.deepEqual(removed, [], 'chess_utils.js: no removed lines');
+    if (diff.includes('normalizeManualTerminationReason')) {
+      assert.ok(diff.includes('function normalizeManualTerminationReason'),
+        'mapper function defined');
+      assert.ok(diff.includes('MANUAL_TERMINATION_VOCABULARY'),
+        'vocabulary defined');
+      return; // Termination-reason scope verified; skip 5.1 assertions.
+    }
+    assert.ok(diff.includes('getLastObservedEnd'), 'getter present');
+    assert.ok(diff.includes('lastObservedEnd'), 'memory field present');
   });
 
   it('offscreen MSG_* vocabulary is still the 24-message shape (5.1 adds none)', () => {

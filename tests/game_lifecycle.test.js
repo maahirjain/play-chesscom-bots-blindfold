@@ -417,6 +417,41 @@ describe('AC8 — recordStopTermination', () => {
   });
 });
 // ------------------------------------------------------------------
+// Termination-reason: normalizeManualTerminationReason (owner decision).
+// ------------------------------------------------------------------
+describe('normalizeManualTerminationReason', () => {
+  it('AC1: exact vocabulary match returns the member', () => {
+    const { recorder } = makeRecorder();
+    assert.equal(recorder.normalizeManualTerminationReason('abandoned'), 'abandoned');
+    assert.equal(recorder.normalizeManualTerminationReason('checkmate'), 'checkmate');
+    assert.equal(recorder.normalizeManualTerminationReason('resignation'), 'resignation');
+  });
+
+  it('AC2: resigned maps to resignation', () => {
+    const { recorder } = makeRecorder();
+    assert.equal(recorder.normalizeManualTerminationReason('resigned'), 'resignation');
+  });
+
+  it('AC3: unmappable text returns null (raw text preserved in verdict)', () => {
+    const { recorder } = makeRecorder();
+    assert.equal(recorder.normalizeManualTerminationReason('browser crashed'), null);
+    assert.equal(recorder.normalizeManualTerminationReason('something else'), null);
+  });
+
+  it('AC4: non-string input throws TypeError', () => {
+    const { recorder } = makeRecorder();
+    assert.throws(() => recorder.normalizeManualTerminationReason(null), TypeError);
+    assert.throws(() => recorder.normalizeManualTerminationReason(123), TypeError);
+    assert.throws(() => recorder.normalizeManualTerminationReason(undefined), TypeError);
+  });
+
+  it('is case-insensitive', () => {
+    const { recorder } = makeRecorder();
+    assert.equal(recorder.normalizeManualTerminationReason('ABANDONED'), 'abandoned');
+    assert.equal(recorder.normalizeManualTerminationReason('Resigned'), 'resignation');
+  });
+});
+// ------------------------------------------------------------------
 // AC9 — per-source idempotency (SF-1 dedup resolution).
 //
 // 1.4's consumer contract: multiple game_ended events per game are
@@ -1116,8 +1151,14 @@ describe('AC11 — diff discipline', () => {
       '.autodev/evidence/6.4+6.5.review.md',
       '.autodev/evidence/6.4+6.5.behavior.md',
       '.autodev/evidence/6.3.build.md',
-      
-      
+      // Termination-reason feature (owner decision, PLAN §(c) step 7 /
+      // §3.5.4): product-code changes in chess_utils.js (mapper),
+      // session_controls.js (UI + verdict), exporter.js (metadata).
+      'chess_utils.js',
+      'session_controls.js',
+      'exporter.js',
+      '.autodev/evidence/termination-reason.contract.md',
+      '.autodev/evidence/termination-reason.build.md',
     ]);
     for (const f of changed) {
       assert.ok(allowed.has(f), `unexpected modified file: ${f}`);

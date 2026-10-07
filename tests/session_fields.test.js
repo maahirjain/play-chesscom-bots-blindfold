@@ -1066,7 +1066,13 @@ describe('AC7 — diff discipline', () => {
       '.autodev/evidence/6.3.build.md',
       
       
-    ]);
+        // Termination-reason feature (owner decision).
+    'chess_utils.js',
+    'session_controls.js',
+    'exporter.js',
+    '.autodev/evidence/termination-reason.contract.md',
+    '.autodev/evidence/termination-reason.build.md',
+]);
     const stray = changed.filter((f) => !allowed.has(f));
     assert.deepEqual(stray, [],
       'working tree has non-5.2 changes:\n' + stray.join('\n'));

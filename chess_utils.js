@@ -1735,6 +1735,40 @@ function createGameLifecycleRecorder(options) {
     return recordGameEnded('chesscom_dialog', full, terminalMoveEventId);
   }
 
+  // Termination-reason (owner decision, PLAN §(c) step 7 / §3.5.4): map
+  // free-text manual input to the 1.4 TERMINATION_REASONS vocabulary.
+  // Local copy of the vocabulary (deliberate duplication over load-order
+  // coupling, 1.3 §2.10 precedent; source of truth is game_records.js).
+  // Returns the vocabulary member, or null if the text does not map
+  // (the raw text is still preserved in the stop verdict/metadata).
+  // Throws TypeError on non-string input.
+  var MANUAL_TERMINATION_VOCABULARY = Object.freeze([
+    'checkmate',
+    'stalemate',
+    'resignation',
+    'timeout',
+    'draw_agreed',
+    'draw_insufficient_material',
+    'draw_fifty_move',
+    'draw_threefold',
+    'abandoned'
+  ]);
+  function normalizeManualTerminationReason(text) {
+    if (typeof text !== 'string') {
+      throw new TypeError(
+        'normalizeManualTerminationReason: text must be a string');
+    }
+    var lowered = text.toLowerCase();
+    if (MANUAL_TERMINATION_VOCABULARY.indexOf(lowered) !== -1) {
+      return lowered;
+    }
+    // Common phrasing: 'resigned' → 'resignation'.
+    if (lowered === 'resigned') {
+      return 'resignation';
+    }
+    return null;
+  }
+
   // 3.5.4: §5 Stop seam. reason: 1.4 TERMINATION_REASONS member or null
   // (null = unknown, 1.2's unknown convention; PLAN §7 suggests
   // 'abandoned'/'resignation'). result: PGN result or '*' (default '*').
@@ -1768,6 +1802,7 @@ function createGameLifecycleRecorder(options) {
     recordChessRulesEnded: recordChessRulesEnded,
     recordDialogEnded: recordDialogEnded,
     recordStopTermination: recordStopTermination,
+    normalizeManualTerminationReason: normalizeManualTerminationReason,
     resetEnded: resetEnded,
     // 5.1 additive (read-only).
     getLastObservedEnd: getLastObservedEnd,

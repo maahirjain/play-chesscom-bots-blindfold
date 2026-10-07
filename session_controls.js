@@ -761,6 +761,20 @@ var BlindfoldSession = BlindfoldSession || {};
     markerButton.disabled = true;
     cluster.appendChild(markerButton);
 
+    // Termination-reason (owner decision, PLAN §(c) step 7 / §3.5.4):
+    // optional free-text input for the Stop-time termination reason.
+    // Enabled only during ACTIVE (like the marker input). The value is
+    // read at Stop time; empty means unknown (null). Never blocks Stop,
+    // never focused automatically, no hotkey.
+    var terminationInput = doc.createElement('input');
+    terminationInput.type = 'text';
+    terminationInput.className = 'blindfold-termination-input';
+    terminationInput.setAttribute('placeholder', 'Reason (optional)');
+    terminationInput.setAttribute('aria-label',
+      'Optional termination reason for Stop');
+    terminationInput.disabled = true;
+    cluster.appendChild(terminationInput);
+
     // 6.6: Download affordance (PLAN.md §6.6). Exports the last completed
     // session's bundle as a ZIP via the SW-side export-request channel.
     // Enabled ONLY when idle AND a stop verdict is retained (5.10's
@@ -843,6 +857,13 @@ var BlindfoldSession = BlindfoldSession || {};
       if (!enabled) {
         try { markerInput.value = ''; } catch (e) { /* non-input stub */ }
         markerButton.removeAttribute('title');
+      }
+    }
+
+    function setTerminationEnabled(enabled) {
+      terminationInput.disabled = !enabled;
+      if (!enabled) {
+        try { terminationInput.value = ''; } catch (e) { /* non-input stub */ }
       }
     }
 
@@ -1239,7 +1260,7 @@ var BlindfoldSession = BlindfoldSession || {};
       setSlots(null, null);
       lastStartResults = {};
       resetReadiness();
-      setMarkerEnabled(false); // 5.8
+      setMarkerEnabled(false); setTerminationEnabled(false)// 5.8
       phase = CONTROL_PHASE_IDLE;
       setButton('Start', true, detailText, 'Start recording session');
     }
@@ -1255,7 +1276,7 @@ var BlindfoldSession = BlindfoldSession || {};
       setSlots(null, null);
       lastStartResults = {};
       resetReadiness();
-      setMarkerEnabled(false); // 5.8
+      setMarkerEnabled(false); setTerminationEnabled(false)// 5.8
       phase = CONTROL_PHASE_IDLE;
       setButton('Start', true, detailText, 'Start recording session');
     }
@@ -1351,7 +1372,7 @@ var BlindfoldSession = BlindfoldSession || {};
           // as unknown" applies to conditions, not to the 1.1 metadata
           // category — so Start cannot proceed uncategorized.
           resetReadiness();
-          setMarkerEnabled(false); // 5.8
+          setMarkerEnabled(false); setTerminationEnabled(false)// 5.8
           phase = CONTROL_PHASE_IDLE;
           setButton('Start', true,
             factoriesOk ? 'no-category-selected' : 'record-build-failed',
@@ -1389,7 +1410,7 @@ var BlindfoldSession = BlindfoldSession || {};
             // abort without the recorder-side clear (nothing to clear).
             setSlots(null, null);
             resetReadiness();
-            setMarkerEnabled(false); // 5.8
+            setMarkerEnabled(false); setTerminationEnabled(false)// 5.8
             phase = CONTROL_PHASE_IDLE;
             setButton('Start', true, 'ensure-failed:' + reason,
               'Start recording session');
@@ -1444,7 +1465,7 @@ var BlindfoldSession = BlindfoldSession || {};
                 fieldsHandle.getDetectedConditions());
             } catch (e) {
               resetReadiness();
-              setMarkerEnabled(false); // 5.8
+              setMarkerEnabled(false); setTerminationEnabled(false)// 5.8
               phase = CONTROL_PHASE_IDLE;
               setButton('Start', true, 'record-build-failed',
                 'Start recording session');
@@ -1480,7 +1501,7 @@ var BlindfoldSession = BlindfoldSession || {};
               // local reset only (nothing to clear recorder-side).
               setSlots(null, null);
               resetReadiness();
-              setMarkerEnabled(false); // 5.8
+              setMarkerEnabled(false); setTerminationEnabled(false)// 5.8
               phase = CONTROL_PHASE_IDLE;
               setButton('Start', true, 'session-save-failed:' + serr,
                 'Start recording session');
@@ -1572,7 +1593,7 @@ var BlindfoldSession = BlindfoldSession || {};
           pageStartEmitted = true;
           phase = CONTROL_PHASE_ACTIVE;
           setButton('Stop', true, null, 'Stop recording session');
-          setMarkerEnabled(true); // 5.8: session active → marker available
+          setMarkerEnabled(true); setTerminationEnabled(true)// 5.8: session active → marker available
           // 5.3: remembered-defaults capture — fired exactly once per
           // successful Start, at the phase → 'active' point, with the
           // selection object that was recorded (the same values
@@ -1706,8 +1727,22 @@ var BlindfoldSession = BlindfoldSession || {};
 
       // 3.5.4 seam: null reason unless a game_ended was already observed
       // for the game, in which case the observed reason/result is passed.
+      // Termination-reason (owner decision): if no observed ending and the
+      // user typed a manual reason, map it to vocabulary for the game_ended
+      // event; the raw text is retained in the stop verdict (§2.4).
+      // Observed endings always win (ground truth).
       var termReason = null;
       var termResult = '*';
+      var manualTerminationReason = null;
+      try {
+        var termInputVal = terminationInput.value;
+        if (typeof termInputVal === 'string') {
+          var trimmed = termInputVal.trim();
+          if (trimmed !== '') {
+            manualTerminationReason = trimmed;
+          }
+        }
+      } catch (e) { /* input read failure → null (unknown) */ }
       try {
         var observed = opts.gameLifecycleRecorder.getLastObservedEnd();
         if (isPlainObject(observed)) {
@@ -1716,6 +1751,15 @@ var BlindfoldSession = BlindfoldSession || {};
             observed.terminationReason : null;
           termResult = (typeof observed.result === 'string' &&
             observed.result !== '') ? observed.result : '*';
+          // Observed ending wins; manual input is ignored.
+          manualTerminationReason = null;
+        } else if (manualTerminationReason !== null) {
+          // No observed ending: map manual text to vocabulary for the
+          // game_ended event (null if unmappable; raw text still in verdict).
+          try {
+            termReason = opts.gameLifecycleRecorder
+              .normalizeManualTerminationReason(manualTerminationReason);
+          } catch (e) { /* mapper failure → null (unknown) */ }
         }
       } catch (e) { /* observation failure → null (unknown) */ }
       try {
@@ -1796,7 +1840,8 @@ var BlindfoldSession = BlindfoldSession || {};
               stopResp: stopResp,
               flushResult: isPlainObject(flushResult) ? flushResult : null,
               verdict: completion.verdict,
-              warnings: completion.warnings
+              warnings: completion.warnings,
+              manualTerminationReason: manualTerminationReason
             };
             lastStopResponse = enriched;
             try {
@@ -1808,7 +1853,7 @@ var BlindfoldSession = BlindfoldSession || {};
             lastStartResults = {};
             // 5.6: readiness resets with the session.
             resetReadiness();
-            setMarkerEnabled(false); // 5.8
+            setMarkerEnabled(false); setTerminationEnabled(false)// 5.8
             phase = CONTROL_PHASE_IDLE;
             var detail = (completion.warnings.length > 0) ?
               'finalize-warnings:' + completion.warnings.join(';') : null;
@@ -1889,7 +1934,7 @@ var BlindfoldSession = BlindfoldSession || {};
         setSlots(resp.sessionId, gid);
         phase = CONTROL_PHASE_ACTIVE;
         setButton('Stop', true, null, 'Stop recording session');
-        setMarkerEnabled(true); // 5.8: adopted session is active
+        setMarkerEnabled(true); setTerminationEnabled(true); // 5.8: adopted session is active
         // 5.2: the adopted session's category shows in the disabled
         // form (contract §3.4). A missing echo → the honest disabled
         // "Unknown (adopted session)" label — never a remembered

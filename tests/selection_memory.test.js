@@ -796,7 +796,13 @@ describe('AC6 — wiring and diff discipline', () => {
       '.autodev/evidence/6.3.build.md',
       
       
-    ]);
+        // Termination-reason feature (owner decision).
+    'chess_utils.js',
+    'session_controls.js',
+    'exporter.js',
+    '.autodev/evidence/termination-reason.contract.md',
+    '.autodev/evidence/termination-reason.build.md',
+]);
     const stray = changed.filter((f) => !allowed.has(f));
     assert.deepEqual(stray, [],
       'working tree has non-5.3 changes:\n' + stray.join('\n'));
@@ -943,6 +949,17 @@ describe('AC6 — wiring and diff discipline', () => {
       l.includes('err') || l.includes('message') ||
       l.includes('send-failed') || l.includes('export') ||
       l.includes('Export');
+    // Termination-reason feature (owner decision, PLAN §(c) step 7 /
+    // §3.5.4): adds the termination input UI + Stop-time reading +
+    // verdict enrichment. Its added lines use the termination vocabulary.
+    const kwTerm = (l) =>
+      l.includes('termination') || l.includes('Termination') ||
+      l.includes('TERMINATION') || l.includes('termReason') ||
+      l.includes('termInputVal') || l.includes('trimmed') ||
+      l.includes('manualTerminationReason') || l.includes('terminationInput') ||
+      l.includes('setTerminationEnabled') || l.includes('blindfold-termination') ||
+      l.includes('Reason (optional)') || l.includes('Optional termination') ||
+      l.includes('normalizeManualTerminationReason');
     const removed = diff.split('\n')
       .filter((l) => l.startsWith('-') && !l.startsWith('---'))
       .map((l) => l.slice(1).trim())
@@ -950,7 +967,7 @@ describe('AC6 — wiring and diff discipline', () => {
     const bad55 = added.filter((l) =>
       !(structural(l) || l.includes('onSessionStarted') || l.includes('5.3') ||
         l.trim() === 'extensionVersion: extensionVersion,' ||
-        kw55(l) || kw56(l) || kw58(l) || kw59(l) || kw510(l) || kw66(l) || removed.includes(l.trim())));
+        kw55(l) || kw56(l) || kw58(l) || kw59(l) || kw510(l) || kw66(l) || kwTerm(l) || removed.includes(l.trim())));
     assert.deepEqual(bad55, [], 'unexpected added lines in session_controls.js:\n' + bad55.join('\n'));
     const badRemoved = removed.filter((l) =>
       !(l === 'extensionVersion: extensionVersion' ||
@@ -961,7 +978,9 @@ describe('AC6 — wiring and diff discipline', () => {
         l === 'var factoriesOk =' || // 5.5 restructured the declaration
         l === 'lastStopResponse = stopResp;' || // 5.10 enriched retention
         l === 'opts.onStopComplete(stopResp);' || // 5.10 enriched handoff
-        l === "setButton('Start', true, null, 'Start recording session');")); // 5.10 warning detail
+        l === "setButton('Start', true, null, 'Start recording session');" || // 5.10 warning detail
+        l.includes('setMarkerEnabled(') || // Termination-reason: extended with setTerminationEnabled
+        l === 'warnings: completion.warnings')); // Termination-reason: added manualTerminationReason field
     assert.deepEqual(badRemoved, [],
       'unexpected removed lines in session_controls.js:\n' + badRemoved.join('\n'));
     // No new offscreen MSG_* constants (5.3 and 5.5 add no channel messages).

@@ -190,6 +190,20 @@ describe('AC2 — null honesty on absent inputs', () => {
     assert.deepEqual(doc.completion.warnings, []);
     assert.equal(doc.completion.undeliveredEvents, 0);
   });
+
+  it('AC7: manualTerminationReason flows to completion', () => {
+    const doc = JSON.parse(build({
+      stopVerdict: Object.assign(fixtureStopVerdict(), {
+        manualTerminationReason: 'browser crashed'
+      })
+    }));
+    assert.equal(doc.completion.manualTerminationReason, 'browser crashed');
+  });
+
+  it('AC7: absent manualTerminationReason → null', () => {
+    const doc = JSON.parse(build({}));
+    assert.equal(doc.completion.manualTerminationReason, null);
+  });
 });
 
 // ------------------------------------------------------------------
@@ -301,6 +315,8 @@ describe('AC6 — diff discipline', () => {
     // Section 6 complete (6.1-6.8 committed). Section 7 in progress:
     // 7.x acceptance tests are verification-only (no product-code changes).
     // This pin allows 7.x test files, evidence, and the 7.14 README update.
+    // Termination-reason feature: product-code changes in chess_utils.js,
+    // session_controls.js, exporter.js (owner decision, PLAN §(c) step 7).
     const allowed = new Set([
       'tests/acceptance_7_2.test.js',
       'tests/acceptance_7_4_7_7.test.js',
@@ -333,10 +349,16 @@ describe('AC6 — diff discipline', () => {
       '.autodev/evidence/7.14.contract.md',
       '.autodev/evidence/7.14.build.md',
       '.autodev/evidence/7.14.review.md',
+      '.autodev/evidence/termination-reason.contract.md',
+      '.autodev/evidence/termination-reason.build.md',
       '.autodev/DECISIONS.md',
       'README.md',
       // EXPORT.md deleted in 7.14 (inlined into README.md).
       'EXPORT.md',
+      // Termination-reason feature (owner decision): product-code changes.
+      'chess_utils.js',
+      'session_controls.js',
+      'exporter.js',
     ]);
     for (const file of changed) {
       // Allow all test files (pin evolutions are normal during 7.x),
@@ -2105,7 +2127,16 @@ describe('6.7 AC4 — diff discipline', () => {
     const diff = execSync('git diff HEAD --stat', { cwd: REPO }).toString();
     const productFiles = ['exporter.js', 'sw.js', 'manifest.json',
       'session_controls.js', 'content.js', 'recorder.js'];
+    // Termination-reason feature (owner decision, post-6.7): exporter.js
+    // and session_controls.js are modified. This pin verifies 6.7's
+    // own changes are committed; the termination-reason delta is allowed.
+    const allowedForTerminationReason = new Set([
+      'exporter.js', 'session_controls.js', 'chess_utils.js'
+    ]);
     for (const f of productFiles) {
+      if (allowedForTerminationReason.has(f)) {
+        continue;
+      }
       const lines = diff.split('\n').filter((l) => l.includes(f + ' '));
       assert.ok(lines.length === 0, f + ' must be untouched by 6.7');
     }

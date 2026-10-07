@@ -1458,3 +1458,36 @@ Verification-only. 3 tests: delivered → `utterance_ended(outcome=completed)`;
 cancelled via `cancelRequested('user')` → no `completed`; each utterance ID
 has exactly one terminal event. Link required for `utterance_started`
 (3.4 inertness design). Outcomes: `completed`|`cancelled`|`error`.
+
+## Termination-reason — Manual reason at Stop (owner decision)
+
+**Date:** 2026-10-06. **Task:** PLAN §(c) step 7 / §3.5.4.
+
+**Owner decision (Option A):** Add a small optional text field when stopping.
+If the game ending is unknown, the user can type a brief reason (e.g.,
+"abandoned", "resigned", "browser crashed"). This becomes part of the
+exported metadata.
+
+**Design:**
+- Free-text input in the controls cluster (5.8 moment-marker precedent),
+  enabled only during ACTIVE, cleared after Stop. Never blocks Stop.
+- `normalizeManualTerminationReason(text)` in chess_utils.js maps text to
+  the 1.4 TERMINATION_REASONS vocabulary: exact match (case-insensitive)
+  or 'resigned'→'resignation'; otherwise null. TypeError on non-string.
+- Stop-time precedence: observed ending wins (ground truth); manual text
+  used only when no ending was observed.
+- The mapped vocabulary reason goes to the `game_ended` event (via
+  `recordStopTermination`); the raw trimmed text goes to the enriched
+  stop verdict as `manualTerminationReason`.
+- `buildCompletion` in exporter.js adds `manualTerminationReason` to
+  metadata.json's `completion` section.
+
+**Rationale:**
+- Free text (not dropdown) per owner request; "browser crashed" is not in
+  the vocabulary but is a valid user reason.
+- Conservative mapping: only claim a vocabulary reason when unambiguous.
+  Unmappable text is preserved in metadata.json (honest) but not in the
+  game_ended event (schema requires vocabulary or null).
+- Observed endings are ground truth; manual input never overrides them.
+
+**Verification:** V1 1492/1492 (7 new tests). V2 deferred to device testing.
